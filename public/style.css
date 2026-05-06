@@ -322,3 +322,61 @@ footer .disclaimer {
   font-size: 11px;
   opacity: 0.7;
 }
+.hero {
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+  padding: 32px 20px;
+  margin-bottom: 24px;
+}
+
+.hero-content {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.hero-text {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--fg-muted);
+  letter-spacing: -0.01em;
+}
+
+.hero-icon {
+  width: 120px;
+  height: 68px;
+  flex-shrink: 0;
+}
+
+.hero-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.hero-brand {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--fg);
+  letter-spacing: -0.01em;
+}
+
+@media (max-width: 640px) {
+  .hero-content {
+    flex-direction: column;
+    gap: 12px;
+  }
+  
+  .hero-text,
+  .hero-brand {
+    font-size: 20px;
+  }
+  
+  .hero-icon {
+    width: 100px;
+    height: 56px;
+  }
+}
