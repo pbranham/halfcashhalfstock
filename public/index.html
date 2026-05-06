@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>halfcashhalfstock — Ryan Cohen's eBay auctions, in EBAY shares</title>
+    <meta
+      name="description"
+      content="Live monitor for Ryan Cohen's eBay auctions, expressed as half cash plus half EBAY stock at the live market price."
+    />
+    <meta name="color-scheme" content="dark light" />
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">½$ + ½📈</span>
+        <span class="brand-name">halfcashhalfstock</span>
+      </div>
+      <div id="ticker" class="ticker" aria-live="polite">
+        <span class="ticker-symbol">EBAY</span>
+        <span class="ticker-price">—</span>
+        <span class="ticker-meta"></span>
+      </div>
+    </header>
+    <main>
+      <p class="intro">
+        Ryan Cohen pitched eBay
+        <em>half cash, half stock</em>. Each of his
+        <a id="seller-link" href="https://www.ebay.com/usr/ryan_5050" target="_blank" rel="noopener noreferrer"
+          >active listings</a
+        >
+        is shown below as the equivalent half-cash + half-EBAY-shares allocation at the live
+        market price.
+      </p>
+      <section id="totals" class="totals" aria-live="polite"></section>
+      <section id="items" class="items" aria-live="polite">
+        <div class="empty">Loading live auctions…</div>
+      </section>
+    </main>
+    <footer>
+      <p>
+        Not affiliated with Ryan Cohen, GameStop, or eBay. Bid data via the eBay Browse API; stock
+        data via Finnhub or Yahoo Finance. Updates every 30 seconds.
+      </p>
+    </footer>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

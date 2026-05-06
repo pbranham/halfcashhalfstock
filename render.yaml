@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: halfcashhalfstock
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm ci && npm run build
+    startCommand: node dist/server.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: EBAY_APP_ID
+        sync: false
+      - key: EBAY_CERT_ID
+        sync: false
+      - key: EBAY_SELLER_ID
+        value: ryan_5050
+      - key: EBAY_MARKETPLACE_ID
+        value: EBAY_US
+      - key: STOCK_SYMBOL
+        value: EBAY
+      - key: FINNHUB_API_KEY
+        sync: false
+      - key: LOG_LEVEL
+        value: info
