@@ -75,8 +75,6 @@
     <main>
       <p class="intro">
         Ryan Cohen has submitted an <a href="https://investor.gamestop.com/eBay/" target="_blank" rel="noopener noreferrer">unsolicited bid to acquire eBay for half cash, half stock</a>. 
-      </p>
-      <p class="intro">
         He is now <a id="seller-link" href="https://www.ebay.com/usr/ryan_5050" target="_blank" rel="noopener noreferrer">selling things on eBay</a> to help him buy eBay. 
       </p>
       <p class="intro">
@@ -85,6 +83,13 @@
       <p class="intro">
         Each of his active listings is shown below as the equivalent half-cash + half-stock allocation at the live market price for $EBAY.
       </p>
+      <div class="sort-bar" role="group" aria-label="Sort listings">
+        <span class="sort-label">Sort:</span>
+        <button class="sort-btn is-active" data-sort="ending-soonest">Ending soonest</button>
+        <button class="sort-btn" data-sort="price-low">Price: low &rarr; high</button>
+        <button class="sort-btn" data-sort="price-high">Price: high &rarr; low</button>
+        <button class="sort-btn" data-sort="most-bids">Most bids</button>
+      </div>
       <section id="totals" class="totals" aria-live="polite"></section>
       <section id="items" class="items" aria-live="polite">
         <div class="empty">Loading live auctions…</div>

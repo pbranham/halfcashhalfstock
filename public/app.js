@@ -5,6 +5,32 @@ const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' 
 const shares = new Intl.NumberFormat('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
 const integer = new Intl.NumberFormat('en-US');
 
+// --- Sort & animation state ---
+let currentSort = 'ending-soonest';
+let lastSnapshot = null;
+let prevBidCounts = new Map(); // itemId → bidCount from last successful render
+
+function sortItems(items, sort) {
+  const sorted = [...items];
+  switch (sort) {
+    case 'ending-soonest':
+      return sorted.sort((a, b) => {
+        if (!a.endsAt && !b.endsAt) return 0;
+        if (!a.endsAt) return 1;
+        if (!b.endsAt) return -1;
+        return new Date(a.endsAt).getTime() - new Date(b.endsAt).getTime();
+      });
+    case 'price-low':
+      return sorted.sort((a, b) => (a.priceUsd ?? Infinity) - (b.priceUsd ?? Infinity));
+    case 'price-high':
+      return sorted.sort((a, b) => (b.priceUsd ?? -Infinity) - (a.priceUsd ?? -Infinity));
+    case 'most-bids':
+      return sorted.sort((a, b) => (b.bidCount ?? 0) - (a.bidCount ?? 0));
+    default:
+      return sorted;
+  }
+}
+
 function setText(el, text) {
   if (el) el.textContent = text;
 }
@@ -149,16 +175,66 @@ function renderItem(item) {
   return card;
 }
 
-function renderItems(snapshot) {
+function renderItems(snapshot, bidDiff) {
   const root = document.getElementById('items');
   if (!root) return;
+
+  // FLIP — record old card positions before blowing away the DOM
+  const oldRects = new Map();
+  root.querySelectorAll('.item[data-item-id]').forEach((card) => {
+    oldRects.set(card.dataset.itemId, card.getBoundingClientRect());
+  });
+
   root.replaceChildren();
+
   const items = snapshot?.items ?? [];
   if (items.length === 0) {
     root.appendChild(el('div', { class: 'empty', textContent: 'No active listings right now.' }));
     return;
   }
-  for (const item of items) root.appendChild(renderItem(item));
+
+  const sorted = sortItems(items, currentSort);
+  const newCards = [];
+
+  for (const item of sorted) {
+    const card = renderItem(item);
+    card.dataset.itemId = item.itemId;
+
+    // Bid-change flash: only when the count actually went up
+    const prev = bidDiff.get(item.itemId);
+    if (prev !== undefined && item.bidCount !== null && item.bidCount > prev) {
+      card.classList.add('bid-updated');
+      card.addEventListener('animationend', () => card.classList.remove('bid-updated'), { once: true });
+    }
+
+    root.appendChild(card);
+    newCards.push({ card, itemId: item.itemId });
+  }
+
+  // FLIP — apply inverse transforms so cards appear to start at their old positions
+  const movers = [];
+  for (const { card, itemId } of newCards) {
+    const oldRect = oldRects.get(itemId);
+    if (!oldRect) continue;
+    const newRect = card.getBoundingClientRect();
+    const dx = oldRect.left - newRect.left;
+    const dy = oldRect.top - newRect.top;
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+    card.style.transform = `translate(${dx}px, ${dy}px)`;
+    movers.push(card);
+  }
+
+  // Force reflow, then release transforms (CSS transition does the rest)
+  if (movers.length > 0) {
+    void root.getBoundingClientRect();
+    for (const card of movers) {
+      card.classList.add('is-moving');
+      card.style.transform = '';
+    }
+    movers[0].addEventListener('transitionend', () => {
+      for (const card of movers) card.classList.remove('is-moving');
+    }, { once: true });
+  }
 }
 
 function renderError(message) {
@@ -190,7 +266,11 @@ async function refresh() {
     renderLastUpdated(snapshot);
     renderPriceSource(snapshot);
     renderTotals(snapshot);
-    renderItems(snapshot);
+    renderItems(snapshot, prevBidCounts);
+    lastSnapshot = snapshot;
+    prevBidCounts = new Map(
+      (snapshot.items ?? []).map((item) => [item.itemId, item.bidCount ?? 0]),
+    );
   } catch (err) {
     renderError(`Network error: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -209,6 +289,16 @@ function stop() {
     timerId = null;
   }
 }
+
+// Sort button wiring
+document.querySelectorAll('.sort-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    if (btn.dataset.sort === currentSort) return;
+    currentSort = btn.dataset.sort;
+    document.querySelectorAll('.sort-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
+    if (lastSnapshot) renderItems(lastSnapshot, new Map()); // re-sort; no bid flash
+  });
+});
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
