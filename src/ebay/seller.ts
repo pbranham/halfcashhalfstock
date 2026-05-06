@@ -64,7 +64,11 @@ export async function listSellerActiveItems(
 
   for (let page = 0; page < MAX_PAGES; page++) {
     const res = await client.get<BrowseSearchResponse>(SEARCH_PATH, {
-      filter: `sellers:{${sellerId}}`,
+      // Browse search requires one of q/category_ids/epid/gtin; category_ids=0
+      // is the documented "all categories" workaround for seller-only queries.
+      category_ids: '0',
+      // Auctions are excluded from results unless explicitly opted-in alongside FIXED_PRICE.
+      filter: `sellers:{${sellerId}},buyingOptions:{AUCTION|FIXED_PRICE}`,
       limit: String(PAGE_LIMIT),
       offset: String(offset),
     });

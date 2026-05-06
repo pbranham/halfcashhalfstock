@@ -53,7 +53,9 @@ export class EbayClient {
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new EbayApiError(res.status, `eBay ${res.status} on ${path}`, body.slice(0, 500));
+      const trimmed = body.slice(0, 500);
+      const suffix = trimmed ? `: ${trimmed}` : '';
+      throw new EbayApiError(res.status, `eBay ${res.status} on ${path}${suffix}`, trimmed);
     }
 
     return (await res.json()) as T;
