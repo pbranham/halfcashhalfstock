@@ -152,10 +152,17 @@ async function refresh() {
   try {
     const res = await fetch('/api/snapshot', { headers: { Accept: 'application/json' } });
     if (!res.ok) {
+      let detail = '';
+      try {
+        const body = await res.json();
+        if (body && typeof body.detail === 'string') detail = ` (${body.detail})`;
+      } catch {
+        /* ignore non-JSON body */
+      }
       renderError(
         res.status === 503
-          ? 'Server can\'t reach eBay or the price provider right now. Try again shortly.'
-          : `Snapshot request failed (HTTP ${res.status}).`,
+          ? `Server can't reach eBay or the price provider right now.${detail}`
+          : `Snapshot request failed (HTTP ${res.status}).${detail}`,
       );
       return;
     }

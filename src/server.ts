@@ -129,9 +129,12 @@ export function createApp(deps: Deps): express.Express {
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     const message = err instanceof Error ? err.message : 'unknown error';
-    deps.log.error('request failed', { error: message });
+    const stack = err instanceof Error ? err.stack : undefined;
+    deps.log.error('request failed', { error: message, stack });
     if (res.headersSent) return;
-    res.status(503).json({ error: 'service_unavailable' });
+    const body: { error: string; detail?: string } = { error: 'service_unavailable' };
+    if (deps.config.NODE_ENV !== 'production') body.detail = message;
+    res.status(503).json(body);
   });
 
   return app;

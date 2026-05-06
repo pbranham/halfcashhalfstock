@@ -78,9 +78,9 @@ describe('createApp', () => {
     expect(body.totals.split.shares).toBe(1);
   });
 
-  it('returns 503 on listing fetch failure without leaking detail', async () => {
+  it('returns 503 in production without leaking detail', async () => {
     await startApp({
-      config: loadConfig({}),
+      config: loadConfig({ NODE_ENV: 'production' }),
       log: silentLogger(),
       fetchListings: vi.fn(async () => {
         throw new Error('upstream-secret-detail');
@@ -92,6 +92,22 @@ describe('createApp', () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe('service_unavailable');
     expect(JSON.stringify(body)).not.toContain('upstream-secret-detail');
+  });
+
+  it('returns 503 with error detail outside production for diagnosis', async () => {
+    await startApp({
+      config: loadConfig({}),
+      log: silentLogger(),
+      fetchListings: vi.fn(async () => {
+        throw new Error('upstream-detail-here');
+      }),
+      fetchQuote: async () => QUOTE,
+    });
+    const res = await fetch(`${baseUrl}/api/snapshot`);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { error: string; detail?: string };
+    expect(body.error).toBe('service_unavailable');
+    expect(body.detail).toBe('upstream-detail-here');
   });
 
   it('emits a strict CSP header', async () => {
