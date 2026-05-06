@@ -2,12 +2,6 @@ const POLL_MS = 30_000;
 const STALE_MS = 120_000;
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
-const usd4 = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 4,
-  maximumFractionDigits: 4,
-});
 const shares = new Intl.NumberFormat('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
 const integer = new Intl.NumberFormat('en-US');
 
@@ -45,20 +39,49 @@ function timeRemaining(endsAt) {
   return `${minutes}m left`;
 }
 
+function isUsMarketOpen(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour12: false,
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(now);
+  const get = (type) => parts.find((p) => p.type === type)?.value;
+  const weekday = get('weekday');
+  if (weekday === 'Sat' || weekday === 'Sun') return false;
+  const minutesInDay = Number(get('hour')) * 60 + Number(get('minute'));
+  return minutesInDay >= 9 * 60 + 30 && minutesInDay < 16 * 60;
+}
+
 function renderTicker(snapshot) {
   const ticker = document.getElementById('ticker');
   if (!ticker) return;
   const price = snapshot?.stock?.price;
-  const source = snapshot?.stock?.source ?? '';
-  const asOf = snapshot?.stock?.asOf ? new Date(snapshot.stock.asOf) : null;
   setText(ticker.querySelector('.ticker-price'), price ? usd.format(price) : '—');
   const generated = snapshot?.generatedAt ? new Date(snapshot.generatedAt) : null;
   const isStale = generated ? Date.now() - generated.getTime() > STALE_MS : false;
   ticker.classList.toggle('is-stale', isStale);
-  const meta = [];
-  if (source) meta.push(source);
-  if (asOf) meta.push(`as of ${asOf.toLocaleTimeString()}`);
-  setText(ticker.querySelector('.ticker-meta'), meta.length ? `(${meta.join(' · ')})` : '');
+  const status = isUsMarketOpen() ? '' : 'market closed';
+  setText(ticker.querySelector('.ticker-status'), status);
+}
+
+function renderLastUpdated(snapshot) {
+  const el = document.getElementById('last-updated');
+  if (!el) return;
+  const generated = snapshot?.generatedAt ? new Date(snapshot.generatedAt) : null;
+  if (!generated) {
+    setText(el, '');
+    return;
+  }
+  setText(el, `Updated ${generated.toLocaleTimeString()}`);
+}
+
+function renderPriceSource(snapshot) {
+  const el = document.getElementById('price-source');
+  if (!el) return;
+  const source = snapshot?.stock?.source;
+  setText(el, source === 'finnhub' ? 'Finnhub' : source === 'yahoo' ? 'Yahoo Finance' : 'Finnhub or Yahoo Finance');
 }
 
 function renderTotals(snapshot) {
@@ -120,10 +143,6 @@ function renderItem(item) {
     split.appendChild(el('div', { class: 'label', textContent: 'EBAY shares' }));
     split.appendChild(el('div', { class: 'value', textContent: usd.format(item.split.cashUsd) }));
     split.appendChild(el('div', { class: 'value', textContent: shares.format(item.split.shares) }));
-    split.appendChild(el('div', { class: 'label', textContent: 'Stock half' }));
-    split.appendChild(el('div', { class: 'label', textContent: '@ live EBAY' }));
-    split.appendChild(el('div', { class: 'value', textContent: usd.format(item.split.stockUsd) }));
-    split.appendChild(el('div', { class: 'value', textContent: usd4.format(item.split.stockUsd / Math.max(item.split.shares, 1e-9)) }));
     body.appendChild(split);
   }
   card.appendChild(body);
@@ -168,6 +187,8 @@ async function refresh() {
     }
     const snapshot = await res.json();
     renderTicker(snapshot);
+    renderLastUpdated(snapshot);
+    renderPriceSource(snapshot);
     renderTotals(snapshot);
     renderItems(snapshot);
   } catch (err) {

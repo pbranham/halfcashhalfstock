@@ -54,9 +54,10 @@ body {
 }
 
 .topbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  justify-content: space-between;
+  gap: 16px;
   padding: 12px 20px;
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
@@ -69,10 +70,16 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
+  text-decoration: none;
+  color: inherit;
+  justify-self: start;
 }
 
-.brand-mark {
-  font-size: 18px;
+.brand-icon {
+  width: 56px;
+  height: 32px;
+  display: block;
+  flex-shrink: 0;
 }
 
 .brand-name {
@@ -80,11 +87,19 @@ body {
   letter-spacing: -0.01em;
 }
 
+.last-updated {
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
 .ticker {
   font-variant-numeric: tabular-nums;
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: baseline;
+  justify-self: end;
 }
 
 .ticker-symbol {
@@ -99,14 +114,27 @@ body {
   font-weight: 700;
 }
 
-.ticker-meta {
+.ticker-status {
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
-.ticker.is-stale .ticker-meta::before {
+.ticker.is-stale .ticker-status::before {
   content: '⚠ ';
   color: var(--warn);
+}
+
+@media (max-width: 720px) {
+  .topbar {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas: 'brand ticker' 'updated updated';
+    gap: 6px 16px;
+  }
+  .brand { grid-area: brand; }
+  .ticker { grid-area: ticker; }
+  .last-updated { grid-area: updated; text-align: left; }
 }
 
 main {
@@ -225,11 +253,10 @@ main {
 .item-split {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px 12px;
+  gap: 4px 12px;
   background: var(--accent-soft);
   border-radius: 8px;
-  padding: 8px 10px;
-  font-size: 13px;
+  padding: 10px 12px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -241,6 +268,7 @@ main {
 }
 
 .item-split .value {
+  font-size: 15px;
   font-weight: 600;
 }
 
@@ -280,4 +308,17 @@ footer {
   color: var(--fg-muted);
   font-size: 12px;
   text-align: center;
+}
+
+footer p {
+  margin: 0;
+}
+
+footer p + p {
+  margin-top: 6px;
+}
+
+footer .disclaimer {
+  font-size: 11px;
+  opacity: 0.7;
 }
