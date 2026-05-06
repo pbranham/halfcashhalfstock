@@ -49,7 +49,7 @@
       </a>
       <div id="last-updated" class="last-updated" aria-live="polite"></div>
       <div id="ticker" class="ticker" aria-live="polite">
-        <span class="ticker-symbol">$EBAY</span>
+        <span class="ticker-symbol"></span>
         <span class="ticker-price">—</span>
         <span class="ticker-status"></span>
       </div>
@@ -78,17 +78,24 @@
         He is now <a id="seller-link" href="https://www.ebay.com/usr/ryan_5050" target="_blank" rel="noopener noreferrer">selling things on eBay</a> to help him buy eBay. 
       </p>
       <p class="intro">
-        What if $EBAY shareholders could checkout with half cash, half stock?
+        What if <span id="intro-symbol">$EBAY</span> shareholders could checkout with half cash, half stock?
       </p>
       <p class="intro">
-        Each of his active listings is shown below as the equivalent half-cash + half-stock allocation at the live market price for $EBAY.
+        Each of his active listings is shown below as the equivalent half-cash + half-stock allocation at the live market price for <span id="intro-symbol-2">$EBAY</span>.
       </p>
-      <div class="sort-bar" role="group" aria-label="Sort listings">
-        <span class="sort-label">Sort:</span>
-        <button class="sort-btn is-active" data-sort="ending-soonest">Ending soonest</button>
-        <button class="sort-btn" data-sort="price-low">Price: low &rarr; high</button>
-        <button class="sort-btn" data-sort="price-high">Price: high &rarr; low</button>
-        <button class="sort-btn" data-sort="most-bids">Most bids</button>
+      <div class="controls-bar">
+        <div class="stock-bar" role="group" aria-label="Choose stock">
+          <span class="sort-label">Stock:</span>
+          <button class="stock-btn is-active" data-symbol="EBAY">$EBAY</button>
+          <button class="stock-btn" data-symbol="GME">$GME</button>
+        </div>
+        <div class="sort-bar" role="group" aria-label="Sort listings">
+          <span class="sort-label">Sort:</span>
+          <button class="sort-btn is-active" data-sort="ending-soonest">Ending soonest</button>
+          <button class="sort-btn" data-sort="price-low">Price: low &rarr; high</button>
+          <button class="sort-btn" data-sort="price-high">Price: high &rarr; low</button>
+          <button class="sort-btn" data-sort="most-bids">Most bids</button>
+        </div>
       </div>
       <section id="totals" class="totals" aria-live="polite"></section>
       <section id="items" class="items" aria-live="polite">

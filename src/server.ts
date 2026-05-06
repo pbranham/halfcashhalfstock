@@ -28,7 +28,7 @@ interface Deps {
   config: Config;
   log: Logger;
   fetchListings: () => Promise<Listing[]>;
-  fetchQuote: () => Promise<PriceQuote>;
+  fetchQuote: (symbol: string) => Promise<PriceQuote>;
 }
 
 function buildPriceProvider(config: Config, log: Logger): PriceProvider {
@@ -45,9 +45,9 @@ function buildDeps(config: Config, log: Logger): Deps {
   const listingCache = new TtlCache<Listing[]>();
   const priceProvider = buildPriceProvider(config, log);
 
-  const fetchQuote = (): Promise<PriceQuote> =>
-    priceCache.get(config.STOCK_SYMBOL, PRICE_TTL_MS, () =>
-      priceProvider.getQuote(config.STOCK_SYMBOL),
+  const fetchQuote = (symbol: string): Promise<PriceQuote> =>
+    priceCache.get(symbol, PRICE_TTL_MS, () =>
+      priceProvider.getQuote(symbol),
     );
 
   let fetchListings: () => Promise<Listing[]>;
@@ -110,10 +110,13 @@ export function createApp(deps: Deps): express.Express {
 
   const snapshotCache = new TtlCache<Snapshot>();
 
-  app.get('/api/snapshot', apiLimiter, async (_req: Request, res: Response, next: NextFunction) => {
+  app.get('/api/snapshot', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const snapshot = await snapshotCache.get('snapshot', SNAPSHOT_TTL_MS, async () => {
-        const [listings, quote] = await Promise.all([deps.fetchListings(), deps.fetchQuote()]);
+      const rawSymbol = typeof req.query.symbol === 'string' ? req.query.symbol.trim().toUpperCase() : '';
+      const symbol = rawSymbol && /^[A-Z]{1,10}$/.test(rawSymbol) ? rawSymbol : deps.config.STOCK_SYMBOL;
+
+      const snapshot = await snapshotCache.get(`snapshot:${symbol}`, SNAPSHOT_TTL_MS, async () => {
+        const [listings, quote] = await Promise.all([deps.fetchListings(), deps.fetchQuote(symbol)]);
         return composeSnapshot(listings, quote);
       });
       res

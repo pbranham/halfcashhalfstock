@@ -1,6 +1,9 @@
 const POLL_MS = 30_000;
 const STALE_MS = 120_000;
 
+const SUPPORTED_SYMBOLS = ['EBAY', 'GME'];
+let activeSymbol = SUPPORTED_SYMBOLS[0];
+
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const shares = new Intl.NumberFormat('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
 const integer = new Intl.NumberFormat('en-US');
@@ -84,6 +87,8 @@ function renderTicker(snapshot) {
   const ticker = document.getElementById('ticker');
   if (!ticker) return;
   const price = snapshot?.stock?.price;
+  const symbol = snapshot?.stock?.symbol ?? activeSymbol;
+  setText(ticker.querySelector('.ticker-symbol'), `$${symbol}`);
   setText(ticker.querySelector('.ticker-price'), price ? usd.format(price) : '—');
   const generated = snapshot?.generatedAt ? new Date(snapshot.generatedAt) : null;
   const isStale = generated ? Date.now() - generated.getTime() > STALE_MS : false;
@@ -116,11 +121,12 @@ function renderTotals(snapshot) {
   root.replaceChildren();
   if (!snapshot) return;
   const { listingsCount, pricedCount, bidUsd, split } = snapshot.totals;
+  const symbol = snapshot.stock?.symbol ?? activeSymbol;
   const items = [
     { label: 'Active listings', value: integer.format(listingsCount) },
     { label: 'Sum of current bids', value: usd.format(bidUsd) },
     { label: 'Total cash half', value: usd.format(split.cashUsd) },
-    { label: 'Total EBAY shares', value: shares.format(split.shares) },
+    { label: `Total ${symbol} shares`, value: shares.format(split.shares) },
   ];
   for (const stat of items) {
     root.appendChild(
@@ -140,7 +146,7 @@ function renderTotals(snapshot) {
   }
 }
 
-function renderItem(item) {
+function renderItem(item, symbol) {
   const card = el('article', { class: 'item' });
   const img = item.imageUrl
     ? el('img', { class: 'item-image', src: item.imageUrl, alt: item.title, loading: 'lazy' })
@@ -166,7 +172,7 @@ function renderItem(item) {
   if (item.split) {
     const split = el('div', { class: 'item-split' });
     split.appendChild(el('div', { class: 'label', textContent: 'Cash half' }));
-    split.appendChild(el('div', { class: 'label', textContent: 'EBAY shares' }));
+    split.appendChild(el('div', { class: 'label', textContent: `${symbol} shares` }));
     split.appendChild(el('div', { class: 'value', textContent: usd.format(item.split.cashUsd) }));
     split.appendChild(el('div', { class: 'value', textContent: shares.format(item.split.shares) }));
     body.appendChild(split);
@@ -194,10 +200,11 @@ function renderItems(snapshot, bidDiff) {
   }
 
   const sorted = sortItems(items, currentSort);
+  const symbol = snapshot?.stock?.symbol ?? activeSymbol;
   const newCards = [];
 
   for (const item of sorted) {
-    const card = renderItem(item);
+    const card = renderItem(item, symbol);
     card.dataset.itemId = item.itemId;
 
     // Bid-change flash: only when the count actually went up
@@ -243,9 +250,15 @@ function renderError(message) {
   root.replaceChildren(el('div', { class: 'error', textContent: message }));
 }
 
+function updateIntroSymbol(symbol) {
+  const display = `$${symbol}`;
+  setText(document.getElementById('intro-symbol'), display);
+  setText(document.getElementById('intro-symbol-2'), display);
+}
+
 async function refresh() {
   try {
-    const res = await fetch('/api/snapshot', { headers: { Accept: 'application/json' } });
+    const res = await fetch(`/api/snapshot?symbol=${activeSymbol}`, { headers: { Accept: 'application/json' } });
     if (!res.ok) {
       let detail = '';
       try {
@@ -263,6 +276,7 @@ async function refresh() {
     }
     const snapshot = await res.json();
     renderTicker(snapshot);
+    updateIntroSymbol(snapshot.stock?.symbol ?? activeSymbol);
     renderLastUpdated(snapshot);
     renderPriceSource(snapshot);
     renderTotals(snapshot);
@@ -289,6 +303,17 @@ function stop() {
     timerId = null;
   }
 }
+
+// Stock toggle wiring
+document.querySelectorAll('.stock-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    if (btn.dataset.symbol === activeSymbol) return;
+    activeSymbol = btn.dataset.symbol;
+    document.querySelectorAll('.stock-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
+    updateIntroSymbol(activeSymbol);
+    refresh();
+  });
+});
 
 // Sort button wiring
 document.querySelectorAll('.sort-btn').forEach((btn) => {
