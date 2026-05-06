@@ -30,6 +30,24 @@ describe('listSellerActiveItems', () => {
     await expect(listSellerActiveItems(client, 'evil; drop')).rejects.toThrow(RangeError);
   });
 
+  it('issues a search request with category_ids=0 and AUCTION+FIXED_PRICE buyingOptions', async () => {
+    const fetchImpl = vi.fn();
+    fetchImpl.mockResolvedValueOnce(
+      jsonResponse({ access_token: 't', expires_in: 7200, token_type: 'Application' }),
+    );
+    fetchImpl.mockResolvedValueOnce(jsonResponse({ itemSummaries: [] }));
+
+    const client = buildClient(fetchImpl);
+    await listSellerActiveItems(client, 'ryan_5050');
+
+    const searchCall = fetchImpl.mock.calls[1]?.[0] as URL;
+    expect(searchCall.pathname).toBe('/buy/browse/v1/item_summary/search');
+    expect(searchCall.searchParams.get('category_ids')).toBe('0');
+    expect(searchCall.searchParams.get('filter')).toBe(
+      'sellers:{ryan_5050},buyingOptions:{AUCTION|FIXED_PRICE}',
+    );
+  });
+
   it('normalizes auction and buy-it-now items', async () => {
     const fetchImpl = vi.fn();
     fetchImpl.mockResolvedValueOnce(
