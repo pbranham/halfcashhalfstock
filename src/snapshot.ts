@@ -13,6 +13,14 @@ export interface ListingView {
   endsAt: string | null;
   isAuction: boolean;
   split: HalfSplit | null;
+  lastBidTime: string | null;
+}
+
+export interface LastBidSummary {
+  itemId: string;
+  title: string;
+  bidTime: string;
+  bidAmount: number;
 }
 
 export interface Snapshot {
@@ -26,6 +34,7 @@ export interface Snapshot {
     bidUsd: number;
     split: HalfSplit;
   };
+  lastBid: LastBidSummary | null;
 }
 
 export function composeSnapshot(listings: readonly Listing[], stock: PriceQuote): Snapshot {
@@ -40,11 +49,27 @@ export function composeSnapshot(listings: readonly Listing[], stock: PriceQuote)
     endsAt: l.endsAt,
     isAuction: l.isAuction,
     split: l.priceUsd !== null ? splitHalfCashHalfStock(l.priceUsd, stock.price) : null,
+    lastBidTime: l.lastBidTime ?? null,
   }));
 
   const priced = items.filter((i): i is ListingView & { split: HalfSplit; priceUsd: number } =>
     i.split !== null && i.priceUsd !== null,
   );
+
+  let lastBid: LastBidSummary | null = null;
+  for (const item of items) {
+    if (!item.lastBidTime || item.priceUsd === null) continue;
+    const itemTime = Date.parse(item.lastBidTime);
+    if (Number.isNaN(itemTime)) continue;
+    if (lastBid === null || itemTime > Date.parse(lastBid.bidTime)) {
+      lastBid = {
+        itemId: item.itemId,
+        title: item.title,
+        bidTime: item.lastBidTime,
+        bidAmount: item.priceUsd,
+      };
+    }
+  }
 
   return {
     generatedAt: new Date().toISOString(),
@@ -57,5 +82,6 @@ export function composeSnapshot(listings: readonly Listing[], stock: PriceQuote)
       bidUsd: priced.reduce((sum, i) => sum + i.priceUsd, 0),
       split: sumSplits(priced.map((i) => i.split)),
     },
+    lastBid,
   };
 }

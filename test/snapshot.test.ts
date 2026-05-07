@@ -82,4 +82,46 @@ describe('composeSnapshot', () => {
     const snapshot = composeSnapshot([], QUOTE);
     expect(snapshot.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
+
+  it('returns null lastBid when no listings have a bid timestamp', () => {
+    const snapshot = composeSnapshot([listing({ itemId: 'v1|1', priceUsd: 100 })], QUOTE);
+    expect(snapshot.lastBid).toBeNull();
+  });
+
+  it('selects the most recent lastBid across listings', () => {
+    const snapshot = composeSnapshot(
+      [
+        listing({
+          itemId: 'v1|1',
+          priceUsd: 100,
+          lastBidTime: '2026-05-06T10:00:00.000Z',
+        }),
+        listing({
+          itemId: 'v1|2',
+          priceUsd: 250,
+          lastBidTime: '2026-05-07T15:30:00.000Z',
+        }),
+        listing({
+          itemId: 'v1|3',
+          priceUsd: 75,
+          lastBidTime: '2026-05-07T09:00:00.000Z',
+        }),
+      ],
+      QUOTE,
+    );
+    expect(snapshot.lastBid).toEqual({
+      itemId: 'v1|2',
+      title: 'Test',
+      bidTime: '2026-05-07T15:30:00.000Z',
+      bidAmount: 250,
+    });
+  });
+
+  it('exposes lastBidTime per item view', () => {
+    const snapshot = composeSnapshot(
+      [listing({ itemId: 'v1|1', priceUsd: 100, lastBidTime: '2026-05-07T12:00:00.000Z' })],
+      QUOTE,
+    );
+    expect(snapshot.items[0]?.lastBidTime).toBe('2026-05-07T12:00:00.000Z');
+  });
 });

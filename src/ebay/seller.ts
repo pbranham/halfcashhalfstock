@@ -11,6 +11,7 @@ export interface Listing {
   endsAt: string | null;
   buyingOptions: readonly string[];
   isAuction: boolean;
+  lastBidTime?: string | null;
 }
 
 interface BrowsePrice {

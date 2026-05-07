@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hasEbayCredentials, loadConfig } from '../src/config.js';
+import { hasEbayCredentials, hasEbayTradingCredentials, loadConfig } from '../src/config.js';
 
 describe('loadConfig', () => {
   it('applies defaults when only minimal env is provided', () => {
@@ -32,5 +32,16 @@ describe('loadConfig', () => {
   it('hasEbayCredentials returns false when either key is missing', () => {
     expect(hasEbayCredentials(loadConfig({ EBAY_APP_ID: 'a' }))).toBe(false);
     expect(hasEbayCredentials(loadConfig({}))).toBe(false);
+  });
+
+  it('hasEbayTradingCredentials reports both Trading-API keys present', () => {
+    const cfg = loadConfig({ EBAY_DEV_ID: 'd', EBAY_USER_TOKEN: 't' });
+    expect(hasEbayTradingCredentials(cfg)).toBe(true);
+  });
+
+  it('hasEbayTradingCredentials returns false when either Trading-API key is missing', () => {
+    expect(hasEbayTradingCredentials(loadConfig({ EBAY_DEV_ID: 'd' }))).toBe(false);
+    expect(hasEbayTradingCredentials(loadConfig({ EBAY_USER_TOKEN: 't' }))).toBe(false);
+    expect(hasEbayTradingCredentials(loadConfig({}))).toBe(false);
   });
 });
