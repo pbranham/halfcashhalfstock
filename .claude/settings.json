@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git fetch origin && git checkout -B claude/ebay-auction-monitor-vdOMZ origin/main && git branch -u origin/main claude/ebay-auction-monitor-vdOMZ",
+            "statusMessage": "Syncing dev branch to origin/main",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
