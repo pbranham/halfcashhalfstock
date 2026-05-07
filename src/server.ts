@@ -5,12 +5,18 @@ import compression from 'compression';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
-import { hasEbayCredentials, loadConfig, type Config } from './config.js';
+import {
+  hasEbayCredentials,
+  hasEbayTradingCredentials,
+  loadConfig,
+  type Config,
+} from './config.js';
 import { createLogger, type Logger } from './log.js';
 import { TtlCache } from './cache.js';
 import { EbayAppTokenProvider } from './ebay/auth.js';
 import { EbayClient } from './ebay/client.js';
 import { listSellerActiveItems, type Listing } from './ebay/seller.js';
+import { fetchBidHistory } from './ebay/bid-history.js';
 import { FinnhubProvider } from './prices/finnhub.js';
 import { YahooProvider } from './prices/yahoo.js';
 import { ChainedPriceProvider } from './prices/provider.js';
@@ -29,6 +35,19 @@ interface Deps {
   log: Logger;
   fetchListings: () => Promise<Listing[]>;
   fetchQuote: (symbol: string) => Promise<PriceQuote>;
+}
+
+async function enrichWithBidHistory(deps: Deps, listings: Listing[]): Promise<Listing[]> {
+  if (!hasEbayTradingCredentials(deps.config)) return listings;
+  const devId = deps.config.EBAY_DEV_ID!;
+  const userToken = deps.config.EBAY_USER_TOKEN!;
+  return Promise.all(
+    listings.map(async (listing) => {
+      if (!listing.isAuction || !listing.bidCount) return listing;
+      const history = await fetchBidHistory(listing.itemId, listing.bidCount, devId, userToken);
+      return { ...listing, lastBidTime: history?.lastBidTime ?? null };
+    }),
+  );
 }
 
 function buildPriceProvider(config: Config, log: Logger): PriceProvider {
@@ -117,7 +136,8 @@ export function createApp(deps: Deps): express.Express {
 
       const snapshot = await snapshotCache.get(`snapshot:${symbol}`, SNAPSHOT_TTL_MS, async () => {
         const [listings, quote] = await Promise.all([deps.fetchListings(), deps.fetchQuote(symbol)]);
-        return composeSnapshot(listings, quote);
+        const enriched = await enrichWithBidHistory(deps, listings);
+        return composeSnapshot(enriched, quote);
       });
       res
         .status(200)
