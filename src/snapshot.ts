@@ -22,6 +22,7 @@ export interface Snapshot {
   totals: {
     listingsCount: number;
     pricedCount: number;
+    bidsCount: number;
     bidUsd: number;
     split: HalfSplit;
   };
@@ -52,6 +53,7 @@ export function composeSnapshot(listings: readonly Listing[], stock: PriceQuote)
     totals: {
       listingsCount: items.length,
       pricedCount: priced.length,
+      bidsCount: items.reduce((sum, i) => sum + (i.bidCount ?? 0), 0),
       bidUsd: priced.reduce((sum, i) => sum + i.priceUsd, 0),
       split: sumSplits(priced.map((i) => i.split)),
     },
