@@ -12,6 +12,39 @@ const integer = new Intl.NumberFormat('en-US');
 let currentSort = 'ending-soonest';
 let lastSnapshot = null;
 let prevBidCounts = new Map(); // itemId → bidCount from last successful render
+function parseTimestamp(value) {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function formatRelativeBidAge(isoTime, nowMs = Date.now()) {
+  const ts = parseTimestamp(isoTime);
+  if (ts === null) return null;
+  const totalSeconds = Math.max(0, Math.floor((nowMs - ts) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes === 0) return `${seconds}s ago`;
+  if (minutes < 60) return `${minutes}m ${seconds}s ago`;
+
+  const hours = Math.floor(minutes / 60);
+  const minutesRemainder = minutes % 60;
+  if (hours < 24) return `${hours}h ${minutesRemainder}m ago`;
+
+  const days = Math.floor(hours / 24);
+  const hoursRemainder = hours % 24;
+  return `${days}d ${hoursRemainder}h ago`;
+}
+
+function formatLocalTimestamp(isoTime) {
+  const ts = parseTimestamp(isoTime);
+  if (ts === null) return 'Unknown timestamp';
+  return new Date(ts).toLocaleString(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'long',
+  });
+}
 
 function sortItems(items, sort) {
   const sorted = [...items];
@@ -29,6 +62,15 @@ function sortItems(items, sort) {
       return sorted.sort((a, b) => (b.priceUsd ?? -Infinity) - (a.priceUsd ?? -Infinity));
     case 'most-bids':
       return sorted.sort((a, b) => (b.bidCount ?? 0) - (a.bidCount ?? 0));
+    case 'recent-bid-activity':
+      return sorted.sort((a, b) => {
+        const aTs = parseTimestamp(a.lastBidTime);
+        const bTs = parseTimestamp(b.lastBidTime);
+        if (aTs === null && bTs === null) return 0;
+        if (aTs === null) return 1;
+        if (bTs === null) return -1;
+        return bTs - aTs;
+      });
     default:
       return sorted;
   }
@@ -166,24 +208,23 @@ function renderItem(item, symbol) {
   }
   const remaining = timeRemaining(item.endsAt);
   if (remaining) meta.appendChild(el('span', { textContent: remaining }));
-  if (item.lastBidTime) {
-    const lastBidDate = new Date(item.lastBidTime);
-    const now = new Date();
-    const diffMs = now.getTime() - lastBidDate.getTime();
-    const diffMin = Math.floor(diffMs / 60_000);
-    const diffSec = Math.floor((diffMs % 60_000) / 1000);
-    let timeAgo = '';
-    if (diffMin > 0) {
-      timeAgo = `${diffMin}m ${diffSec}s ago`;
-    } else {
-      timeAgo = `${diffSec}s ago`;
-    }
-    meta.appendChild(el('span', { class: 'bid-time', textContent: `bid: ${timeAgo}` }));
-  }
   body.appendChild(meta);
-  body.appendChild(
+
+  const bidRow = el('div', { class: 'item-bid-row' });
+  bidRow.appendChild(
     el('div', { class: 'item-bid', textContent: item.priceUsd != null ? usd.format(item.priceUsd) : '—' }),
   );
+  const bidAge = formatRelativeBidAge(item.lastBidTime);
+  if (bidAge) {
+    bidRow.appendChild(
+      el('span', {
+        class: 'item-bid-time',
+        textContent: bidAge,
+        title: `Most recent bid activity: ${formatLocalTimestamp(item.lastBidTime)}. This may differ from when the current displayed bid was reached due to proxy bidding.`,
+      }),
+    );
+  }
+  body.appendChild(bidRow);
   if (item.split) {
     const split = el('div', { class: 'item-split' });
     split.appendChild(el('div', { class: 'label', textContent: 'Cash half' }));
@@ -272,24 +313,42 @@ function renderMostRecentBid(snapshot) {
   }
 
   const bid = snapshot.lastBid;
-  const bidDate = new Date(bid.bidTime);
-  const now = new Date();
-  const diffMs = now.getTime() - bidDate.getTime();
-  const diffMin = Math.floor(diffMs / 60_000);
-  const diffSec = Math.floor((diffMs % 60_000) / 1000);
-  let timeAgo = '';
-  if (diffMin > 0) {
-    timeAgo = `${diffMin}m ${diffSec}s ago`;
-  } else {
-    timeAgo = `${diffSec}s ago`;
-  }
+  const bidItem = (snapshot.items ?? []).find((item) => item.itemId === bid.itemId) ?? null;
+  const timeAgo = formatRelativeBidAge(bid.bidTime) ?? 'unknown';
 
   const content = el('div', { class: 'most-recent-bid-content' });
+  content.appendChild(
+    bidItem?.imageUrl
+      ? el('img', {
+          class: 'most-recent-bid-thumb',
+          src: bidItem.imageUrl,
+          alt: bid.title,
+          loading: 'lazy',
+        })
+      : el('div', { class: 'most-recent-bid-thumb most-recent-bid-thumb-placeholder' }),
+  );
 
   const info = el('div', { class: 'most-recent-bid-info' });
   info.appendChild(el('div', { class: 'most-recent-bid-label', textContent: 'Most recent bid' }));
+  info.appendChild(
+    bidItem?.itemWebUrl
+      ? el('a', {
+          class: 'most-recent-bid-title-link',
+          href: bidItem.itemWebUrl,
+          target: '_blank',
+          rel: 'noopener noreferrer',
+          textContent: bid.title,
+        })
+      : el('div', { class: 'most-recent-bid-title', textContent: bid.title }),
+  );
   info.appendChild(el('div', { class: 'most-recent-bid-amount', textContent: usd.format(bid.bidAmount) }));
-  info.appendChild(el('div', { class: 'most-recent-bid-time', textContent: timeAgo }));
+  info.appendChild(
+    el('div', {
+      class: 'most-recent-bid-time',
+      textContent: timeAgo,
+      title: `Most recent bid activity: ${formatLocalTimestamp(bid.bidTime)}. This may differ from when the current displayed bid was reached due to proxy bidding.`,
+    }),
+  );
   content.appendChild(info);
 
   const link = el('a', {
