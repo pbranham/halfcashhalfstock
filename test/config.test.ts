@@ -1,5 +1,13 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { hasEbayCredentials, hasEbayTradingCredentials, loadConfig } from '../src/config.js';
+import {
+  hasEbayCredentials,
+  hasEbayTradingCredentials,
+  loadConfig,
+  resolveEbayTradingUserToken,
+} from '../src/config.js';
 
 describe('loadConfig', () => {
   it('applies defaults when only minimal env is provided', () => {
@@ -39,8 +47,53 @@ describe('loadConfig', () => {
     expect(hasEbayTradingCredentials(cfg)).toBe(true);
   });
 
+  it('hasEbayTradingCredentials reports token-file based Trading credentials as present', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'hchs-config-'));
+    try {
+      const tokenFile = path.join(dir, 'token.json');
+      writeFileSync(tokenFile, JSON.stringify({ token: 'from-file-token' }), 'utf8');
+      const cfg = loadConfig({ EBAY_DEV_ID: 'd', EBAY_USER_TOKEN_FILE: tokenFile });
+      expect(hasEbayTradingCredentials(cfg)).toBe(true);
+      expect(resolveEbayTradingUserToken(cfg)).toBe('from-file-token');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolveEbayTradingUserToken prefers token file over env token', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'hchs-config-'));
+    try {
+      const tokenFile = path.join(dir, 'token.json');
+      writeFileSync(tokenFile, JSON.stringify({ eBayAuthToken: 'file-wins' }), 'utf8');
+      const cfg = loadConfig({
+        EBAY_DEV_ID: 'd',
+        EBAY_USER_TOKEN: 'env-fallback',
+        EBAY_USER_TOKEN_FILE: tokenFile,
+      });
+      expect(resolveEbayTradingUserToken(cfg)).toBe('file-wins');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolveEbayTradingUserToken falls back to EBAY_USER_TOKEN when token file is missing', () => {
+    const cfg = loadConfig({
+      EBAY_DEV_ID: 'd',
+      EBAY_USER_TOKEN: 'env-fallback',
+      EBAY_USER_TOKEN_FILE: '/tmp/definitely-missing-hchs-token-file.json',
+    });
+    expect(resolveEbayTradingUserToken(cfg)).toBe('env-fallback');
+  });
+
   it('hasEbayTradingCredentials returns false when either Trading-API key is missing', () => {
-    expect(hasEbayTradingCredentials(loadConfig({ EBAY_DEV_ID: 'd' }))).toBe(false);
+    expect(
+      hasEbayTradingCredentials(
+        loadConfig({
+          EBAY_DEV_ID: 'd',
+          EBAY_USER_TOKEN_FILE: '/tmp/definitely-missing-hchs-token-file.json',
+        }),
+      ),
+    ).toBe(false);
     expect(hasEbayTradingCredentials(loadConfig({ EBAY_USER_TOKEN: 't' }))).toBe(false);
     expect(hasEbayTradingCredentials(loadConfig({}))).toBe(false);
   });

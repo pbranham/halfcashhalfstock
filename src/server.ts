@@ -7,8 +7,8 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import {
   hasEbayCredentials,
-  hasEbayTradingCredentials,
   loadConfig,
+  resolveEbayTradingUserToken,
   type Config,
 } from './config.js';
 import { createLogger, type Logger } from './log.js';
@@ -38,9 +38,9 @@ interface Deps {
 }
 
 async function enrichWithBidHistory(deps: Deps, listings: Listing[]): Promise<Listing[]> {
-  if (!hasEbayTradingCredentials(deps.config)) return listings;
-  const devId = deps.config.EBAY_DEV_ID!;
-  const userToken = deps.config.EBAY_USER_TOKEN!;
+  const userToken = resolveEbayTradingUserToken(deps.config);
+  if (!deps.config.EBAY_DEV_ID || !userToken) return listings;
+  const devId = deps.config.EBAY_DEV_ID;
   return Promise.all(
     listings.map(async (listing) => {
       if (!listing.isAuction || !listing.bidCount) return listing;
