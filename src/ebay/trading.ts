@@ -13,22 +13,22 @@ export interface ItemBidHistory {
   bids: BidRecord[];
 }
 
-interface BidNode {
-  Bidder?: { UserID?: string };
-  BidTime?: string;
-  MaxBid?: string;
-  BidAmount?: string;
+// GetAllBidders returns one Offer per unique bidder (their highest bid).
+// MaxBid and HighestBid are eBay AmountType: may be a plain number or
+// { '@_currencyID': string, '#text': number } when a currency attribute is present.
+interface OfferNode {
+  TimeBid?: string;
+  MaxBid?: unknown;
+  HighestBid?: unknown;
+  User?: { UserID?: string };
 }
 
 interface ParsedResponse {
-  GetItemResponse?: {
-    Item?: {
-      BidCount?: string;
-      CurrentPrice?: string;
-      Bids?: {
-        Bid?: BidNode | BidNode[];
-      };
+  GetAllBiddersResponse?: {
+    BidArray?: {
+      Offer?: OfferNode | OfferNode[];
     };
+    HighestBid?: unknown;
   };
 }
 
@@ -39,27 +39,26 @@ const parser = new XMLParser({
 
 export async function getItemBidHistory(
   itemId: string,
-  devId: string,
+  _devId: string,
   userToken: string,
 ): Promise<ItemBidHistory> {
+  const tradingItemId = normalizeTradingItemId(itemId);
   const requestBody = `<?xml version="1.0" encoding="UTF-8"?>
-<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+<GetAllBiddersRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <RequesterCredentials>
     <eBayAuthToken>${escapeXml(userToken)}</eBayAuthToken>
   </RequesterCredentials>
-  <ItemID>${escapeXml(itemId)}</ItemID>
-  <DetailLevel>ReturnAll</DetailLevel>
-</GetItemRequest>`;
+  <ItemID>${escapeXml(tradingItemId)}</ItemID>
+  <CallMode>ViewAll</CallMode>
+</GetAllBiddersRequest>`;
 
   const res = await fetch('https://api.ebay.com/ws/api.dll', {
     method: 'POST',
     headers: {
-      'X-EBAY-API-CALL-NAME': 'GetItem',
-      'X-EBAY-API-DEV-NAME': devId,
-      'X-EBAY-API-APP-NAME': devId,
-      'X-EBAY-API-CERT-NAME': devId,
+      'X-EBAY-API-CALL-NAME': 'GetAllBidders',
       'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
-      'Content-Type': 'application/xml',
+      'X-EBAY-API-SITEID': '0',
+      'Content-Type': 'text/xml',
     },
     body: requestBody,
   });
@@ -71,29 +70,48 @@ export async function getItemBidHistory(
   const xml = await res.text();
   const parsed = parser.parse(xml) as ParsedResponse;
 
-  const item = parsed?.GetItemResponse?.Item;
-  if (!item) {
-    throw new Error(`No item found in Trading API response for ${itemId}`);
-  }
+  const offerList = parsed?.GetAllBiddersResponse?.BidArray?.Offer ?? [];
+  const offersArray: OfferNode[] = Array.isArray(offerList)
+    ? offerList
+    : offerList
+      ? [offerList as OfferNode]
+      : [];
 
-  const bidCount = item.BidCount ? Number(item.BidCount) : 0;
-  const currentPrice = item.CurrentPrice ? Number(item.CurrentPrice) : 0;
+  const bids: BidRecord[] = offersArray
+    .filter((o): o is OfferNode & { TimeBid: string } => Boolean(o.TimeBid))
+    .map((offer) => ({
+      bidder: offer.User?.UserID ?? 'unknown',
+      bidTime: offer.TimeBid,
+      bidAmount: parseMoney(offer.MaxBid ?? offer.HighestBid),
+    }));
 
-  const bidList = item.Bids?.Bid ?? [];
-  const bidsArray = Array.isArray(bidList) ? bidList : bidList ? [bidList] : [];
-
-  const bids: BidRecord[] = bidsArray.map((bid) => ({
-    bidder: bid.Bidder?.UserID ?? 'unknown',
-    bidTime: bid.BidTime ?? '',
-    bidAmount: Number(bid.MaxBid ?? bid.BidAmount ?? 0),
-  }));
+  // Sort ascending so bids[last] is the most recent bid action.
+  bids.sort((a, b) => (a.bidTime < b.bidTime ? -1 : a.bidTime > b.bidTime ? 1 : 0));
 
   return {
-    itemId,
-    bidCount,
-    currentPrice,
+    itemId: tradingItemId,
+    bidCount: bids.length,
+    currentPrice: parseMoney(parsed?.GetAllBiddersResponse?.HighestBid),
     bids,
   };
+}
+
+function normalizeTradingItemId(itemId: string): string {
+  const parts = itemId.split('|');
+  if (parts.length >= 2 && parts[1]) return parts[1];
+  return itemId;
+}
+
+// eBay AmountType fields carry an optional currencyID attribute, so fast-xml-parser
+// may produce either a plain number or { '@_currencyID': '...', '#text': number }.
+function parseMoney(val: unknown): number {
+  if (typeof val === 'number') return val;
+  if (typeof val === 'string') return Number(val);
+  if (typeof val === 'object' && val !== null) {
+    const text = (val as Record<string, unknown>)['#text'];
+    if (text !== undefined) return Number(text);
+  }
+  return 0;
 }
 
 function escapeXml(str: string): string {
