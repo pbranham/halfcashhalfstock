@@ -120,10 +120,11 @@ function renderTotals(snapshot) {
   if (!root) return;
   root.replaceChildren();
   if (!snapshot) return;
-  const { listingsCount, pricedCount, bidUsd, split } = snapshot.totals;
+  const { listingsCount, pricedCount, bidsCount, bidUsd, split } = snapshot.totals;
   const symbol = snapshot.stock?.symbol ?? activeSymbol;
   const items = [
     { label: 'Active listings', value: integer.format(listingsCount) },
+    { label: 'Total bids', value: integer.format(bidsCount ?? 0) },
     { label: 'Sum of current bids', value: usd.format(bidUsd) },
     { label: 'Total cash half', value: usd.format(split.cashUsd) },
     { label: `Total ${symbol} shares`, value: shares.format(split.shares) },

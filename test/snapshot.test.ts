@@ -30,14 +30,30 @@ function listing(overrides: Partial<Listing> = {}): Listing {
 describe('composeSnapshot', () => {
   it('computes per-item splits and totals', () => {
     const snapshot = composeSnapshot(
-      [listing({ itemId: 'v1|1', priceUsd: 100 }), listing({ itemId: 'v1|2', priceUsd: 50 })],
+      [
+        listing({ itemId: 'v1|1', priceUsd: 100, bidCount: 7 }),
+        listing({ itemId: 'v1|2', priceUsd: 50, bidCount: 3 }),
+      ],
       QUOTE,
     );
     expect(snapshot.totals.listingsCount).toBe(2);
     expect(snapshot.totals.pricedCount).toBe(2);
+    expect(snapshot.totals.bidsCount).toBe(10);
     expect(snapshot.totals.bidUsd).toBe(150);
     expect(snapshot.totals.split).toEqual({ cashUsd: 75, stockUsd: 75, shares: 1.5 });
     expect(snapshot.items[0]?.split).toEqual({ cashUsd: 50, stockUsd: 50, shares: 1 });
+  });
+
+  it('counts bids across listings even when some lack prices', () => {
+    const snapshot = composeSnapshot(
+      [
+        listing({ itemId: 'v1|1', priceUsd: 100, bidCount: 4 }),
+        listing({ itemId: 'v1|2', priceUsd: null, bidCount: 11 }),
+        listing({ itemId: 'v1|3', priceUsd: 30, bidCount: null }),
+      ],
+      QUOTE,
+    );
+    expect(snapshot.totals.bidsCount).toBe(15);
   });
 
   it('skips items with null priceUsd from totals but keeps them in items[]', () => {
@@ -56,6 +72,7 @@ describe('composeSnapshot', () => {
     expect(snapshot.totals).toEqual({
       listingsCount: 0,
       pricedCount: 0,
+      bidsCount: 0,
       bidUsd: 0,
       split: { cashUsd: 0, stockUsd: 0, shares: 0 },
     });
