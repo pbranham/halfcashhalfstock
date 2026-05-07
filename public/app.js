@@ -166,6 +166,20 @@ function renderItem(item, symbol) {
   }
   const remaining = timeRemaining(item.endsAt);
   if (remaining) meta.appendChild(el('span', { textContent: remaining }));
+  if (item.lastBidTime) {
+    const lastBidDate = new Date(item.lastBidTime);
+    const now = new Date();
+    const diffMs = now.getTime() - lastBidDate.getTime();
+    const diffMin = Math.floor(diffMs / 60_000);
+    const diffSec = Math.floor((diffMs % 60_000) / 1000);
+    let timeAgo = '';
+    if (diffMin > 0) {
+      timeAgo = `${diffMin}m ${diffSec}s ago`;
+    } else {
+      timeAgo = `${diffSec}s ago`;
+    }
+    meta.appendChild(el('span', { class: 'bid-time', textContent: `bid: ${timeAgo}` }));
+  }
   body.appendChild(meta);
   body.appendChild(
     el('div', { class: 'item-bid', textContent: item.priceUsd != null ? usd.format(item.priceUsd) : '—' }),
@@ -245,6 +259,58 @@ function renderItems(snapshot, bidDiff) {
   }
 }
 
+function renderMostRecentBid(snapshot) {
+  const container = document.getElementById('most-recent-bid');
+  if (!container) return;
+  container.replaceChildren();
+
+  if (!snapshot?.lastBid) {
+    container.appendChild(
+      el('div', { class: 'most-recent-bid-empty', textContent: 'No bids yet.' }),
+    );
+    return;
+  }
+
+  const bid = snapshot.lastBid;
+  const bidDate = new Date(bid.bidTime);
+  const now = new Date();
+  const diffMs = now.getTime() - bidDate.getTime();
+  const diffMin = Math.floor(diffMs / 60_000);
+  const diffSec = Math.floor((diffMs % 60_000) / 1000);
+  let timeAgo = '';
+  if (diffMin > 0) {
+    timeAgo = `${diffMin}m ${diffSec}s ago`;
+  } else {
+    timeAgo = `${diffSec}s ago`;
+  }
+
+  const content = el('div', { class: 'most-recent-bid-content' });
+
+  const info = el('div', { class: 'most-recent-bid-info' });
+  info.appendChild(el('div', { class: 'most-recent-bid-label', textContent: 'Most recent bid' }));
+  info.appendChild(el('div', { class: 'most-recent-bid-amount', textContent: usd.format(bid.bidAmount) }));
+  info.appendChild(el('div', { class: 'most-recent-bid-time', textContent: timeAgo }));
+  content.appendChild(info);
+
+  const link = el('a', {
+    class: 'most-recent-bid-link',
+    href: '#',
+    textContent: 'Go to item',
+  });
+  link.addEventListener('click', (e) => {
+    e.preventDefault();
+    const card = document.querySelector(`[data-item-id="${bid.itemId}"]`);
+    if (card) {
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      card.classList.add('highlight');
+      setTimeout(() => card.classList.remove('highlight'), 2000);
+    }
+  });
+  content.appendChild(link);
+
+  container.appendChild(content);
+}
+
 function renderError(message) {
   const root = document.getElementById('items');
   if (!root) return;
@@ -281,6 +347,7 @@ async function refresh() {
     renderLastUpdated(snapshot);
     renderPriceSource(snapshot);
     renderTotals(snapshot);
+    renderMostRecentBid(snapshot);
     renderItems(snapshot, prevBidCounts);
     lastSnapshot = snapshot;
     prevBidCounts = new Map(

@@ -183,6 +183,68 @@ main {
   margin-top: 2px;
 }
 
+.most-recent-bid {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  box-shadow: var(--shadow);
+  margin-bottom: 24px;
+  font-size: 13px;
+}
+
+.most-recent-bid-empty {
+  color: var(--fg-muted);
+}
+
+.most-recent-bid-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.most-recent-bid-info {
+  flex: 1;
+}
+
+.most-recent-bid-label {
+  color: var(--fg-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  display: block;
+  margin-bottom: 2px;
+}
+
+.most-recent-bid-amount {
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+.most-recent-bid-time {
+  color: var(--fg-muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.most-recent-bid-link {
+  color: var(--accent);
+  text-decoration: none;
+  padding: 6px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.most-recent-bid-link:hover {
+  background: var(--accent-soft);
+}
+
 .items {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -412,6 +474,16 @@ footer .disclaimer {
 /* FLIP move transition */
 .item.is-moving {
   transition: transform 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* Highlight on click */
+@keyframes highlight-pulse {
+  0%, 100% { box-shadow: var(--shadow); }
+  50% { box-shadow: 0 0 0 3px rgba(92, 219, 149, 0.4), var(--shadow); }
+}
+
+.item.highlight {
+  animation: highlight-pulse 2s ease-in-out;
 }
 
 .hero {
