@@ -106,3 +106,64 @@ export async function readBidsForItem(pool: Pool, itemId: string): Promise<BidRo
     bidAmountUsd: Number(row.bid_amount_usd),
   }));
 }
+
+export interface OhlcCandle {
+  periodStart: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  source: string;
+}
+
+export async function storeOhlcData(
+  pool: Pool,
+  ticker: string,
+  periodStart: Date,
+  ohlc: { open?: number; high?: number; low?: number; close?: number },
+  source: string,
+): Promise<void> {
+  const { open, high, low, close } = ohlc;
+  await pool.query(
+    `INSERT INTO ohlc_data (ticker, period_start, open, high, low, close, source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (ticker, period_start) DO UPDATE SET
+       open = COALESCE(EXCLUDED.open, ohlc_data.open),
+       high = GREATEST(COALESCE(EXCLUDED.high, 0), COALESCE(ohlc_data.high, 0)),
+       low = LEAST(COALESCE(EXCLUDED.low, 999999), COALESCE(ohlc_data.low, 999999)),
+       close = COALESCE(EXCLUDED.close, ohlc_data.close),
+       source = EXCLUDED.source,
+       fetched_at = NOW()`,
+    [ticker, periodStart, open ?? null, high ?? null, low ?? null, close ?? null, source],
+  );
+}
+
+export async function readOhlcData(
+  pool: Pool,
+  ticker: string,
+  startTime: Date,
+  endTime: Date,
+): Promise<OhlcCandle[]> {
+  const res = await pool.query<{
+    period_start: Date;
+    open: string;
+    high: string;
+    low: string;
+    close: string;
+    source: string;
+  }>(
+    `SELECT period_start, open, high, low, close, source
+     FROM ohlc_data
+     WHERE ticker = $1 AND period_start >= $2 AND period_start <= $3
+     ORDER BY period_start ASC`,
+    [ticker, startTime, endTime],
+  );
+  return res.rows.map((row) => ({
+    periodStart: row.period_start.toISOString(),
+    open: Number(row.open),
+    high: Number(row.high),
+    low: Number(row.low),
+    close: Number(row.close),
+    source: row.source,
+  }));
+}

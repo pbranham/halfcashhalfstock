@@ -19,6 +19,7 @@ import { runMigrations } from './db/migrate.js';
 import {
   persistSnapshot,
   readBidsForItem,
+  storeOhlcData,
   type SnapshotPersistInput,
 } from './db/persist.js';
 import { EbayAppTokenProvider } from './ebay/auth.js';
@@ -89,9 +90,20 @@ function buildDeps(config: Config, log: Logger, db: Pool | null): Deps {
   const priceProvider = buildPriceProvider(config, log);
 
   const fetchQuote = (symbol: string): Promise<PriceQuote> =>
-    priceCache.get(symbol, PRICE_TTL_MS, () =>
-      priceProvider.getQuote(symbol),
-    );
+    priceCache.get(symbol, PRICE_TTL_MS, async () => {
+      const quote = await priceProvider.getQuote(symbol);
+      if (db) {
+        const periodStart = new Date();
+        periodStart.setSeconds(0, 0);
+        await storeOhlcData(db, quote.symbol, periodStart, { close: quote.price }, quote.source).catch(
+          (err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            log.debug('ohlc storage failed', { symbol, error: message });
+          },
+        );
+      }
+      return quote;
+    });
 
   let fetchListings: () => Promise<Listing[]>;
   if (hasEbayCredentials(config)) {
@@ -185,6 +197,32 @@ export function createApp(deps: Deps): express.Express {
     try {
       const bids = await readBidsForItem(deps.db, itemId);
       res.status(200).set('Cache-Control', 'public, max-age=15').json({ itemId, bids });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get('/api/ohlc', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
+    if (!deps.db) {
+      res.status(503).json({ error: 'ohlc_unavailable', detail: 'database not configured' });
+      return;
+    }
+    const ticker = typeof req.query.ticker === 'string' ? req.query.ticker.trim().toUpperCase() : '';
+    const daysStr = typeof req.query.days === 'string' ? req.query.days.trim() : '7';
+    if (!ticker || !/^[A-Z]{1,10}$/.test(ticker)) {
+      res.status(400).json({ error: 'bad_request', detail: 'missing or invalid ticker' });
+      return;
+    }
+    const days = Math.max(1, Math.min(30, Number.parseInt(daysStr, 10) || 7));
+    try {
+      const now = new Date();
+      const startTime = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+      const { readOhlcData } = await import('./db/persist.js');
+      const candles = await readOhlcData(deps.db, ticker, startTime, now);
+      res
+        .status(200)
+        .set('Cache-Control', 'public, max-age=60')
+        .json({ ticker, days, candles, asOf: new Date().toISOString() });
     } catch (err) {
       next(err);
     }
