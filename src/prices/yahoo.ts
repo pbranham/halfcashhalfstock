@@ -11,6 +11,31 @@ interface YahooQuoteResponse {
   quoteResponse?: { result?: YahooQuoteEntry[]; error?: unknown };
 }
 
+interface YahooChartResult {
+  meta?: { symbol?: string; currency?: string };
+  timestamp?: number[];
+  indicators?: {
+    quote?: Array<{
+      open?: (number | null)[];
+      high?: (number | null)[];
+      low?: (number | null)[];
+      close?: (number | null)[];
+    }>;
+  };
+}
+
+interface YahooChartResponse {
+  chart?: { result?: YahooChartResult[]; error?: unknown };
+}
+
+export interface OhlcCandle {
+  periodStart: Date;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+}
+
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (compatible; halfcashhalfstock/0.1; +https://github.com/pbranham/halfcashhalfstock)';
 
@@ -24,11 +49,13 @@ export class YahooProvider implements PriceProvider {
   readonly name = 'yahoo';
   readonly #fetch: typeof fetch;
   readonly #baseUrl: string;
+  readonly #chartUrl: string;
   readonly #userAgent: string;
 
   constructor(options: YahooProviderOptions = {}) {
     this.#fetch = options.fetchImpl ?? fetch;
     this.#baseUrl = options.baseUrl ?? 'https://query1.finance.yahoo.com/v7/finance/quote';
+    this.#chartUrl = 'https://query1.finance.yahoo.com/v8/finance/chart';
     this.#userAgent = options.userAgent ?? DEFAULT_USER_AGENT;
   }
 
@@ -67,5 +94,61 @@ export class YahooProvider implements PriceProvider {
       asOf,
       source: this.name,
     };
+  }
+
+  async getHistoricalCandles(
+    symbol: string,
+    interval: string = '15m',
+    range: string = '14d',
+  ): Promise<OhlcCandle[]> {
+    const url = new URL(this.#chartUrl);
+    url.searchParams.set('symbol', symbol);
+    url.searchParams.set('interval', interval);
+    url.searchParams.set('range', range);
+
+    let res: Response;
+    try {
+      res = await this.#fetch(url, {
+        headers: { Accept: 'application/json', 'User-Agent': this.#userAgent },
+      });
+    } catch (err) {
+      throw new PriceProviderError(this.name, `network error: ${(err as Error).message}`, err);
+    }
+
+    if (!res.ok) {
+      throw new PriceProviderError(this.name, `http ${res.status}`);
+    }
+
+    const body = (await res.json()) as YahooChartResponse;
+    const result = body.chart?.result?.[0];
+    if (!result || !result.timestamp || !result.indicators?.quote?.[0]) {
+      throw new PriceProviderError(this.name, `invalid chart payload for ${symbol}`);
+    }
+
+    const timestamps = result.timestamp;
+    const quote = result.indicators.quote[0];
+    const candles: OhlcCandle[] = [];
+
+    for (let i = 0; i < timestamps.length; i++) {
+      const timestamp = timestamps[i];
+      if (!timestamp || typeof timestamp !== 'number') continue;
+
+      const open = quote.open?.[i] ?? null;
+      const high = quote.high?.[i] ?? null;
+      const low = quote.low?.[i] ?? null;
+      const close = quote.close?.[i] ?? null;
+
+      if (close === null) continue;
+
+      candles.push({
+        periodStart: new Date(timestamp * 1000),
+        open,
+        high,
+        low,
+        close,
+      });
+    }
+
+    return candles;
   }
 }

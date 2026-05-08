@@ -122,11 +122,12 @@ export async function storeOhlcData(
   periodStart: Date,
   ohlc: { open?: number; high?: number; low?: number; close?: number },
   source: string,
+  interval: string = '1m',
 ): Promise<void> {
   const { open, high, low, close } = ohlc;
   await pool.query(
-    `INSERT INTO ohlc_data (ticker, period_start, open, high, low, close, source)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO ohlc_data (ticker, period_start, open, high, low, close, source, interval)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT (ticker, period_start) DO UPDATE SET
        open = COALESCE(EXCLUDED.open, ohlc_data.open),
        high = GREATEST(COALESCE(EXCLUDED.high, 0), COALESCE(ohlc_data.high, 0)),
@@ -134,7 +135,16 @@ export async function storeOhlcData(
        close = COALESCE(EXCLUDED.close, ohlc_data.close),
        source = EXCLUDED.source,
        fetched_at = NOW()`,
-    [ticker, periodStart, open ?? null, high ?? null, low ?? null, close ?? null, source],
+    [
+      ticker,
+      periodStart,
+      open ?? null,
+      high ?? null,
+      low ?? null,
+      close ?? null,
+      source,
+      interval,
+    ],
   );
 }
 
@@ -166,4 +176,53 @@ export async function readOhlcData(
     close: Number(row.close),
     source: row.source,
   }));
+}
+
+export async function bulkInsertOhlcData(
+  pool: Pool,
+  ticker: string,
+  candles: Array<{ periodStart: Date; open: number | null; high: number | null; low: number | null; close: number | null }>,
+  source: string,
+  interval: string = '15m',
+): Promise<number> {
+  if (candles.length === 0) return 0;
+
+  const values: unknown[] = [];
+  const placeholders = candles
+    .map((candle, i) => {
+      const base = i * 8;
+      values.push(
+        ticker,
+        candle.periodStart,
+        candle.open,
+        candle.high,
+        candle.low,
+        candle.close,
+        source,
+        interval,
+      );
+      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8})`;
+    })
+    .join(', ');
+
+  const res = await pool.query(
+    `INSERT INTO ohlc_data (ticker, period_start, open, high, low, close, source, interval)
+     VALUES ${placeholders}
+     ON CONFLICT (ticker, period_start) DO NOTHING`,
+    values,
+  );
+  return res.rowCount ?? 0;
+}
+
+export async function purgeOldOhlcData(pool: Pool): Promise<number> {
+  const now = new Date();
+  const purgeAfter15m = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+  const purgeAfter1m = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
+
+  const result = await pool.query(
+    `DELETE FROM ohlc_data
+     WHERE (interval = '15m' AND period_start < $1) OR (interval = '1m' AND period_start < $2)`,
+    [purgeAfter15m, purgeAfter1m],
+  );
+  return result.rowCount ?? 0;
 }

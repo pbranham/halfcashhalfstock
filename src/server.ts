@@ -20,6 +20,8 @@ import {
   persistSnapshot,
   readBidsForItem,
   storeOhlcData,
+  bulkInsertOhlcData,
+  purgeOldOhlcData,
   type SnapshotPersistInput,
 } from './db/persist.js';
 import { EbayAppTokenProvider } from './ebay/auth.js';
@@ -95,12 +97,17 @@ function buildDeps(config: Config, log: Logger, db: Pool | null): Deps {
       if (db) {
         const periodStart = new Date();
         periodStart.setSeconds(0, 0);
-        await storeOhlcData(db, quote.symbol, periodStart, { close: quote.price }, quote.source).catch(
-          (err: unknown) => {
-            const message = err instanceof Error ? err.message : String(err);
-            log.debug('ohlc storage failed', { symbol, error: message });
-          },
-        );
+        await storeOhlcData(
+          db,
+          quote.symbol,
+          periodStart,
+          { close: quote.price },
+          quote.source,
+          '1m',
+        ).catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          log.debug('ohlc storage failed', { symbol, error: message });
+        });
       }
       return quote;
     });
@@ -243,6 +250,42 @@ export function createApp(deps: Deps): express.Express {
   return app;
 }
 
+async function backfillHistoricalData(db: Pool, log: Logger): Promise<void> {
+  try {
+    log.info('starting ohlc data backfill');
+    const yahoo = new YahooProvider();
+    const tickers = ['EBAY', 'GME'];
+
+    for (const ticker of tickers) {
+      try {
+        const candles = await yahoo.getHistoricalCandles(ticker, '15m', '14d');
+        if (candles.length === 0) {
+          log.warn('no historical candles fetched', { ticker });
+          continue;
+        }
+
+        const inserted = await bulkInsertOhlcData(
+          db,
+          ticker,
+          candles,
+          'yahoo',
+          '15m',
+        );
+        log.info('backfilled ohlc data', { ticker, candles: candles.length, inserted });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error('ohlc backfill failed for ticker', { ticker, error: message });
+      }
+    }
+
+    const purged = await purgeOldOhlcData(db);
+    log.info('purged old ohlc data', { count: purged });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error('ohlc backfill failed', { error: message });
+  }
+}
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const log = createLogger({
@@ -260,6 +303,7 @@ async function main(): Promise<void> {
     try {
       await runMigrations(db, log);
       log.info('database ready');
+      await backfillHistoricalData(db, log);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.error('database initialization failed; continuing without persistence', {
