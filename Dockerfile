@@ -20,6 +20,7 @@ COPY --chown=node:node --from=build /app/node_modules ./node_modules
 COPY --chown=node:node --from=build /app/dist ./dist
 COPY --chown=node:node package.json ./
 COPY --chown=node:node public ./public
+COPY --chown=node:node migrations ./migrations
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -q -O- http://127.0.0.1:3000/healthz || exit 1

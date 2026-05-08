@@ -5,6 +5,7 @@ import compression from 'compression';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
+import type { Pool } from 'pg';
 import {
   hasEbayCredentials,
   loadConfig,
@@ -13,6 +14,13 @@ import {
 } from './config.js';
 import { createLogger, type Logger } from './log.js';
 import { TtlCache } from './cache.js';
+import { createPool } from './db/pool.js';
+import { runMigrations } from './db/migrate.js';
+import {
+  persistSnapshot,
+  readBidsForItem,
+  type SnapshotPersistInput,
+} from './db/persist.js';
 import { EbayAppTokenProvider } from './ebay/auth.js';
 import { EbayClient } from './ebay/client.js';
 import { listSellerActiveItems, type Listing } from './ebay/seller.js';
@@ -35,19 +43,35 @@ interface Deps {
   log: Logger;
   fetchListings: () => Promise<Listing[]>;
   fetchQuote: (symbol: string) => Promise<PriceQuote>;
+  db?: Pool | null;
 }
 
 async function enrichWithBidHistory(deps: Deps, listings: Listing[]): Promise<Listing[]> {
   const userToken = resolveEbayTradingUserToken(deps.config);
-  if (!deps.config.EBAY_DEV_ID || !userToken) return listings;
   const devId = deps.config.EBAY_DEV_ID;
-  return Promise.all(
+  const tradingEnabled = Boolean(devId && userToken);
+
+  const enriched: { listing: Listing; bids: SnapshotPersistInput['bids'] }[] = await Promise.all(
     listings.map(async (listing) => {
-      if (!listing.isAuction || !listing.bidCount) return listing;
-      const history = await fetchBidHistory(listing.itemId, listing.bidCount, devId, userToken);
-      return { ...listing, lastBidTime: history?.lastBidTime ?? null };
+      if (!tradingEnabled || !listing.isAuction || !listing.bidCount) {
+        return { listing, bids: null };
+      }
+      const history = await fetchBidHistory(listing.itemId, listing.bidCount, devId!, userToken!);
+      return {
+        listing: { ...listing, lastBidTime: history?.lastBidTime ?? null },
+        bids: history?.bids ?? null,
+      };
     }),
   );
+
+  if (deps.db) {
+    persistSnapshot(deps.db, enriched).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      deps.log.error('db persistence failed', { error: message });
+    });
+  }
+
+  return enriched.map(({ listing }) => listing);
 }
 
 function buildPriceProvider(config: Config, log: Logger): PriceProvider {
@@ -59,7 +83,7 @@ function buildPriceProvider(config: Config, log: Logger): PriceProvider {
   return new ChainedPriceProvider(providers, { logger: log.child({ component: 'price' }) });
 }
 
-function buildDeps(config: Config, log: Logger): Deps {
+function buildDeps(config: Config, log: Logger, db: Pool | null): Deps {
   const priceCache = new TtlCache<PriceQuote>();
   const listingCache = new TtlCache<Listing[]>();
   const priceProvider = buildPriceProvider(config, log);
@@ -89,7 +113,7 @@ function buildDeps(config: Config, log: Logger): Deps {
     };
   }
 
-  return { config, log, fetchListings, fetchQuote };
+  return { config, log, fetchListings, fetchQuote, db };
 }
 
 export function createApp(deps: Deps): express.Express {
@@ -148,6 +172,24 @@ export function createApp(deps: Deps): express.Express {
     }
   });
 
+  app.get('/api/history', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
+    if (!deps.db) {
+      res.status(503).json({ error: 'history_unavailable', detail: 'database not configured' });
+      return;
+    }
+    const itemId = typeof req.query.itemId === 'string' ? req.query.itemId.trim() : '';
+    if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
+      res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
+      return;
+    }
+    try {
+      const bids = await readBidsForItem(deps.db, itemId);
+      res.status(200).set('Cache-Control', 'public, max-age=15').json({ itemId, bids });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.use(express.static(PUBLIC_DIR, { maxAge: '1h', extensions: ['html'] }));
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
@@ -174,7 +216,25 @@ async function main(): Promise<void> {
     log.warn('eBay credentials missing; /api/snapshot will return 503 until set');
   }
 
-  const deps = buildDeps(config, log);
+  let db: Pool | null = null;
+  if (config.DATABASE_URL) {
+    db = createPool(config.DATABASE_URL);
+    try {
+      await runMigrations(db, log);
+      log.info('database ready');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error('database initialization failed; continuing without persistence', {
+        error: message,
+      });
+      await db.end().catch(() => {});
+      db = null;
+    }
+  } else {
+    log.warn('DATABASE_URL not set; bid history will not be persisted');
+  }
+
+  const deps = buildDeps(config, log, db);
   const app = createApp(deps);
   const server = app.listen(config.PORT, () => {
     log.info('listening', { port: config.PORT, sellerId: config.EBAY_SELLER_ID });
@@ -182,7 +242,13 @@ async function main(): Promise<void> {
 
   const shutdown = (signal: string): void => {
     log.info('shutting down', { signal });
-    server.close(() => process.exit(0));
+    server.close(() => {
+      if (db) {
+        db.end().finally(() => process.exit(0));
+      } else {
+        process.exit(0);
+      }
+    });
     setTimeout(() => process.exit(1), 10_000).unref();
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));

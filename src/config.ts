@@ -13,6 +13,7 @@ const Schema = z.object({
   EBAY_MARKETPLACE_ID: z.string().trim().min(1).default('EBAY_US'),
   FINNHUB_API_KEY: z.string().trim().min(1).optional(),
   STOCK_SYMBOL: z.string().trim().min(1).default('EBAY'),
+  DATABASE_URL: z.string().trim().min(1).optional(),
   PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
