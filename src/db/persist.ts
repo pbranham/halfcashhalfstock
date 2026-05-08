@@ -208,7 +208,7 @@ export async function bulkInsertOhlcData(
   const res = await pool.query(
     `INSERT INTO ohlc_data (ticker, period_start, open, high, low, close, source, interval)
      VALUES ${placeholders}
-     ON CONFLICT (ticker, period_start) DO NOTHING`,
+     ON CONFLICT (ticker, period_start, interval) DO NOTHING`,
     values,
   );
   return res.rowCount ?? 0;
