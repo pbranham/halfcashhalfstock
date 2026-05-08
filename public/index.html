@@ -9,12 +9,13 @@
       content="Live monitor for Ryan Cohen's eBay auctions, expressed as half cash plus half $EBAY stock at the live market price."
     />
     <meta name="color-scheme" content="dark light" />
+    <script src="/theme-init.js"></script>
     <link rel="stylesheet" href="/style.css" />
     <link rel="icon" href="data:," />
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="/" aria-label="halfcashhalfstock home">
+      <button class="brand" type="button" aria-label="Toggle dark/light theme" title="Click to toggle dark/light theme">
         <svg
           class="brand-icon"
           viewBox="0 0 64 36"
@@ -46,7 +47,7 @@
           />
         </svg>
         <span class="brand-name">halfcashhalfstock</span>
-      </a>
+      </button>
       <div id="last-updated" class="last-updated" aria-live="polite"></div>
       <div id="ticker" class="ticker" aria-live="polite">
         <span class="ticker-symbol"></span>

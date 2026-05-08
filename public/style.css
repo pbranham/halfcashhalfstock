@@ -26,6 +26,33 @@
   }
 }
 
+/* Manual theme override via brand-icon click (highest precedence) */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0c0e14;
+  --bg-elev: #161922;
+  --bg-card: #1d2130;
+  --fg: #e9ecf1;
+  --fg-muted: #8b93a7;
+  --accent: #5cdb95;
+  --accent-soft: #5cdb9533;
+  --warn: #f5b14a;
+  --border: #262b3a;
+  --shadow: 0 1px 0 rgba(255, 255, 255, 0.04), 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f7f8fb;
+  --bg-elev: #ffffff;
+  --bg-card: #ffffff;
+  --fg: #111827;
+  --fg-muted: #5b6478;
+  --border: #e5e7ef;
+  --accent-soft: #5cdb951a;
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.02), 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -73,6 +100,12 @@ body {
   text-decoration: none;
   color: inherit;
   justify-self: start;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  cursor: pointer;
 }
 
 .brand-icon {

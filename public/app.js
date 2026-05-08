@@ -452,6 +452,25 @@ document.querySelectorAll('.sort-btn').forEach((btn) => {
   });
 });
 
+// Brand-icon click toggles theme. Precedence: localStorage > OS preference > dark default.
+const brand = document.querySelector('.brand');
+if (brand) {
+  brand.addEventListener('click', (e) => {
+    e.preventDefault();
+    const root = document.documentElement;
+    const explicit = root.getAttribute('data-theme');
+    const effective =
+      explicit ?? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    const next = effective === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try {
+      localStorage.setItem('theme', next);
+    } catch (_e) {
+      /* ignore */
+    }
+  });
+}
+
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     refresh();
