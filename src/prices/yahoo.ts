@@ -101,8 +101,8 @@ export class YahooProvider implements PriceProvider {
     interval: string = '15m',
     range: string = '14d',
   ): Promise<OhlcCandle[]> {
-    const url = new URL(this.#chartUrl);
-    url.searchParams.set('symbol', symbol);
+    const encodedSymbol = encodeURIComponent(symbol);
+    const url = new URL(`${this.#chartUrl}/${encodedSymbol}`);
     url.searchParams.set('interval', interval);
     url.searchParams.set('range', range);
 
@@ -116,7 +116,11 @@ export class YahooProvider implements PriceProvider {
     }
 
     if (!res.ok) {
-      throw new PriceProviderError(this.name, `http ${res.status}`);
+      const bodyText = await res.text().catch(() => '');
+      throw new PriceProviderError(
+        this.name,
+        `http ${res.status} for ${symbol} (${interval}/${range}): ${bodyText.slice(0, 200)}`,
+      );
     }
 
     const body = (await res.json()) as YahooChartResponse;
