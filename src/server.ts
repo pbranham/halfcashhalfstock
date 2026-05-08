@@ -13,7 +13,7 @@ import {
   type Config,
 } from './config.js';
 import { createLogger, type Logger } from './log.js';
-import { TtlCache } from './cache.js';
+import { TtlCache, DbBackedCache } from './cache.js';
 import { createPool } from './db/pool.js';
 import { runMigrations } from './db/migrate.js';
 import {
@@ -56,7 +56,7 @@ async function enrichWithBidHistory(deps: Deps, listings: Listing[]): Promise<Li
       if (!tradingEnabled || !listing.isAuction || !listing.bidCount) {
         return { listing, bids: null };
       }
-      const history = await fetchBidHistory(listing.itemId, listing.bidCount, devId!, userToken!);
+      const history = await fetchBidHistory(listing.itemId, listing.bidCount, devId!, userToken!, deps.db);
       return {
         listing: { ...listing, lastBidTime: history?.lastBidTime ?? null },
         bids: history?.bids ?? null,
@@ -84,8 +84,8 @@ function buildPriceProvider(config: Config, log: Logger): PriceProvider {
 }
 
 function buildDeps(config: Config, log: Logger, db: Pool | null): Deps {
-  const priceCache = new TtlCache<PriceQuote>();
-  const listingCache = new TtlCache<Listing[]>();
+  const priceCache = db ? new DbBackedCache<PriceQuote>(db) : new TtlCache<PriceQuote>();
+  const listingCache = db ? new DbBackedCache<Listing[]>(db) : new TtlCache<Listing[]>();
   const priceProvider = buildPriceProvider(config, log);
 
   const fetchQuote = (symbol: string): Promise<PriceQuote> =>
