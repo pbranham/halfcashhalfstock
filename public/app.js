@@ -12,6 +12,22 @@ const integer = new Intl.NumberFormat('en-US');
 let currentSort = 'ending-soonest';
 let lastSnapshot = null;
 let prevBidCounts = new Map(); // itemId → bidCount from last successful render
+
+// --- Ticker state ---
+function loadTickerFromStorage() {
+  const stored = localStorage.getItem('ticker');
+  if (stored && /^[A-Z]{1,10}$/.test(stored)) {
+    return stored;
+  }
+  return SUPPORTED_SYMBOLS[0];
+}
+function saveTickerToStorage(ticker) {
+  if (/^[A-Z]{1,10}$/.test(ticker)) {
+    localStorage.setItem('ticker', ticker);
+  }
+}
+
+activeSymbol = loadTickerFromStorage();
 function parseTimestamp(value) {
   if (!value) return null;
   const ms = Date.parse(value);
@@ -434,13 +450,44 @@ function stop() {
 // Stock toggle wiring
 document.querySelectorAll('.stock-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
-    if (btn.dataset.symbol === activeSymbol) return;
-    activeSymbol = btn.dataset.symbol;
+    const newSymbol = btn.dataset.symbol;
+    if (newSymbol === activeSymbol) return;
+    activeSymbol = newSymbol;
+    saveTickerToStorage(activeSymbol);
     document.querySelectorAll('.stock-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
+    const input = document.getElementById('ticker-input');
+    if (input) input.value = '';
     updateIntroSymbol(activeSymbol);
     refresh();
   });
 });
+
+// Custom ticker input wiring
+const tickerInput = document.getElementById('ticker-input');
+if (tickerInput) {
+  if (!SUPPORTED_SYMBOLS.includes(activeSymbol)) {
+    tickerInput.value = activeSymbol;
+  }
+  tickerInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const newSymbol = tickerInput.value.trim().toUpperCase();
+      if (newSymbol && /^[A-Z]{1,10}$/.test(newSymbol) && newSymbol !== activeSymbol) {
+        activeSymbol = newSymbol;
+        saveTickerToStorage(activeSymbol);
+        document.querySelectorAll('.stock-btn').forEach((b) => b.classList.toggle('is-active', false));
+        updateIntroSymbol(activeSymbol);
+        refresh();
+      }
+    }
+  });
+  tickerInput.addEventListener('blur', () => {
+    if (!SUPPORTED_SYMBOLS.includes(activeSymbol)) {
+      tickerInput.value = activeSymbol;
+    } else {
+      tickerInput.value = '';
+    }
+  });
+}
 
 // Sort button wiring
 document.querySelectorAll('.sort-btn').forEach((btn) => {

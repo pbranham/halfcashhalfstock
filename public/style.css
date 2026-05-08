@@ -503,6 +503,35 @@ footer .disclaimer {
   background: var(--accent-soft);
 }
 
+.ticker-input {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 4px 12px;
+  transition: border-color 0.15s, color 0.15s;
+  width: 110px;
+  max-width: 100%;
+}
+
+.ticker-input::placeholder {
+  color: var(--fg-muted);
+  opacity: 0.6;
+}
+
+.ticker-input:hover {
+  border-color: var(--fg-muted);
+  color: var(--fg);
+}
+
+.ticker-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
 .sort-bar {
   display: flex;
   flex-wrap: wrap;
