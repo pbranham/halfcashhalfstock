@@ -22,6 +22,7 @@ import {
   storeOhlcData,
   bulkInsertOhlcData,
   purgeOldOhlcData,
+  readOhlcStats,
   type SnapshotPersistInput,
 } from './db/persist.js';
 import { EbayAppTokenProvider } from './ebay/auth.js';
@@ -37,6 +38,9 @@ import { composeSnapshot, type Snapshot } from './snapshot.js';
 const LISTINGS_TTL_MS = 30_000;
 const PRICE_TTL_MS = 30_000;
 const SNAPSHOT_TTL_MS = 15_000;
+
+let lastBackfillAt: Date | null = null;
+let backfillStatus: 'pending' | 'success' | 'partial' | 'failed' = 'pending';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
@@ -235,6 +239,26 @@ export function createApp(deps: Deps): express.Express {
     }
   });
 
+  if (deps.config.ENABLE_DEBUG_ENDPOINTS) {
+    app.get('/api/debug/ohlc-stats', apiLimiter, async (_req: Request, res: Response, next: NextFunction) => {
+      if (!deps.db) {
+        res.status(503).json({ error: 'debug_unavailable', detail: 'database not configured' });
+        return;
+      }
+      try {
+        const stats = await readOhlcStats(deps.db);
+        res.status(200).set('Cache-Control', 'no-store').json({
+          stats,
+          lastBackfill: lastBackfillAt ? lastBackfillAt.toISOString() : null,
+          backfillStatus,
+          asOf: new Date().toISOString(),
+        });
+      } catch (err) {
+        next(err);
+      }
+    });
+  }
+
   app.use(express.static(PUBLIC_DIR, { maxAge: '1h', extensions: ['html'] }));
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
@@ -251,6 +275,8 @@ export function createApp(deps: Deps): express.Express {
 }
 
 async function backfillHistoricalData(db: Pool, log: Logger): Promise<void> {
+  let failures = 0;
+  let successes = 0;
   try {
     log.info('starting ohlc data backfill');
     const yahoo = new YahooProvider();
@@ -261,6 +287,7 @@ async function backfillHistoricalData(db: Pool, log: Logger): Promise<void> {
         const candles = await yahoo.getHistoricalCandles(ticker, '15m', '14d');
         if (candles.length === 0) {
           log.warn('no historical candles fetched', { ticker });
+          failures += 1;
           continue;
         }
 
@@ -272,17 +299,24 @@ async function backfillHistoricalData(db: Pool, log: Logger): Promise<void> {
           '15m',
         );
         log.info('backfilled ohlc data', { ticker, candles: candles.length, inserted });
+        successes += 1;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log.error('ohlc backfill failed for ticker', { ticker, error: message });
+        failures += 1;
       }
     }
 
     const purged = await purgeOldOhlcData(db);
     log.info('purged old ohlc data', { count: purged });
+
+    lastBackfillAt = new Date();
+    backfillStatus = failures === 0 ? 'success' : successes === 0 ? 'failed' : 'partial';
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.error('ohlc backfill failed', { error: message });
+    lastBackfillAt = new Date();
+    backfillStatus = 'failed';
   }
 }
 

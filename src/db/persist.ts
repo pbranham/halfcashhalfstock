@@ -214,6 +214,47 @@ export async function bulkInsertOhlcData(
   return res.rowCount ?? 0;
 }
 
+export interface OhlcIntervalStats {
+  count: number;
+  oldest: string | null;
+  newest: string | null;
+}
+
+export interface OhlcTickerStats {
+  [interval: string]: OhlcIntervalStats;
+}
+
+export interface OhlcStats {
+  [ticker: string]: OhlcTickerStats;
+}
+
+export async function readOhlcStats(pool: Pool): Promise<OhlcStats> {
+  const res = await pool.query<{
+    ticker: string;
+    interval: string;
+    count: string;
+    oldest: Date | null;
+    newest: Date | null;
+  }>(
+    `SELECT ticker, interval, COUNT(*) AS count,
+            MIN(period_start) AS oldest,
+            MAX(period_start) AS newest
+     FROM ohlc_data
+     GROUP BY ticker, interval
+     ORDER BY ticker, interval`,
+  );
+  const stats: OhlcStats = {};
+  for (const row of res.rows) {
+    if (!stats[row.ticker]) stats[row.ticker] = {};
+    stats[row.ticker]![row.interval] = {
+      count: Number(row.count),
+      oldest: row.oldest ? row.oldest.toISOString() : null,
+      newest: row.newest ? row.newest.toISOString() : null,
+    };
+  }
+  return stats;
+}
+
 export async function purgeOldOhlcData(pool: Pool): Promise<number> {
   const now = new Date();
   const purgeAfter15m = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
