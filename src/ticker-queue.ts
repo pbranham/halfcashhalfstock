@@ -11,8 +11,8 @@ export type ValidationResult =
 export interface TickerQueueOptions {
   db: Pool;
   yahoo: YahooProvider;
+  priceProvider: PriceProvider;
   log: Logger;
-  fallbackProvider?: PriceProvider;
   alwaysActiveTickers?: string[];
   passiveIntervalMs?: number;
   activeIntervalMs?: number;
@@ -28,7 +28,7 @@ interface PendingResolver {
 export class TickerQueue {
   readonly #db: Pool;
   readonly #yahoo: YahooProvider;
-  readonly #fallbackProvider: PriceProvider | null;
+  readonly #priceProvider: PriceProvider;
   readonly #log: Logger;
   readonly #alwaysActive: Set<string>;
   readonly #passiveIntervalMs: number;
@@ -50,7 +50,7 @@ export class TickerQueue {
   constructor(options: TickerQueueOptions) {
     this.#db = options.db;
     this.#yahoo = options.yahoo;
-    this.#fallbackProvider = options.fallbackProvider ?? null;
+    this.#priceProvider = options.priceProvider;
     this.#log = options.log.child({ component: 'ticker-queue' });
     this.#alwaysActive = new Set(options.alwaysActiveTickers ?? ['EBAY', 'GME']);
     this.#passiveIntervalMs = options.passiveIntervalMs ?? 30_000;
@@ -202,38 +202,20 @@ export class TickerQueue {
     }
   }
 
-  private async fetchQuotesWithFallback(
-    tickers: string[],
-  ): Promise<Map<string, PriceQuote>> {
+  private async fetchQuotes(tickers: string[]): Promise<Map<string, PriceQuote>> {
     const quotes = new Map<string, PriceQuote>();
-
-    try {
-      const yahoo = await this.#yahoo.getQuotes(tickers);
-      for (const [k, v] of yahoo) quotes.set(k, v);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.#log.warn('yahoo batch fetch failed; will try fallback', {
-        error: message,
-        tickers,
-      });
+    const results = await Promise.all(
+      tickers.map(async (t) => {
+        try {
+          return [t, await this.#priceProvider.getQuote(t)] as const;
+        } catch {
+          return [t, null] as const;
+        }
+      }),
+    );
+    for (const [t, quote] of results) {
+      if (quote && quote.price > 0) quotes.set(t, quote);
     }
-
-    const missing = tickers.filter((t) => !quotes.has(t));
-    if (missing.length > 0 && this.#fallbackProvider) {
-      const results = await Promise.all(
-        missing.map(async (t) => {
-          try {
-            return [t, await this.#fallbackProvider!.getQuote(t)] as const;
-          } catch {
-            return [t, null] as const;
-          }
-        }),
-      );
-      for (const [t, quote] of results) {
-        if (quote && quote.price > 0) quotes.set(t, quote);
-      }
-    }
-
     return quotes;
   }
 
@@ -243,7 +225,7 @@ export class TickerQueue {
     const tickers = Array.from(this.#activeQueue);
     this.#activeQueue.clear();
 
-    const quotes = await this.fetchQuotesWithFallback(tickers);
+    const quotes = await this.fetchQuotes(tickers);
 
     for (const ticker of tickers) {
       const quote = quotes.get(ticker);
@@ -251,7 +233,6 @@ export class TickerQueue {
         await this.persistLiveQuote(ticker, quote);
         this.#knownTickers.add(ticker);
         this.resolveAll(ticker, { valid: true, symbol: ticker, price: quote.price });
-        void this.triggerBackfill(ticker);
       } else {
         this.#negativeCache.set(ticker, Date.now() + this.#negativeCacheTtlMs);
         this.resolveAll(ticker, { valid: false, symbol: ticker, error: 'invalid_ticker' });
@@ -265,7 +246,7 @@ export class TickerQueue {
     const tickers = Array.from(this.#knownTickers);
     if (tickers.length === 0) return;
 
-    const quotes = await this.fetchQuotesWithFallback(tickers);
+    const quotes = await this.fetchQuotes(tickers);
 
     let stored = 0;
     for (const [ticker, quote] of quotes) {

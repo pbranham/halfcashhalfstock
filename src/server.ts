@@ -323,7 +323,7 @@ async function main(): Promise<void> {
     tickerQueue = new TickerQueue({
       db,
       yahoo: new YahooProvider(),
-      fallbackProvider: buildPriceProvider(config, log),
+      priceProvider: buildPriceProvider(config, log),
       log,
     });
     await tickerQueue.start();
