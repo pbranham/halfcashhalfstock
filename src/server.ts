@@ -20,8 +20,6 @@ import {
   persistSnapshot,
   readBidsForItem,
   storeOhlcData,
-  bulkInsertOhlcData,
-  purgeOldOhlcData,
   readOhlcStats,
   type SnapshotPersistInput,
 } from './db/persist.js';
@@ -39,9 +37,6 @@ import { TickerQueue } from './ticker-queue.js';
 const LISTINGS_TTL_MS = 30_000;
 const PRICE_TTL_MS = 30_000;
 const SNAPSHOT_TTL_MS = 15_000;
-
-let lastBackfillAt: Date | null = null;
-let backfillStatus: 'pending' | 'success' | 'partial' | 'failed' = 'pending';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
@@ -267,10 +262,10 @@ export function createApp(deps: Deps): express.Express {
       }
       try {
         const stats = await readOhlcStats(deps.db);
+        const queueStatus = deps.tickerQueue?.getStatus() ?? null;
         res.status(200).set('Cache-Control', 'no-store').json({
           stats,
-          lastBackfill: lastBackfillAt ? lastBackfillAt.toISOString() : null,
-          backfillStatus,
+          queue: queueStatus,
           asOf: new Date().toISOString(),
         });
       } catch (err) {
@@ -294,52 +289,6 @@ export function createApp(deps: Deps): express.Express {
   return app;
 }
 
-async function backfillHistoricalData(db: Pool, log: Logger): Promise<void> {
-  let failures = 0;
-  let successes = 0;
-  try {
-    log.info('starting ohlc data backfill');
-    const yahoo = new YahooProvider();
-    const tickers = ['EBAY', 'GME'];
-
-    for (const ticker of tickers) {
-      try {
-        const candles = await yahoo.getHistoricalCandles(ticker, '15m', '14d');
-        if (candles.length === 0) {
-          log.warn('no historical candles fetched', { ticker });
-          failures += 1;
-          continue;
-        }
-
-        const inserted = await bulkInsertOhlcData(
-          db,
-          ticker,
-          candles,
-          'yahoo',
-          '15m',
-        );
-        log.info('backfilled ohlc data', { ticker, candles: candles.length, inserted });
-        successes += 1;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log.error('ohlc backfill failed for ticker', { ticker, error: message });
-        failures += 1;
-      }
-    }
-
-    const purged = await purgeOldOhlcData(db);
-    log.info('purged old ohlc data', { count: purged });
-
-    lastBackfillAt = new Date();
-    backfillStatus = failures === 0 ? 'success' : successes === 0 ? 'failed' : 'partial';
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    log.error('ohlc backfill failed', { error: message });
-    lastBackfillAt = new Date();
-    backfillStatus = 'failed';
-  }
-}
-
 async function main(): Promise<void> {
   const config = loadConfig();
   const log = createLogger({
@@ -357,7 +306,6 @@ async function main(): Promise<void> {
     try {
       await runMigrations(db, log);
       log.info('database ready');
-      await backfillHistoricalData(db, log);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.error('database initialization failed; continuing without persistence', {

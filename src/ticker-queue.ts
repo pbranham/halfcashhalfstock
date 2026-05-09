@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import type { Logger } from './log.js';
 import type { YahooProvider } from './prices/yahoo.js';
-import { storeOhlcData, bulkInsertOhlcData } from './db/persist.js';
+import { storeOhlcData, bulkInsertOhlcData, purgeOldOhlcData } from './db/persist.js';
 
 export type ValidationResult =
   | { valid: true; symbol: string; price: number }
@@ -41,6 +41,8 @@ export class TickerQueue {
   #passiveTimer: NodeJS.Timeout | null = null;
   #activeTimer: NodeJS.Timeout | null = null;
   #stopping = false;
+  #lastBackfillAt: Date | null = null;
+  #backfillStatus: 'pending' | 'success' | 'partial' | 'failed' = 'pending';
 
   constructor(options: TickerQueueOptions) {
     this.#db = options.db;
@@ -57,6 +59,9 @@ export class TickerQueue {
 
   async start(): Promise<void> {
     await this.refreshKnownTickers();
+
+    void this.initialBackfill();
+
     void this.runPassivePoll();
     this.#passiveTimer = setInterval(() => {
       void this.runPassivePoll();
@@ -68,6 +73,48 @@ export class TickerQueue {
       alwaysActive: Array.from(this.#alwaysActive),
       passiveMs: this.#passiveIntervalMs,
       activeMs: this.#activeIntervalMs,
+    });
+  }
+
+  getStatus(): { lastBackfillAt: string | null; backfillStatus: string; knownTickers: string[] } {
+    return {
+      lastBackfillAt: this.#lastBackfillAt ? this.#lastBackfillAt.toISOString() : null,
+      backfillStatus: this.#backfillStatus,
+      knownTickers: Array.from(this.#knownTickers).sort(),
+    };
+  }
+
+  private async initialBackfill(): Promise<void> {
+    let failures = 0;
+    let successes = 0;
+    let skipped = 0;
+    for (const ticker of this.#alwaysActive) {
+      const result = await this.triggerBackfill(ticker);
+      if (result === 'fresh') skipped += 1;
+      else if (result === 'ok') successes += 1;
+      else failures += 1;
+    }
+    try {
+      const purged = await purgeOldOhlcData(this.#db);
+      if (purged > 0) this.#log.info('purged old ohlc data', { count: purged });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.#log.warn('purge failed', { error: message });
+    }
+
+    this.#lastBackfillAt = new Date();
+    if (failures === 0) {
+      this.#backfillStatus = 'success';
+    } else if (successes === 0 && skipped === 0) {
+      this.#backfillStatus = 'failed';
+    } else {
+      this.#backfillStatus = 'partial';
+    }
+    this.#log.info('initial backfill complete', {
+      successes,
+      failures,
+      skipped,
+      status: this.#backfillStatus,
     });
   }
 
@@ -229,23 +276,25 @@ export class TickerQueue {
     );
   }
 
-  private async triggerBackfill(ticker: string): Promise<void> {
+  private async triggerBackfill(ticker: string): Promise<'fresh' | 'ok' | 'fail'> {
     try {
       const has15m = await this.#db.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM ohlc_data
          WHERE ticker = $1 AND interval = '15m' AND period_start > NOW() - INTERVAL '14 days'`,
         [ticker],
       );
-      if (Number(has15m.rows[0]?.count ?? 0) > 100) return;
+      if (Number(has15m.rows[0]?.count ?? 0) > 100) return 'fresh';
 
       const candles = await this.#yahoo.getHistoricalCandles(ticker, '15m', '14d');
-      if (candles.length === 0) return;
+      if (candles.length === 0) return 'fail';
 
       const inserted = await bulkInsertOhlcData(this.#db, ticker, candles, 'yahoo', '15m');
-      this.#log.info('backfilled custom ticker', { ticker, candles: candles.length, inserted });
+      this.#log.info('backfilled ticker', { ticker, candles: candles.length, inserted });
+      return 'ok';
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.#log.warn('custom ticker backfill failed', { ticker, error: message });
+      this.#log.warn('ticker backfill failed', { ticker, error: message });
+      return 'fail';
     }
   }
 }
