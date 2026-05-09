@@ -297,14 +297,27 @@ export function createApp(deps: Deps): express.Express {
       const hoursStr = typeof req.query.hours === 'string' ? req.query.hours.trim() : '24';
       const hours = Math.max(1, Math.min(2160, Number.parseInt(hoursStr, 10) || 24));
       const envFilter = typeof req.query.environment === 'string' ? req.query.environment.trim() : '';
-      const interval = hours > 168 ? 'day' : 'hour';
+      const requestedInterval = typeof req.query.interval === 'string' ? req.query.interval.trim() : '';
+      let interval: '5min' | 'hour' | 'day';
+      if (requestedInterval === '5min' || requestedInterval === 'hour' || requestedInterval === 'day') {
+        interval = requestedInterval;
+      } else if (hours <= 48) {
+        interval = '5min';
+      } else if (hours <= 720) {
+        interval = 'hour';
+      } else {
+        interval = 'day';
+      }
+      const sessionInterval = interval === '5min' ? 'hour' : interval;
 
       const since = new Date(Date.now() - hours * 60 * 60 * 1000);
       const params: unknown[] = [since, interval];
+      const sessionParams: unknown[] = [since, sessionInterval];
       let envClause = '';
       if (envFilter && /^[a-zA-Z0-9_-]{1,32}$/.test(envFilter)) {
         envClause = ' AND environment = $3';
         params.push(envFilter);
+        sessionParams.push(envFilter);
       }
 
       const hourly = await deps.db.query(
@@ -352,7 +365,7 @@ export function createApp(deps: Deps): express.Express {
         GROUP BY environment
         ORDER BY environment
         `,
-        params,
+        sessionParams,
       );
       const environments = await deps.db.query(
         `SELECT DISTINCT environment FROM request_stats ORDER BY environment`,

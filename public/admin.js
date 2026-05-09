@@ -204,7 +204,12 @@ function renderSessions(data) {
 }
 
 function renderHourlyChart(data) {
-  hourlyTitle.textContent = data.interval === 'day' ? 'Requests by day' : 'Requests by hour';
+  const intervalLabel = data.interval === 'day'
+    ? 'Requests by day'
+    : data.interval === '5min'
+    ? 'Requests by 5-minute bucket'
+    : 'Requests by hour';
+  hourlyTitle.textContent = intervalLabel;
   hourlyChart.innerHTML = '';
   if (!data.hourly || data.hourly.length === 0) {
     hourlyChart.innerHTML = '<p style="opacity: 0.6;">No requests in this window.</p>';

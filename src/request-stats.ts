@@ -27,9 +27,11 @@ interface SessionAggregate {
 }
 
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
+const FIVE_MIN_RETENTION_MS = 48 * 60 * 60 * 1000;
 const HOURLY_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const DAILY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const LIVE_WINDOW_MS = 5 * 60 * 1000;
+const FIVE_MIN_BUCKET_MS = 5 * 60 * 1000;
 
 const BOT_REGEX = /bot|crawler|spider|scrap|wget|curl|python-requests|fetch|httpie|axios|node-fetch|googlebot|bingbot|yandex|slurp|duckduckbot|baiduspider|facebookexternalhit|preview|monitor|uptime/i;
 const MOBILE_REGEX = /mobile|android|iphone|ipad|ipod|blackberry|webos|opera mini/i;
@@ -166,9 +168,9 @@ export class RequestStatsCollector {
     this.sessionCleanupInterval.unref();
 
     this.dailyRollupInterval = setInterval(() => {
-      this.rollupDaily().catch((err: unknown) => {
+      this.rollupAndPurge().catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
-        console.error('daily rollup failed', { error: message });
+        console.error('rollup failed', { error: message });
       });
     }, 60 * 60 * 1000);
     this.dailyRollupInterval.unref();
@@ -205,8 +207,8 @@ export class RequestStatsCollector {
     }>();
 
     for (const record of records) {
-      const hour = new Date(Math.floor(record.startTime / 3_600_000) * 3_600_000);
-      const key = hour.toISOString();
+      const bucket = new Date(Math.floor(record.startTime / FIVE_MIN_BUCKET_MS) * FIVE_MIN_BUCKET_MS);
+      const key = bucket.toISOString();
       if (!groupedStats.has(key)) {
         groupedStats.set(key, {
           endpoints: new Set(),
@@ -224,8 +226,8 @@ export class RequestStatsCollector {
 
     const concurrentMetrics = this.calculateConcurrentMetrics(records, samples);
 
-    for (const [hourStr, group] of groupedStats) {
-      const hour = new Date(hourStr);
+    for (const [bucketStr, group] of groupedStats) {
+      const bucket = new Date(bucketStr);
       for (const endpoint of group.endpoints) {
         for (const statusCode of group.statusCodes) {
           const endpointRecords = group.records.filter(
@@ -247,7 +249,7 @@ export class RequestStatsCollector {
               max_concurrent, avg_concurrent, min_concurrent,
               bot_count, mobile_count, desktop_count, other_count
             )
-            VALUES ($1, $2, $3, $4, 'hour', $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            VALUES ($1, $2, $3, $4, '5min', $5, $6, $7, $8, $9, $10, $11, $12, $13)
             ON CONFLICT (hour, endpoint, status_code, environment, interval) DO UPDATE SET
               request_count = request_stats.request_count + $5,
               unique_ips = request_stats.unique_ips + $6,
@@ -260,7 +262,7 @@ export class RequestStatsCollector {
               other_count = request_stats.other_count + $13
             `,
             [
-              hour, endpoint, statusCode, this.environment,
+              bucket, endpoint, statusCode, this.environment,
               endpointRecords.length, ips.size,
               metrics.max, metrics.avg, metrics.min,
               uaCounts.bot, uaCounts.mobile, uaCounts.desktop, uaCounts.other,
@@ -325,9 +327,41 @@ export class RequestStatsCollector {
     return metrics;
   }
 
-  async rollupDaily(): Promise<void> {
+  async rollupAndPurge(): Promise<void> {
     if (!this.db) return;
-    const cutoff = new Date(Date.now() - HOURLY_RETENTION_MS);
+    const fiveMinCutoff = new Date(Date.now() - FIVE_MIN_RETENTION_MS);
+    const hourlyCutoff = new Date(Date.now() - HOURLY_RETENTION_MS);
+
+    await this.db.query(
+      `
+      INSERT INTO request_stats (
+        hour, endpoint, status_code, environment, interval,
+        request_count, unique_ips,
+        max_concurrent, avg_concurrent, min_concurrent,
+        bot_count, mobile_count, desktop_count, other_count
+      )
+      SELECT
+        DATE_TRUNC('hour', hour) AS h,
+        endpoint, status_code, environment, 'hour',
+        SUM(request_count), SUM(unique_ips),
+        MAX(max_concurrent), AVG(avg_concurrent), MIN(min_concurrent),
+        SUM(bot_count), SUM(mobile_count), SUM(desktop_count), SUM(other_count)
+      FROM request_stats
+      WHERE interval = '5min' AND hour < $1
+      GROUP BY DATE_TRUNC('hour', hour), endpoint, status_code, environment
+      ON CONFLICT (hour, endpoint, status_code, environment, interval) DO UPDATE SET
+        request_count = EXCLUDED.request_count,
+        unique_ips = EXCLUDED.unique_ips,
+        max_concurrent = EXCLUDED.max_concurrent,
+        avg_concurrent = EXCLUDED.avg_concurrent,
+        min_concurrent = EXCLUDED.min_concurrent,
+        bot_count = EXCLUDED.bot_count,
+        mobile_count = EXCLUDED.mobile_count,
+        desktop_count = EXCLUDED.desktop_count,
+        other_count = EXCLUDED.other_count
+      `,
+      [fiveMinCutoff],
+    );
 
     await this.db.query(
       `
@@ -357,7 +391,7 @@ export class RequestStatsCollector {
         desktop_count = EXCLUDED.desktop_count,
         other_count = EXCLUDED.other_count
       `,
-      [cutoff],
+      [hourlyCutoff],
     );
 
     await this.db.query(
@@ -388,7 +422,7 @@ export class RequestStatsCollector {
         total_duration_seconds = EXCLUDED.total_duration_seconds,
         total_requests = EXCLUDED.total_requests
       `,
-      [cutoff],
+      [hourlyCutoff],
     );
 
     await this.purgeOldStats();
@@ -396,9 +430,14 @@ export class RequestStatsCollector {
 
   async purgeOldStats(): Promise<void> {
     if (!this.db) return;
+    const fiveMinCutoff = new Date(Date.now() - FIVE_MIN_RETENTION_MS);
     const hourlyCutoff = new Date(Date.now() - HOURLY_RETENTION_MS);
     const dailyCutoff = new Date(Date.now() - DAILY_RETENTION_MS);
 
+    await this.db.query(
+      `DELETE FROM request_stats WHERE interval = '5min' AND hour < $1`,
+      [fiveMinCutoff],
+    );
     await this.db.query(
       `DELETE FROM request_stats WHERE interval = 'hour' AND hour < $1`,
       [hourlyCutoff],
