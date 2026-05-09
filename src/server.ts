@@ -137,6 +137,7 @@ export function createApp(deps: Deps): express.Express {
           'style-src': ["'self'"],
           'img-src': ["'self'", 'https://i.ebayimg.com', 'https://*.ebayimg.com', 'data:'],
           'connect-src': ["'self'"],
+          'manifest-src': ["'self'"],
           'object-src': ["'none'"],
           'base-uri': ["'self'"],
           'frame-ancestors': ["'none'"],

@@ -1,0 +1,19 @@
+{
+  "name": "halfcashhalfstock",
+  "short_name": "hchs",
+  "description": "Live monitor for Ryan Cohen's eBay auctions, expressed as half cash plus half stock at the live market price.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1a3826",
+  "theme_color": "#2d5b3e",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any"
+    }
+  ]
+}

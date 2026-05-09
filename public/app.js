@@ -489,6 +489,14 @@ if (tickerInput) {
   if (!SUPPORTED_SYMBOLS.includes(activeSymbol)) {
     tickerInput.value = activeSymbol;
   }
+  tickerInput.addEventListener('input', () => {
+    const cursor = tickerInput.selectionStart;
+    const upper = tickerInput.value.toUpperCase();
+    if (upper !== tickerInput.value) {
+      tickerInput.value = upper;
+      if (cursor !== null) tickerInput.setSelectionRange(cursor, cursor);
+    }
+  });
   tickerInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       const newSymbol = tickerInput.value.trim().toUpperCase();
