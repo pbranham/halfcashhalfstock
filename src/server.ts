@@ -270,49 +270,80 @@ export function createApp(deps: Deps): express.Express {
       }
     });
 
-    app.get('/api/debug/request-stats', apiLimiter, async (_req: Request, res: Response, next: NextFunction) => {
-      if (!deps.db) {
-        res.status(503).json({ error: 'debug_unavailable', detail: 'database not configured' });
-        return;
-      }
-      try {
-        const last24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        const stats = await deps.db.query(
-          `
-          SELECT hour, endpoint, status_code, request_count, unique_ips,
-                 max_concurrent, avg_concurrent, min_concurrent
-          FROM request_stats
-          WHERE hour >= $1
-          ORDER BY hour DESC, endpoint, status_code
-          `,
-          [last24h],
-        );
-        const summary = await deps.db.query(
-          `
-          SELECT SUM(request_count)::INTEGER as total_requests,
-                 SUM(unique_ips)::INTEGER as approx_unique_ips,
-                 MAX(max_concurrent)::INTEGER as peak_concurrent,
-                 AVG(avg_concurrent)::NUMERIC(10,2) as avg_concurrent
-          FROM request_stats
-          WHERE hour >= $1
-          `,
-          [last24h],
-        );
-        res.status(200).set('Cache-Control', 'no-store').json({
-          summary: summary.rows[0] ?? {
-            total_requests: 0,
-            approx_unique_ips: 0,
-            peak_concurrent: 0,
-            avg_concurrent: 0,
-          },
-          hourly: stats.rows,
-          asOf: new Date().toISOString(),
-        });
-      } catch (err) {
-        next(err);
-      }
-    });
   }
+
+  const requireAdminToken = (req: Request, res: Response, next: NextFunction): void => {
+    if (!deps.config.ADMIN_TOKEN) {
+      res.status(503).json({ error: 'admin_unavailable', detail: 'ADMIN_TOKEN not configured' });
+      return;
+    }
+    const headerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+    const queryToken = typeof req.query.token === 'string' ? req.query.token.trim() : '';
+    const provided = headerToken || queryToken;
+    if (!provided || provided !== deps.config.ADMIN_TOKEN) {
+      res.status(401).json({ error: 'unauthorized' });
+      return;
+    }
+    next();
+  };
+
+  app.get('/api/admin/stats', apiLimiter, requireAdminToken, async (req: Request, res: Response, next: NextFunction) => {
+    if (!deps.db) {
+      res.status(503).json({ error: 'stats_unavailable', detail: 'database not configured' });
+      return;
+    }
+    try {
+      const hoursStr = typeof req.query.hours === 'string' ? req.query.hours.trim() : '24';
+      const hours = Math.max(1, Math.min(168, Number.parseInt(hoursStr, 10) || 24));
+      const envFilter = typeof req.query.environment === 'string' ? req.query.environment.trim() : '';
+
+      const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+      const params: unknown[] = [since];
+      let envClause = '';
+      if (envFilter && /^[a-zA-Z0-9_-]{1,32}$/.test(envFilter)) {
+        envClause = ' AND environment = $2';
+        params.push(envFilter);
+      }
+
+      const hourly = await deps.db.query(
+        `
+        SELECT hour, endpoint, status_code, environment, request_count, unique_ips,
+               max_concurrent, avg_concurrent, min_concurrent
+        FROM request_stats
+        WHERE hour >= $1${envClause}
+        ORDER BY hour DESC, environment, endpoint, status_code
+        `,
+        params,
+      );
+      const summary = await deps.db.query(
+        `
+        SELECT environment,
+               SUM(request_count)::INTEGER AS total_requests,
+               SUM(unique_ips)::INTEGER AS approx_unique_ips,
+               MAX(max_concurrent)::INTEGER AS peak_concurrent,
+               AVG(avg_concurrent)::NUMERIC(10,2) AS avg_concurrent
+        FROM request_stats
+        WHERE hour >= $1${envClause}
+        GROUP BY environment
+        ORDER BY environment
+        `,
+        params,
+      );
+      const environments = await deps.db.query(
+        `SELECT DISTINCT environment FROM request_stats ORDER BY environment`,
+      );
+      res.status(200).set('Cache-Control', 'no-store').json({
+        summary: summary.rows,
+        hourly: hourly.rows,
+        environments: environments.rows.map((r: { environment: string }) => r.environment),
+        currentEnvironment: deps.config.APP_ENVIRONMENT ?? deps.config.NODE_ENV,
+        windowHours: hours,
+        asOf: new Date().toISOString(),
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
 
   app.use(express.static(PUBLIC_DIR, { maxAge: '1h', extensions: ['html'] }));
 
@@ -371,7 +402,8 @@ async function main(): Promise<void> {
 
   let requestStats: RequestStatsCollector | null = null;
   if (db) {
-    requestStats = new RequestStatsCollector(db);
+    const environment = config.APP_ENVIRONMENT ?? config.NODE_ENV;
+    requestStats = new RequestStatsCollector(db, environment);
     requestStats.start();
     requestStats.purgeOldStats().catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);

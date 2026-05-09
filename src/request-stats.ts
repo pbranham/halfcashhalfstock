@@ -15,9 +15,11 @@ export class RequestStatsCollector {
   private sampleInterval: NodeJS.Timeout | null = null;
   private flushInterval: NodeJS.Timeout | null = null;
   private db: Pool | null;
+  private environment: string;
 
-  constructor(db: Pool | null) {
+  constructor(db: Pool | null, environment: string = 'production') {
     this.db = db;
+    this.environment = environment;
   }
 
   recordStart(): number {
@@ -105,16 +107,16 @@ export class RequestStatsCollector {
 
           await this.db!.query(
             `
-            INSERT INTO request_stats (hour, endpoint, status_code, request_count, unique_ips, max_concurrent, avg_concurrent, min_concurrent)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (hour, endpoint, status_code) DO UPDATE SET
-              request_count = request_stats.request_count + $4,
-              unique_ips = request_stats.unique_ips + $5,
-              max_concurrent = GREATEST(request_stats.max_concurrent, $6),
-              avg_concurrent = (request_stats.avg_concurrent + $7) / 2,
-              min_concurrent = LEAST(request_stats.min_concurrent, $8)
+            INSERT INTO request_stats (hour, endpoint, status_code, environment, request_count, unique_ips, max_concurrent, avg_concurrent, min_concurrent)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (hour, endpoint, status_code, environment) DO UPDATE SET
+              request_count = request_stats.request_count + $5,
+              unique_ips = request_stats.unique_ips + $6,
+              max_concurrent = GREATEST(request_stats.max_concurrent, $7),
+              avg_concurrent = (request_stats.avg_concurrent + $8) / 2,
+              min_concurrent = LEAST(request_stats.min_concurrent, $9)
             `,
-            [hour, endpoint, statusCode, endpointRecords.length, group.ips.size, metrics.max, metrics.avg, metrics.min],
+            [hour, endpoint, statusCode, this.environment, endpointRecords.length, group.ips.size, metrics.max, metrics.avg, metrics.min],
           );
         }
       }
