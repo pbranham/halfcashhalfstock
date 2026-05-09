@@ -32,6 +32,7 @@ import { ChainedPriceProvider } from './prices/provider.js';
 import type { PriceProvider, PriceQuote } from './prices/types.js';
 import { composeSnapshot, type Snapshot } from './snapshot.js';
 import { TickerQueue } from './ticker-queue.js';
+import { RequestStatsCollector } from './request-stats.js';
 
 const LISTINGS_TTL_MS = 30_000;
 const PRICE_TTL_MS = 30_000;
@@ -47,6 +48,7 @@ interface Deps {
   fetchQuote: (symbol: string) => Promise<PriceQuote>;
   db?: Pool | null;
   tickerQueue?: TickerQueue | null;
+  requestStats?: RequestStatsCollector | null;
 }
 
 async function enrichWithBidHistory(deps: Deps, listings: Listing[]): Promise<Listing[]> {
@@ -91,6 +93,7 @@ function buildDeps(
   log: Logger,
   db: Pool | null,
   tickerQueue: TickerQueue | null = null,
+  requestStats: RequestStatsCollector | null = null,
 ): Deps {
   const priceCache = db ? new DbBackedCache<PriceQuote>(db) : new TtlCache<PriceQuote>();
   const listingCache = db ? new DbBackedCache<Listing[]>(db) : new TtlCache<Listing[]>();
@@ -119,7 +122,7 @@ function buildDeps(
     };
   }
 
-  return { config, log, fetchListings, fetchQuote, db, tickerQueue };
+  return { config, log, fetchListings, fetchQuote, db, tickerQueue, requestStats };
 }
 
 export function createApp(deps: Deps): express.Express {
@@ -146,6 +149,18 @@ export function createApp(deps: Deps): express.Express {
     }),
   );
   app.use(compression());
+
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (deps.requestStats) {
+      const startTime = deps.requestStats.recordStart();
+      const originalSend = res.send;
+      res.send = function (data: unknown) {
+        deps.requestStats?.recordEnd(startTime, req.path, res.statusCode, req.ip ?? '');
+        return originalSend.call(this, data);
+      };
+    }
+    next();
+  });
 
   const apiLimiter = rateLimit({
     windowMs: 60_000,
@@ -254,6 +269,49 @@ export function createApp(deps: Deps): express.Express {
         next(err);
       }
     });
+
+    app.get('/api/debug/request-stats', apiLimiter, async (_req: Request, res: Response, next: NextFunction) => {
+      if (!deps.db) {
+        res.status(503).json({ error: 'debug_unavailable', detail: 'database not configured' });
+        return;
+      }
+      try {
+        const last24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const stats = await deps.db.query(
+          `
+          SELECT hour, endpoint, status_code, request_count, unique_ips,
+                 max_concurrent, avg_concurrent, min_concurrent
+          FROM request_stats
+          WHERE hour >= $1
+          ORDER BY hour DESC, endpoint, status_code
+          `,
+          [last24h],
+        );
+        const summary = await deps.db.query(
+          `
+          SELECT SUM(request_count)::INTEGER as total_requests,
+                 SUM(unique_ips)::INTEGER as approx_unique_ips,
+                 MAX(max_concurrent)::INTEGER as peak_concurrent,
+                 AVG(avg_concurrent)::NUMERIC(10,2) as avg_concurrent
+          FROM request_stats
+          WHERE hour >= $1
+          `,
+          [last24h],
+        );
+        res.status(200).set('Cache-Control', 'no-store').json({
+          summary: summary.rows[0] ?? {
+            total_requests: 0,
+            approx_unique_ips: 0,
+            peak_concurrent: 0,
+            avg_concurrent: 0,
+          },
+          hourly: stats.rows,
+          asOf: new Date().toISOString(),
+        });
+      } catch (err) {
+        next(err);
+      }
+    });
   }
 
   app.use(express.static(PUBLIC_DIR, { maxAge: '1h', extensions: ['html'] }));
@@ -311,7 +369,17 @@ async function main(): Promise<void> {
     await tickerQueue.start();
   }
 
-  const deps = buildDeps(config, log, db, tickerQueue);
+  let requestStats: RequestStatsCollector | null = null;
+  if (db) {
+    requestStats = new RequestStatsCollector(db);
+    requestStats.start();
+    requestStats.purgeOldStats().catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn('request stats purge failed', { error: message });
+    });
+  }
+
+  const deps = buildDeps(config, log, db, tickerQueue, requestStats);
   const app = createApp(deps);
   const server = app.listen(config.PORT, () => {
     log.info('listening', { port: config.PORT, sellerId: config.EBAY_SELLER_ID });
@@ -320,6 +388,7 @@ async function main(): Promise<void> {
   const shutdown = (signal: string): void => {
     log.info('shutting down', { signal });
     if (tickerQueue) tickerQueue.stop();
+    if (requestStats) requestStats.stop();
     server.close(() => {
       if (db) {
         db.end().finally(() => process.exit(0));
