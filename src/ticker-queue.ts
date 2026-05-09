@@ -1,6 +1,7 @@
 import type { Pool } from 'pg';
 import type { Logger } from './log.js';
 import type { YahooProvider } from './prices/yahoo.js';
+import type { PriceProvider, PriceQuote } from './prices/types.js';
 import { storeOhlcData, bulkInsertOhlcData, purgeOldOhlcData } from './db/persist.js';
 
 export type ValidationResult =
@@ -11,6 +12,7 @@ export interface TickerQueueOptions {
   db: Pool;
   yahoo: YahooProvider;
   log: Logger;
+  fallbackProvider?: PriceProvider;
   alwaysActiveTickers?: string[];
   passiveIntervalMs?: number;
   activeIntervalMs?: number;
@@ -26,6 +28,7 @@ interface PendingResolver {
 export class TickerQueue {
   readonly #db: Pool;
   readonly #yahoo: YahooProvider;
+  readonly #fallbackProvider: PriceProvider | null;
   readonly #log: Logger;
   readonly #alwaysActive: Set<string>;
   readonly #passiveIntervalMs: number;
@@ -47,6 +50,7 @@ export class TickerQueue {
   constructor(options: TickerQueueOptions) {
     this.#db = options.db;
     this.#yahoo = options.yahoo;
+    this.#fallbackProvider = options.fallbackProvider ?? null;
     this.#log = options.log.child({ component: 'ticker-queue' });
     this.#alwaysActive = new Set(options.alwaysActiveTickers ?? ['EBAY', 'GME']);
     this.#passiveIntervalMs = options.passiveIntervalMs ?? 30_000;
@@ -198,23 +202,48 @@ export class TickerQueue {
     }
   }
 
+  private async fetchQuotesWithFallback(
+    tickers: string[],
+  ): Promise<Map<string, PriceQuote>> {
+    const quotes = new Map<string, PriceQuote>();
+
+    try {
+      const yahoo = await this.#yahoo.getQuotes(tickers);
+      for (const [k, v] of yahoo) quotes.set(k, v);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.#log.warn('yahoo batch fetch failed; will try fallback', {
+        error: message,
+        tickers,
+      });
+    }
+
+    const missing = tickers.filter((t) => !quotes.has(t));
+    if (missing.length > 0 && this.#fallbackProvider) {
+      const results = await Promise.all(
+        missing.map(async (t) => {
+          try {
+            return [t, await this.#fallbackProvider!.getQuote(t)] as const;
+          } catch {
+            return [t, null] as const;
+          }
+        }),
+      );
+      for (const [t, quote] of results) {
+        if (quote && quote.price > 0) quotes.set(t, quote);
+      }
+    }
+
+    return quotes;
+  }
+
   private async runActiveDrain(): Promise<void> {
     if (this.#stopping || this.#activeQueue.size === 0) return;
 
     const tickers = Array.from(this.#activeQueue);
     this.#activeQueue.clear();
 
-    let quotes: Map<string, { symbol: string; price: number; source: string }>;
-    try {
-      quotes = await this.#yahoo.getQuotes(tickers);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.#log.warn('active drain fetch failed', { error: message, tickers });
-      for (const ticker of tickers) {
-        this.resolveAll(ticker, { valid: false, symbol: ticker, error: 'fetch_failed' });
-      }
-      return;
-    }
+    const quotes = await this.fetchQuotesWithFallback(tickers);
 
     for (const ticker of tickers) {
       const quote = quotes.get(ticker);
@@ -236,14 +265,7 @@ export class TickerQueue {
     const tickers = Array.from(this.#knownTickers);
     if (tickers.length === 0) return;
 
-    let quotes: Map<string, { symbol: string; price: number; source: string }>;
-    try {
-      quotes = await this.#yahoo.getQuotes(tickers);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.#log.warn('passive poll fetch failed', { error: message, count: tickers.length });
-      return;
-    }
+    const quotes = await this.fetchQuotesWithFallback(tickers);
 
     let stored = 0;
     for (const [ticker, quote] of quotes) {
@@ -256,7 +278,7 @@ export class TickerQueue {
       }
     }
     if (stored > 0) {
-      this.#log.debug('passive poll stored', { count: stored });
+      this.#log.debug('passive poll stored', { count: stored, requested: tickers.length });
     }
   }
 

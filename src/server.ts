@@ -320,7 +320,12 @@ async function main(): Promise<void> {
 
   let tickerQueue: TickerQueue | null = null;
   if (db) {
-    tickerQueue = new TickerQueue({ db, yahoo: new YahooProvider(), log });
+    tickerQueue = new TickerQueue({
+      db,
+      yahoo: new YahooProvider(),
+      fallbackProvider: buildPriceProvider(config, log),
+      log,
+    });
     await tickerQueue.start();
   }
 
