@@ -16,13 +16,13 @@ let prevBidCounts = new Map(); // itemId → bidCount from last successful rende
 // --- Ticker state ---
 function loadTickerFromStorage() {
   const stored = localStorage.getItem('ticker');
-  if (stored && /^[A-Z]{1,10}$/.test(stored)) {
+  if (stored && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(stored)) {
     return stored;
   }
   return SUPPORTED_SYMBOLS[0];
 }
 function saveTickerToStorage(ticker) {
-  if (/^[A-Z]{1,10}$/.test(ticker)) {
+  if (/^[A-Z][A-Z0-9.\-:]{0,19}$/.test(ticker)) {
     localStorage.setItem('ticker', ticker);
   }
 }
@@ -402,7 +402,7 @@ let lastKnownGoodSymbol = activeSymbol;
 
 async function refresh() {
   try {
-    const res = await fetch(`/api/snapshot?symbol=${activeSymbol}`, { headers: { Accept: 'application/json' } });
+    const res = await fetch(`/api/snapshot?symbol=${encodeURIComponent(activeSymbol)}`, { headers: { Accept: 'application/json' } });
     if (!res.ok) {
       let body = null;
       try {
@@ -492,7 +492,7 @@ if (tickerInput) {
   tickerInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       const newSymbol = tickerInput.value.trim().toUpperCase();
-      if (newSymbol && /^[A-Z]{1,10}$/.test(newSymbol) && newSymbol !== activeSymbol) {
+      if (newSymbol && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(newSymbol) && newSymbol !== activeSymbol) {
         activeSymbol = newSymbol;
         document.querySelectorAll('.stock-btn').forEach((b) => b.classList.toggle('is-active', false));
         tickerInput.classList.add('is-validating');

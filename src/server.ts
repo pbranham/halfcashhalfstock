@@ -162,7 +162,7 @@ export function createApp(deps: Deps): express.Express {
   app.get('/api/snapshot', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const rawSymbol = typeof req.query.symbol === 'string' ? req.query.symbol.trim().toUpperCase() : '';
-      const symbol = rawSymbol && /^[A-Z]{1,10}$/.test(rawSymbol) ? rawSymbol : deps.config.STOCK_SYMBOL;
+      const symbol = rawSymbol && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(rawSymbol) ? rawSymbol : deps.config.STOCK_SYMBOL;
 
       if (deps.tickerQueue && !deps.tickerQueue.isKnown(symbol)) {
         if (deps.tickerQueue.isBlacklisted(symbol)) {
@@ -216,7 +216,7 @@ export function createApp(deps: Deps): express.Express {
     }
     const ticker = typeof req.query.ticker === 'string' ? req.query.ticker.trim().toUpperCase() : '';
     const daysStr = typeof req.query.days === 'string' ? req.query.days.trim() : '7';
-    if (!ticker || !/^[A-Z]{1,10}$/.test(ticker)) {
+    if (!ticker || !/^[A-Z][A-Z0-9.\-:]{0,19}$/.test(ticker)) {
       res.status(400).json({ error: 'bad_request', detail: 'missing or invalid ticker' });
       return;
     }
