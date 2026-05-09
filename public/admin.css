@@ -16,6 +16,111 @@
   align-items: center;
 }
 
+.auto-refresh-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.live-section {
+  background: linear-gradient(135deg, #142b1d 0%, #1a3a26 100%);
+  border-color: #3d7d4e;
+  position: relative;
+}
+
+.live-section::before {
+  content: '';
+  position: absolute;
+  top: 1.1rem;
+  right: 1rem;
+  width: 8px;
+  height: 8px;
+  background: #4caf50;
+  border-radius: 50%;
+  animation: live-pulse 2s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+
+.live-updated {
+  font-size: 0.75rem;
+  font-weight: 400;
+  opacity: 0.6;
+  margin-left: 0.5rem;
+}
+
+.live-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.live-stat {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  padding: 0.75rem;
+  text-align: center;
+}
+
+.live-stat .live-value {
+  font-size: 2rem;
+  font-weight: 700;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: #a5e8b6;
+}
+
+.live-stat .live-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+  margin-top: 0.25rem;
+}
+
+.live-ua-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 0.4rem;
+}
+
+.live-ua-segment {
+  height: 100%;
+}
+
+.live-ua-segment.bot { background: #d32f2f; }
+.live-ua-segment.mobile { background: #1976d2; }
+.live-ua-segment.desktop { background: #388e3c; }
+.live-ua-segment.other { background: #757575; }
+
+.live-ua-legend {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+  font-size: 0.7rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.live-ua-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.live-ua-legend .swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
 .admin-select,
 .admin-btn,
 .token-input {

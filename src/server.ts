@@ -153,9 +153,10 @@ export function createApp(deps: Deps): express.Express {
   app.use((req: Request, res: Response, next: NextFunction) => {
     if (deps.requestStats) {
       const startTime = deps.requestStats.recordStart();
+      const userAgent = req.headers['user-agent'];
       const originalSend = res.send;
       res.send = function (data: unknown) {
-        deps.requestStats?.recordEnd(startTime, req.path, res.statusCode, req.ip ?? '');
+        deps.requestStats?.recordEnd(startTime, req.path, res.statusCode, req.ip ?? '', userAgent);
         return originalSend.call(this, data);
       };
     }
@@ -294,23 +295,25 @@ export function createApp(deps: Deps): express.Express {
     }
     try {
       const hoursStr = typeof req.query.hours === 'string' ? req.query.hours.trim() : '24';
-      const hours = Math.max(1, Math.min(168, Number.parseInt(hoursStr, 10) || 24));
+      const hours = Math.max(1, Math.min(2160, Number.parseInt(hoursStr, 10) || 24));
       const envFilter = typeof req.query.environment === 'string' ? req.query.environment.trim() : '';
+      const interval = hours > 168 ? 'day' : 'hour';
 
       const since = new Date(Date.now() - hours * 60 * 60 * 1000);
-      const params: unknown[] = [since];
+      const params: unknown[] = [since, interval];
       let envClause = '';
       if (envFilter && /^[a-zA-Z0-9_-]{1,32}$/.test(envFilter)) {
-        envClause = ' AND environment = $2';
+        envClause = ' AND environment = $3';
         params.push(envFilter);
       }
 
       const hourly = await deps.db.query(
         `
         SELECT hour, endpoint, status_code, environment, request_count, unique_ips,
-               max_concurrent, avg_concurrent, min_concurrent
+               max_concurrent, avg_concurrent, min_concurrent,
+               bot_count, mobile_count, desktop_count, other_count
         FROM request_stats
-        WHERE hour >= $1${envClause}
+        WHERE hour >= $1 AND interval = $2${envClause}
         ORDER BY hour DESC, environment, endpoint, status_code
         `,
         params,
@@ -321,9 +324,31 @@ export function createApp(deps: Deps): express.Express {
                SUM(request_count)::INTEGER AS total_requests,
                SUM(unique_ips)::INTEGER AS approx_unique_ips,
                MAX(max_concurrent)::INTEGER AS peak_concurrent,
-               AVG(avg_concurrent)::NUMERIC(10,2) AS avg_concurrent
+               AVG(avg_concurrent)::NUMERIC(10,2) AS avg_concurrent,
+               SUM(bot_count)::INTEGER AS bot_count,
+               SUM(mobile_count)::INTEGER AS mobile_count,
+               SUM(desktop_count)::INTEGER AS desktop_count,
+               SUM(other_count)::INTEGER AS other_count
         FROM request_stats
-        WHERE hour >= $1${envClause}
+        WHERE hour >= $1 AND interval = $2${envClause}
+        GROUP BY environment
+        ORDER BY environment
+        `,
+        params,
+      );
+      const sessions = await deps.db.query(
+        `
+        SELECT environment,
+               SUM(session_count)::INTEGER AS total_sessions,
+               SUM(bounce_count)::INTEGER AS bounce_count,
+               CASE WHEN SUM(session_count) > 0
+                    THEN (SUM(total_duration_seconds) / SUM(session_count))::NUMERIC(10,2)
+                    ELSE 0 END AS avg_duration_seconds,
+               CASE WHEN SUM(session_count) > 0
+                    THEN (SUM(total_requests)::NUMERIC / SUM(session_count))::NUMERIC(10,2)
+                    ELSE 0 END AS avg_requests_per_session
+        FROM session_stats
+        WHERE hour >= $1 AND interval = $2${envClause}
         GROUP BY environment
         ORDER BY environment
         `,
@@ -334,15 +359,28 @@ export function createApp(deps: Deps): express.Express {
       );
       res.status(200).set('Cache-Control', 'no-store').json({
         summary: summary.rows,
+        sessions: sessions.rows,
         hourly: hourly.rows,
         environments: environments.rows.map((r: { environment: string }) => r.environment),
         currentEnvironment: deps.config.APP_ENVIRONMENT ?? deps.config.NODE_ENV,
         windowHours: hours,
+        interval,
         asOf: new Date().toISOString(),
       });
     } catch (err) {
       next(err);
     }
+  });
+
+  app.get('/api/admin/live', apiLimiter, requireAdminToken, (_req: Request, res: Response) => {
+    if (!deps.requestStats) {
+      res.status(503).json({ error: 'live_unavailable', detail: 'request stats not configured' });
+      return;
+    }
+    res.status(200).set('Cache-Control', 'no-store').json({
+      ...deps.requestStats.getLiveSnapshot(),
+      asOf: new Date().toISOString(),
+    });
   });
 
   app.use(express.static(PUBLIC_DIR, { maxAge: '1h', extensions: ['html'] }));
