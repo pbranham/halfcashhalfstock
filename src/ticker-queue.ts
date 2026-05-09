@@ -40,6 +40,7 @@ export class TickerQueue {
   readonly #negativeCache = new Map<string, number>();
   readonly #pendingResolvers = new Map<string, PendingResolver[]>();
   readonly #knownTickers = new Set<string>();
+  readonly #lastQuoteAsOf = new Map<string, string>();
 
   #passiveTimer: NodeJS.Timeout | null = null;
   #activeTimer: NodeJS.Timeout | null = null;
@@ -249,24 +250,27 @@ export class TickerQueue {
     const quotes = await this.fetchQuotes(tickers);
 
     let stored = 0;
+    let skipped = 0;
     for (const [ticker, quote] of quotes) {
       try {
-        await this.persistLiveQuote(ticker, quote);
-        stored += 1;
+        const wrote = await this.persistLiveQuote(ticker, quote);
+        if (wrote) stored += 1;
+        else skipped += 1;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.#log.debug('passive store failed', { ticker, error: message });
       }
     }
-    if (stored > 0) {
-      this.#log.debug('passive poll stored', { count: stored, requested: tickers.length });
+    if (stored > 0 || skipped > 0) {
+      this.#log.debug('passive poll', { stored, skipped, requested: tickers.length });
     }
   }
 
-  private async persistLiveQuote(
-    ticker: string,
-    quote: { price: number; source: string },
-  ): Promise<void> {
+  private async persistLiveQuote(ticker: string, quote: PriceQuote): Promise<boolean> {
+    const lastAsOf = this.#lastQuoteAsOf.get(ticker);
+    if (lastAsOf === quote.asOf) return false;
+    this.#lastQuoteAsOf.set(ticker, quote.asOf);
+
     const periodStart = new Date();
     periodStart.setSeconds(0, 0);
     await storeOhlcData(
@@ -277,6 +281,7 @@ export class TickerQueue {
       quote.source,
       '1m',
     );
+    return true;
   }
 
   private async triggerBackfill(ticker: string): Promise<'fresh' | 'ok' | 'fail'> {

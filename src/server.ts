@@ -19,7 +19,6 @@ import { runMigrations } from './db/migrate.js';
 import {
   persistSnapshot,
   readBidsForItem,
-  storeOhlcData,
   readOhlcStats,
   type SnapshotPersistInput,
 } from './db/persist.js';
@@ -98,25 +97,7 @@ function buildDeps(
   const priceProvider = buildPriceProvider(config, log);
 
   const fetchQuote = (symbol: string): Promise<PriceQuote> =>
-    priceCache.get(symbol, PRICE_TTL_MS, async () => {
-      const quote = await priceProvider.getQuote(symbol);
-      if (db) {
-        const periodStart = new Date();
-        periodStart.setSeconds(0, 0);
-        await storeOhlcData(
-          db,
-          quote.symbol,
-          periodStart,
-          { close: quote.price },
-          quote.source,
-          '1m',
-        ).catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          log.debug('ohlc storage failed', { symbol, error: message });
-        });
-      }
-      return quote;
-    });
+    priceCache.get(symbol, PRICE_TTL_MS, () => priceProvider.getQuote(symbol));
 
   let fetchListings: () => Promise<Listing[]>;
   if (hasEbayCredentials(config)) {
