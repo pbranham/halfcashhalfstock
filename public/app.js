@@ -12,6 +12,22 @@ const integer = new Intl.NumberFormat('en-US');
 let currentSort = 'ending-soonest';
 let lastSnapshot = null;
 let prevBidCounts = new Map(); // itemId → bidCount from last successful render
+
+// --- Ticker state ---
+function loadTickerFromStorage() {
+  const stored = localStorage.getItem('ticker');
+  if (stored && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(stored)) {
+    return stored;
+  }
+  return SUPPORTED_SYMBOLS[0];
+}
+function saveTickerToStorage(ticker) {
+  if (/^[A-Z][A-Z0-9.\-:]{0,19}$/.test(ticker)) {
+    localStorage.setItem('ticker', ticker);
+  }
+}
+
+activeSymbol = loadTickerFromStorage();
 function parseTimestamp(value) {
   if (!value) return null;
   const ms = Date.parse(value);
@@ -382,17 +398,37 @@ function updateIntroSymbol(symbol) {
   setText(document.getElementById('intro-symbol-2'), display);
 }
 
+let lastKnownGoodSymbol = activeSymbol;
+
 async function refresh() {
   try {
-    const res = await fetch(`/api/snapshot?symbol=${activeSymbol}`, { headers: { Accept: 'application/json' } });
+    const res = await fetch(`/api/snapshot?symbol=${encodeURIComponent(activeSymbol)}`, { headers: { Accept: 'application/json' } });
     if (!res.ok) {
-      let detail = '';
+      let body = null;
       try {
-        const body = await res.json();
-        if (body && typeof body.detail === 'string') detail = ` (${body.detail})`;
+        body = await res.json();
       } catch {
         /* ignore non-JSON body */
       }
+
+      if (res.status === 400 && body && body.error === 'invalid_ticker') {
+        const rejected = activeSymbol;
+        activeSymbol = lastKnownGoodSymbol;
+        const input = document.getElementById('ticker-input');
+        if (input) {
+          input.classList.add('is-invalid');
+          input.value = rejected;
+          setTimeout(() => input.classList.remove('is-invalid'), 2500);
+        }
+        renderError(`"${rejected}" isn't a recognized ticker. Try again.`);
+        updateIntroSymbol(activeSymbol);
+        document.querySelectorAll('.stock-btn').forEach((b) =>
+          b.classList.toggle('is-active', b.dataset.symbol === activeSymbol),
+        );
+        return;
+      }
+
+      const detail = body && typeof body.detail === 'string' ? ` (${body.detail})` : '';
       renderError(
         res.status === 503
           ? `Server can't reach eBay or the price provider right now.${detail}`
@@ -401,6 +437,8 @@ async function refresh() {
       return;
     }
     const snapshot = await res.json();
+    lastKnownGoodSymbol = activeSymbol;
+    saveTickerToStorage(activeSymbol);
     renderTicker(snapshot);
     updateIntroSymbol(snapshot.stock?.symbol ?? activeSymbol);
     renderLastUpdated(snapshot);
@@ -434,13 +472,51 @@ function stop() {
 // Stock toggle wiring
 document.querySelectorAll('.stock-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
-    if (btn.dataset.symbol === activeSymbol) return;
-    activeSymbol = btn.dataset.symbol;
+    const newSymbol = btn.dataset.symbol;
+    if (newSymbol === activeSymbol) return;
+    activeSymbol = newSymbol;
     document.querySelectorAll('.stock-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
+    const input = document.getElementById('ticker-input');
+    if (input) input.value = '';
     updateIntroSymbol(activeSymbol);
     refresh();
   });
 });
+
+// Custom ticker input wiring
+const tickerInput = document.getElementById('ticker-input');
+if (tickerInput) {
+  if (!SUPPORTED_SYMBOLS.includes(activeSymbol)) {
+    tickerInput.value = activeSymbol;
+  }
+  tickerInput.addEventListener('input', () => {
+    const cursor = tickerInput.selectionStart;
+    const upper = tickerInput.value.toUpperCase();
+    if (upper !== tickerInput.value) {
+      tickerInput.value = upper;
+      if (cursor !== null) tickerInput.setSelectionRange(cursor, cursor);
+    }
+  });
+  tickerInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const newSymbol = tickerInput.value.trim().toUpperCase();
+      if (newSymbol && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(newSymbol) && newSymbol !== activeSymbol) {
+        activeSymbol = newSymbol;
+        document.querySelectorAll('.stock-btn').forEach((b) => b.classList.toggle('is-active', false));
+        tickerInput.classList.add('is-validating');
+        updateIntroSymbol(activeSymbol);
+        refresh().finally(() => tickerInput.classList.remove('is-validating'));
+      }
+    }
+  });
+  tickerInput.addEventListener('blur', () => {
+    if (!SUPPORTED_SYMBOLS.includes(activeSymbol)) {
+      tickerInput.value = activeSymbol;
+    } else {
+      tickerInput.value = '';
+    }
+  });
+}
 
 // Sort button wiring
 document.querySelectorAll('.sort-btn').forEach((btn) => {

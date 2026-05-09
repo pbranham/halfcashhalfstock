@@ -13,12 +13,13 @@ import {
   type Config,
 } from './config.js';
 import { createLogger, type Logger } from './log.js';
-import { TtlCache } from './cache.js';
+import { TtlCache, DbBackedCache } from './cache.js';
 import { createPool } from './db/pool.js';
 import { runMigrations } from './db/migrate.js';
 import {
   persistSnapshot,
   readBidsForItem,
+  readOhlcStats,
   type SnapshotPersistInput,
 } from './db/persist.js';
 import { EbayAppTokenProvider } from './ebay/auth.js';
@@ -30,6 +31,7 @@ import { YahooProvider } from './prices/yahoo.js';
 import { ChainedPriceProvider } from './prices/provider.js';
 import type { PriceProvider, PriceQuote } from './prices/types.js';
 import { composeSnapshot, type Snapshot } from './snapshot.js';
+import { TickerQueue } from './ticker-queue.js';
 
 const LISTINGS_TTL_MS = 30_000;
 const PRICE_TTL_MS = 30_000;
@@ -44,6 +46,7 @@ interface Deps {
   fetchListings: () => Promise<Listing[]>;
   fetchQuote: (symbol: string) => Promise<PriceQuote>;
   db?: Pool | null;
+  tickerQueue?: TickerQueue | null;
 }
 
 async function enrichWithBidHistory(deps: Deps, listings: Listing[]): Promise<Listing[]> {
@@ -56,7 +59,7 @@ async function enrichWithBidHistory(deps: Deps, listings: Listing[]): Promise<Li
       if (!tradingEnabled || !listing.isAuction || !listing.bidCount) {
         return { listing, bids: null };
       }
-      const history = await fetchBidHistory(listing.itemId, listing.bidCount, devId!, userToken!);
+      const history = await fetchBidHistory(listing.itemId, listing.bidCount, devId!, userToken!, deps.db);
       return {
         listing: { ...listing, lastBidTime: history?.lastBidTime ?? null },
         bids: history?.bids ?? null,
@@ -83,15 +86,18 @@ function buildPriceProvider(config: Config, log: Logger): PriceProvider {
   return new ChainedPriceProvider(providers, { logger: log.child({ component: 'price' }) });
 }
 
-function buildDeps(config: Config, log: Logger, db: Pool | null): Deps {
-  const priceCache = new TtlCache<PriceQuote>();
-  const listingCache = new TtlCache<Listing[]>();
+function buildDeps(
+  config: Config,
+  log: Logger,
+  db: Pool | null,
+  tickerQueue: TickerQueue | null = null,
+): Deps {
+  const priceCache = db ? new DbBackedCache<PriceQuote>(db) : new TtlCache<PriceQuote>();
+  const listingCache = db ? new DbBackedCache<Listing[]>(db) : new TtlCache<Listing[]>();
   const priceProvider = buildPriceProvider(config, log);
 
   const fetchQuote = (symbol: string): Promise<PriceQuote> =>
-    priceCache.get(symbol, PRICE_TTL_MS, () =>
-      priceProvider.getQuote(symbol),
-    );
+    priceCache.get(symbol, PRICE_TTL_MS, () => priceProvider.getQuote(symbol));
 
   let fetchListings: () => Promise<Listing[]>;
   if (hasEbayCredentials(config)) {
@@ -113,7 +119,7 @@ function buildDeps(config: Config, log: Logger, db: Pool | null): Deps {
     };
   }
 
-  return { config, log, fetchListings, fetchQuote, db };
+  return { config, log, fetchListings, fetchQuote, db, tickerQueue };
 }
 
 export function createApp(deps: Deps): express.Express {
@@ -131,6 +137,7 @@ export function createApp(deps: Deps): express.Express {
           'style-src': ["'self'"],
           'img-src': ["'self'", 'https://i.ebayimg.com', 'https://*.ebayimg.com', 'data:'],
           'connect-src': ["'self'"],
+          'manifest-src': ["'self'"],
           'object-src': ["'none'"],
           'base-uri': ["'self'"],
           'frame-ancestors': ["'none'"],
@@ -156,7 +163,20 @@ export function createApp(deps: Deps): express.Express {
   app.get('/api/snapshot', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const rawSymbol = typeof req.query.symbol === 'string' ? req.query.symbol.trim().toUpperCase() : '';
-      const symbol = rawSymbol && /^[A-Z]{1,10}$/.test(rawSymbol) ? rawSymbol : deps.config.STOCK_SYMBOL;
+      const symbol = rawSymbol && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(rawSymbol) ? rawSymbol : deps.config.STOCK_SYMBOL;
+
+      if (deps.tickerQueue && !deps.tickerQueue.isKnown(symbol)) {
+        if (deps.tickerQueue.isBlacklisted(symbol)) {
+          res.status(400).json({ error: 'invalid_ticker', symbol });
+          return;
+        }
+        const result = await deps.tickerQueue.submitForValidation(symbol);
+        if (!result.valid) {
+          const status = result.error === 'invalid_ticker' ? 400 : 503;
+          res.status(status).json({ error: result.error, symbol });
+          return;
+        }
+      }
 
       const snapshot = await snapshotCache.get(`snapshot:${symbol}`, SNAPSHOT_TTL_MS, async () => {
         const [listings, quote] = await Promise.all([deps.fetchListings(), deps.fetchQuote(symbol)]);
@@ -189,6 +209,52 @@ export function createApp(deps: Deps): express.Express {
       next(err);
     }
   });
+
+  app.get('/api/ohlc', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
+    if (!deps.db) {
+      res.status(503).json({ error: 'ohlc_unavailable', detail: 'database not configured' });
+      return;
+    }
+    const ticker = typeof req.query.ticker === 'string' ? req.query.ticker.trim().toUpperCase() : '';
+    const daysStr = typeof req.query.days === 'string' ? req.query.days.trim() : '7';
+    if (!ticker || !/^[A-Z][A-Z0-9.\-:]{0,19}$/.test(ticker)) {
+      res.status(400).json({ error: 'bad_request', detail: 'missing or invalid ticker' });
+      return;
+    }
+    const days = Math.max(1, Math.min(30, Number.parseInt(daysStr, 10) || 7));
+    try {
+      const now = new Date();
+      const startTime = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+      const { readOhlcData } = await import('./db/persist.js');
+      const candles = await readOhlcData(deps.db, ticker, startTime, now);
+      res
+        .status(200)
+        .set('Cache-Control', 'public, max-age=60')
+        .json({ ticker, days, candles, asOf: new Date().toISOString() });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  if (deps.config.ENABLE_DEBUG_ENDPOINTS) {
+    app.get('/api/debug/ohlc-stats', apiLimiter, async (_req: Request, res: Response, next: NextFunction) => {
+      if (!deps.db) {
+        res.status(503).json({ error: 'debug_unavailable', detail: 'database not configured' });
+        return;
+      }
+      try {
+        const stats = await readOhlcStats(deps.db);
+        const queueStatus = deps.tickerQueue?.getStatus() ?? null;
+        res.status(200).set('Cache-Control', 'no-store').json({
+          stats,
+          queue: queueStatus,
+          asOf: new Date().toISOString(),
+        });
+      } catch (err) {
+        next(err);
+      }
+    });
+  }
 
   app.use(express.static(PUBLIC_DIR, { maxAge: '1h', extensions: ['html'] }));
 
@@ -234,7 +300,18 @@ async function main(): Promise<void> {
     log.warn('DATABASE_URL not set; bid history will not be persisted');
   }
 
-  const deps = buildDeps(config, log, db);
+  let tickerQueue: TickerQueue | null = null;
+  if (db) {
+    tickerQueue = new TickerQueue({
+      db,
+      yahoo: new YahooProvider(),
+      priceProvider: buildPriceProvider(config, log),
+      log,
+    });
+    await tickerQueue.start();
+  }
+
+  const deps = buildDeps(config, log, db, tickerQueue);
   const app = createApp(deps);
   const server = app.listen(config.PORT, () => {
     log.info('listening', { port: config.PORT, sellerId: config.EBAY_SELLER_ID });
@@ -242,6 +319,7 @@ async function main(): Promise<void> {
 
   const shutdown = (signal: string): void => {
     log.info('shutting down', { signal });
+    if (tickerQueue) tickerQueue.stop();
     server.close(() => {
       if (db) {
         db.end().finally(() => process.exit(0));

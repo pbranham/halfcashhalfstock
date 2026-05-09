@@ -1,3 +1,5 @@
+import type { Pool } from 'pg';
+
 interface CacheEntry<T> {
   value: T;
   expiresAt: number;
@@ -52,5 +54,64 @@ export class TtlCache<T> {
 
   clear(): void {
     this.#entries.clear();
+  }
+}
+
+export class DbBackedCache<T> {
+  readonly #memory: TtlCache<T>;
+  readonly #pool: Pool;
+
+  constructor(pool: Pool, options: TtlCacheOptions = {}) {
+    this.#pool = pool;
+    this.#memory = new TtlCache(options);
+  }
+
+  async get(key: string, ttlMs: number, loader: () => Promise<T>): Promise<T> {
+    const fresh = this.#memory.peek(key);
+    if (fresh !== undefined) return fresh;
+
+    const dbCached = await this.checkDb(key);
+    if (dbCached !== undefined) {
+      return dbCached;
+    }
+
+    const value = await this.#memory.get(key, ttlMs, loader);
+    await this.storeDb(key, value, ttlMs).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`Failed to cache ${key} to DB:`, message);
+    });
+    return value;
+  }
+
+  private async checkDb(key: string): Promise<T | undefined> {
+    try {
+      const result = await this.#pool.query(
+        'SELECT payload FROM cache_entries WHERE cache_key = $1 AND expires_at > NOW()',
+        [key],
+      );
+      if (result.rows.length === 0) return undefined;
+      return result.rows[0].payload as T;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async storeDb(key: string, value: T, ttlMs: number): Promise<void> {
+    const expiresAt = new Date(Date.now() + ttlMs);
+    await this.#pool.query(
+      `INSERT INTO cache_entries (cache_key, payload, expires_at)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (cache_key) DO UPDATE SET
+         payload = $2, expires_at = $3`,
+      [key, value, expiresAt],
+    );
+  }
+
+  invalidate(key: string): void {
+    this.#memory.invalidate(key);
+  }
+
+  clear(): void {
+    this.#memory.clear();
   }
 }
