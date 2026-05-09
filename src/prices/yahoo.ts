@@ -60,8 +60,19 @@ export class YahooProvider implements PriceProvider {
   }
 
   async getQuote(symbol: string): Promise<PriceQuote> {
+    const quotes = await this.getQuotes([symbol]);
+    const quote = quotes.get(symbol);
+    if (!quote) {
+      throw new PriceProviderError(this.name, `invalid quote payload for ${symbol}`);
+    }
+    return quote;
+  }
+
+  async getQuotes(symbols: string[]): Promise<Map<string, PriceQuote>> {
+    if (symbols.length === 0) return new Map();
+
     const url = new URL(this.#baseUrl);
-    url.searchParams.set('symbols', symbol);
+    url.searchParams.set('symbols', symbols.join(','));
 
     let res: Response;
     try {
@@ -73,27 +84,39 @@ export class YahooProvider implements PriceProvider {
     }
 
     if (!res.ok) {
-      throw new PriceProviderError(this.name, `http ${res.status}`);
+      const bodyText = await res.text().catch(() => '');
+      throw new PriceProviderError(
+        this.name,
+        `http ${res.status}: ${bodyText.slice(0, 200)}`,
+      );
     }
 
     const body = (await res.json()) as YahooQuoteResponse;
-    const entry = body.quoteResponse?.result?.[0];
-    if (!entry || typeof entry.regularMarketPrice !== 'number' || entry.regularMarketPrice <= 0) {
-      throw new PriceProviderError(this.name, `invalid quote payload for ${symbol}`);
+    const entries = body.quoteResponse?.result ?? [];
+    const result = new Map<string, PriceQuote>();
+
+    for (const entry of entries) {
+      if (!entry || typeof entry.regularMarketPrice !== 'number' || entry.regularMarketPrice <= 0) {
+        continue;
+      }
+      const sym = entry.symbol ?? '';
+      if (!sym) continue;
+
+      const asOf =
+        typeof entry.regularMarketTime === 'number'
+          ? new Date(entry.regularMarketTime * 1000).toISOString()
+          : new Date().toISOString();
+
+      result.set(sym, {
+        symbol: sym,
+        price: entry.regularMarketPrice,
+        currency: entry.currency ?? 'USD',
+        asOf,
+        source: this.name,
+      });
     }
 
-    const asOf =
-      typeof entry.regularMarketTime === 'number'
-        ? new Date(entry.regularMarketTime * 1000).toISOString()
-        : new Date().toISOString();
-
-    return {
-      symbol: entry.symbol ?? symbol,
-      price: entry.regularMarketPrice,
-      currency: entry.currency ?? 'USD',
-      asOf,
-      source: this.name,
-    };
+    return result;
   }
 
   async getHistoricalCandles(

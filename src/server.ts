@@ -34,6 +34,7 @@ import { YahooProvider } from './prices/yahoo.js';
 import { ChainedPriceProvider } from './prices/provider.js';
 import type { PriceProvider, PriceQuote } from './prices/types.js';
 import { composeSnapshot, type Snapshot } from './snapshot.js';
+import { TickerQueue } from './ticker-queue.js';
 
 const LISTINGS_TTL_MS = 30_000;
 const PRICE_TTL_MS = 30_000;
@@ -51,6 +52,7 @@ interface Deps {
   fetchListings: () => Promise<Listing[]>;
   fetchQuote: (symbol: string) => Promise<PriceQuote>;
   db?: Pool | null;
+  tickerQueue?: TickerQueue | null;
 }
 
 async function enrichWithBidHistory(deps: Deps, listings: Listing[]): Promise<Listing[]> {
@@ -90,7 +92,12 @@ function buildPriceProvider(config: Config, log: Logger): PriceProvider {
   return new ChainedPriceProvider(providers, { logger: log.child({ component: 'price' }) });
 }
 
-function buildDeps(config: Config, log: Logger, db: Pool | null): Deps {
+function buildDeps(
+  config: Config,
+  log: Logger,
+  db: Pool | null,
+  tickerQueue: TickerQueue | null = null,
+): Deps {
   const priceCache = db ? new DbBackedCache<PriceQuote>(db) : new TtlCache<PriceQuote>();
   const listingCache = db ? new DbBackedCache<Listing[]>(db) : new TtlCache<Listing[]>();
   const priceProvider = buildPriceProvider(config, log);
@@ -136,7 +143,7 @@ function buildDeps(config: Config, log: Logger, db: Pool | null): Deps {
     };
   }
 
-  return { config, log, fetchListings, fetchQuote, db };
+  return { config, log, fetchListings, fetchQuote, db, tickerQueue };
 }
 
 export function createApp(deps: Deps): express.Express {
@@ -180,6 +187,19 @@ export function createApp(deps: Deps): express.Express {
     try {
       const rawSymbol = typeof req.query.symbol === 'string' ? req.query.symbol.trim().toUpperCase() : '';
       const symbol = rawSymbol && /^[A-Z]{1,10}$/.test(rawSymbol) ? rawSymbol : deps.config.STOCK_SYMBOL;
+
+      if (deps.tickerQueue && !deps.tickerQueue.isKnown(symbol)) {
+        if (deps.tickerQueue.isBlacklisted(symbol)) {
+          res.status(400).json({ error: 'invalid_ticker', symbol });
+          return;
+        }
+        const result = await deps.tickerQueue.submitForValidation(symbol);
+        if (!result.valid) {
+          const status = result.error === 'invalid_ticker' ? 400 : 503;
+          res.status(status).json({ error: result.error, symbol });
+          return;
+        }
+      }
 
       const snapshot = await snapshotCache.get(`snapshot:${symbol}`, SNAPSHOT_TTL_MS, async () => {
         const [listings, quote] = await Promise.all([deps.fetchListings(), deps.fetchQuote(symbol)]);
@@ -350,7 +370,13 @@ async function main(): Promise<void> {
     log.warn('DATABASE_URL not set; bid history will not be persisted');
   }
 
-  const deps = buildDeps(config, log, db);
+  let tickerQueue: TickerQueue | null = null;
+  if (db) {
+    tickerQueue = new TickerQueue({ db, yahoo: new YahooProvider(), log });
+    await tickerQueue.start();
+  }
+
+  const deps = buildDeps(config, log, db, tickerQueue);
   const app = createApp(deps);
   const server = app.listen(config.PORT, () => {
     log.info('listening', { port: config.PORT, sellerId: config.EBAY_SELLER_ID });
@@ -358,6 +384,7 @@ async function main(): Promise<void> {
 
   const shutdown = (signal: string): void => {
     log.info('shutting down', { signal });
+    if (tickerQueue) tickerQueue.stop();
     server.close(() => {
       if (db) {
         db.end().finally(() => process.exit(0));

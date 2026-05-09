@@ -398,17 +398,37 @@ function updateIntroSymbol(symbol) {
   setText(document.getElementById('intro-symbol-2'), display);
 }
 
+let lastKnownGoodSymbol = activeSymbol;
+
 async function refresh() {
   try {
     const res = await fetch(`/api/snapshot?symbol=${activeSymbol}`, { headers: { Accept: 'application/json' } });
     if (!res.ok) {
-      let detail = '';
+      let body = null;
       try {
-        const body = await res.json();
-        if (body && typeof body.detail === 'string') detail = ` (${body.detail})`;
+        body = await res.json();
       } catch {
         /* ignore non-JSON body */
       }
+
+      if (res.status === 400 && body && body.error === 'invalid_ticker') {
+        const rejected = activeSymbol;
+        activeSymbol = lastKnownGoodSymbol;
+        const input = document.getElementById('ticker-input');
+        if (input) {
+          input.classList.add('is-invalid');
+          input.value = rejected;
+          setTimeout(() => input.classList.remove('is-invalid'), 2500);
+        }
+        renderError(`"${rejected}" isn't a recognized ticker. Try again.`);
+        updateIntroSymbol(activeSymbol);
+        document.querySelectorAll('.stock-btn').forEach((b) =>
+          b.classList.toggle('is-active', b.dataset.symbol === activeSymbol),
+        );
+        return;
+      }
+
+      const detail = body && typeof body.detail === 'string' ? ` (${body.detail})` : '';
       renderError(
         res.status === 503
           ? `Server can't reach eBay or the price provider right now.${detail}`
@@ -417,6 +437,8 @@ async function refresh() {
       return;
     }
     const snapshot = await res.json();
+    lastKnownGoodSymbol = activeSymbol;
+    saveTickerToStorage(activeSymbol);
     renderTicker(snapshot);
     updateIntroSymbol(snapshot.stock?.symbol ?? activeSymbol);
     renderLastUpdated(snapshot);
@@ -453,7 +475,6 @@ document.querySelectorAll('.stock-btn').forEach((btn) => {
     const newSymbol = btn.dataset.symbol;
     if (newSymbol === activeSymbol) return;
     activeSymbol = newSymbol;
-    saveTickerToStorage(activeSymbol);
     document.querySelectorAll('.stock-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
     const input = document.getElementById('ticker-input');
     if (input) input.value = '';
@@ -473,10 +494,10 @@ if (tickerInput) {
       const newSymbol = tickerInput.value.trim().toUpperCase();
       if (newSymbol && /^[A-Z]{1,10}$/.test(newSymbol) && newSymbol !== activeSymbol) {
         activeSymbol = newSymbol;
-        saveTickerToStorage(activeSymbol);
         document.querySelectorAll('.stock-btn').forEach((b) => b.classList.toggle('is-active', false));
+        tickerInput.classList.add('is-validating');
         updateIntroSymbol(activeSymbol);
-        refresh();
+        refresh().finally(() => tickerInput.classList.remove('is-validating'));
       }
     }
   });

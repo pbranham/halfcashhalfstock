@@ -532,6 +532,29 @@ footer .disclaimer {
   color: var(--fg);
 }
 
+.ticker-input.is-validating {
+  border-color: var(--accent);
+  color: var(--fg);
+  animation: ticker-pulse 1s ease-in-out infinite;
+}
+
+.ticker-input.is-invalid {
+  border-color: #d9534f;
+  color: #d9534f;
+  animation: ticker-shake 0.4s ease-in-out;
+}
+
+@keyframes ticker-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes ticker-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
 .sort-bar {
   display: flex;
   flex-wrap: wrap;
