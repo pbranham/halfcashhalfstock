@@ -41,6 +41,15 @@ const SNAPSHOT_TTL_MS = 15_000;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 
+function shouldSkipMetrics(reqPath: string): boolean {
+  return (
+    reqPath === '/healthz' ||
+    reqPath === '/admin' ||
+    reqPath.startsWith('/admin.') ||
+    reqPath.startsWith('/api/admin/')
+  );
+}
+
 interface Deps {
   config: Config;
   log: Logger;
@@ -151,7 +160,7 @@ export function createApp(deps: Deps): express.Express {
   app.use(compression());
 
   app.use((req: Request, res: Response, next: NextFunction) => {
-    if (deps.requestStats) {
+    if (deps.requestStats && !shouldSkipMetrics(req.path)) {
       const startTime = deps.requestStats.recordStart();
       const userAgent = req.headers['user-agent'];
       const originalSend = res.send;
