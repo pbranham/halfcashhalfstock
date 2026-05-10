@@ -427,6 +427,121 @@ export function createApp(deps: Deps): express.Express {
     });
   });
 
+  app.use(express.json({ limit: '10kb' }));
+
+  app.post('/api/admin/cleanup', apiLimiter, requireAdminToken, async (req: Request, res: Response, next: NextFunction) => {
+    if (!deps.db) {
+      res.status(503).json({ error: 'cleanup_unavailable', detail: 'database not configured' });
+      return;
+    }
+    try {
+      const body = req.body as { action?: string; environment?: string; from?: string; to?: string } | undefined;
+      const action = body?.action;
+
+      if (action === 'delete_environment') {
+        const env = body?.environment?.trim() ?? '';
+        if (!env || !/^[a-zA-Z0-9_-]{1,32}$/.test(env)) {
+          res.status(400).json({ error: 'bad_request', detail: 'invalid environment' });
+          return;
+        }
+        const reqDel = await deps.db.query('DELETE FROM request_stats WHERE environment = $1', [env]);
+        const sessDel = await deps.db.query('DELETE FROM session_stats WHERE environment = $1', [env]);
+        const ipDel = await deps.db.query('DELETE FROM seen_ips WHERE environment = $1', [env]);
+        res.status(200).json({
+          action: 'delete_environment',
+          environment: env,
+          deleted: {
+            request_stats: reqDel.rowCount ?? 0,
+            session_stats: sessDel.rowCount ?? 0,
+            seen_ips: ipDel.rowCount ?? 0,
+          },
+        });
+        return;
+      }
+
+      if (action === 'rename_environment') {
+        const from = body?.from?.trim() ?? '';
+        const to = body?.to?.trim() ?? '';
+        if (!from || !/^[a-zA-Z0-9_-]{1,32}$/.test(from) || !to || !/^[a-zA-Z0-9_-]{1,32}$/.test(to)) {
+          res.status(400).json({ error: 'bad_request', detail: 'invalid from/to environment' });
+          return;
+        }
+        const reqUpd = await deps.db.query(
+          `UPDATE request_stats SET environment = $2 WHERE environment = $1
+           AND NOT EXISTS (
+             SELECT 1 FROM request_stats r2
+             WHERE r2.hour = request_stats.hour
+               AND r2.endpoint = request_stats.endpoint
+               AND r2.status_code = request_stats.status_code
+               AND r2.environment = $2
+               AND r2.interval = request_stats.interval
+           )`,
+          [from, to],
+        );
+        await deps.db.query('DELETE FROM request_stats WHERE environment = $1', [from]);
+        const sessUpd = await deps.db.query(
+          `UPDATE session_stats SET environment = $2 WHERE environment = $1
+           AND NOT EXISTS (
+             SELECT 1 FROM session_stats s2
+             WHERE s2.hour = session_stats.hour
+               AND s2.environment = $2
+               AND s2.interval = session_stats.interval
+           )`,
+          [from, to],
+        );
+        await deps.db.query('DELETE FROM session_stats WHERE environment = $1', [from]);
+        const ipUpd = await deps.db.query(
+          `UPDATE seen_ips SET environment = $2 WHERE environment = $1
+           AND NOT EXISTS (
+             SELECT 1 FROM seen_ips i2
+             WHERE i2.ip_hash = seen_ips.ip_hash
+               AND i2.hour = seen_ips.hour
+               AND i2.environment = $2
+           )`,
+          [from, to],
+        );
+        await deps.db.query('DELETE FROM seen_ips WHERE environment = $1', [from]);
+        res.status(200).json({
+          action: 'rename_environment',
+          from,
+          to,
+          updated: {
+            request_stats: reqUpd.rowCount ?? 0,
+            session_stats: sessUpd.rowCount ?? 0,
+            seen_ips: ipUpd.rowCount ?? 0,
+          },
+        });
+        return;
+      }
+
+      if (action === 'delete_before') {
+        const beforeStr = body?.environment ?? '';
+        const before = new Date(beforeStr);
+        if (Number.isNaN(before.getTime())) {
+          res.status(400).json({ error: 'bad_request', detail: 'invalid date' });
+          return;
+        }
+        const reqDel = await deps.db.query('DELETE FROM request_stats WHERE hour < $1', [before]);
+        const sessDel = await deps.db.query('DELETE FROM session_stats WHERE hour < $1', [before]);
+        const ipDel = await deps.db.query('DELETE FROM seen_ips WHERE hour < $1', [before]);
+        res.status(200).json({
+          action: 'delete_before',
+          before: before.toISOString(),
+          deleted: {
+            request_stats: reqDel.rowCount ?? 0,
+            session_stats: sessDel.rowCount ?? 0,
+            seen_ips: ipDel.rowCount ?? 0,
+          },
+        });
+        return;
+      }
+
+      res.status(400).json({ error: 'bad_request', detail: 'unknown action' });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.use(express.static(PUBLIC_DIR, { maxAge: '1h', extensions: ['html'] }));
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
