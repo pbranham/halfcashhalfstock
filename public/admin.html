@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>halfcashhalfstock — admin</title>
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#2d5b3e" />
+    <meta name="robots" content="noindex,nofollow" />
+    <script src="/theme-init.js"></script>
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/admin.css" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  </head>
+  <body class="admin-body">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Back to dashboard">
+        <span class="brand-name">halfcashhalfstock — admin</span>
+      </a>
+      <div class="admin-controls">
+        <select id="env-filter" class="admin-select" aria-label="Environment filter">
+          <option value="">All environments</option>
+        </select>
+        <select id="window-filter" class="admin-select" aria-label="Time window">
+          <option value="1">Last hour (5m)</option>
+          <option value="6">Last 6 hours (5m)</option>
+          <option value="24" selected>Last 24 hours (5m)</option>
+          <option value="48">Last 48 hours (5m)</option>
+          <option value="168">Last 7 days (hourly)</option>
+          <option value="720">Last 30 days (hourly)</option>
+          <option value="2160">Last 90 days (daily)</option>
+        </select>
+        <label class="auto-refresh-toggle">
+          <input id="auto-refresh" type="checkbox" checked />
+          Auto-refresh
+        </label>
+        <button id="refresh-btn" class="admin-btn" type="button">Refresh</button>
+        <button id="logout-btn" class="admin-btn" type="button">Logout</button>
+      </div>
+    </header>
+    <main class="admin-main">
+      <section id="auth-screen" class="auth-screen" hidden>
+        <h2>Admin access required</h2>
+        <p>Enter the admin token to view request statistics.</p>
+        <form id="auth-form" class="auth-form">
+          <input
+            id="token-input"
+            type="password"
+            class="token-input"
+            placeholder="Admin token"
+            autocomplete="off"
+            spellcheck="false"
+            required
+          />
+          <button type="submit" class="admin-btn admin-btn-primary">Login</button>
+        </form>
+        <div id="auth-error" class="auth-error" hidden></div>
+      </section>
+
+      <section id="dashboard" class="dashboard" hidden>
+        <div id="loading" class="loading">Loading…</div>
+        <div id="error" class="error-banner" hidden></div>
+
+        <section class="chart-section live-section">
+          <h3>Live <span id="live-updated" class="live-updated"></span></h3>
+          <div id="live-grid" class="live-grid"></div>
+        </section>
+
+        <section id="summary" class="summary-grid"></section>
+
+        <section id="sessions-section" class="chart-section">
+          <h3>Sessions</h3>
+          <div id="sessions-table" class="data-table"></div>
+        </section>
+
+        <section class="chart-section">
+          <h3 id="hourly-title">Requests by hour</h3>
+          <div id="hourly-chart" class="hourly-chart"></div>
+        </section>
+
+        <section class="chart-section">
+          <h3>By endpoint</h3>
+          <div id="endpoint-table" class="data-table"></div>
+        </section>
+
+        <section class="chart-section">
+          <h3>By status code</h3>
+          <div id="status-table" class="data-table"></div>
+        </section>
+
+        <section class="chart-section">
+          <h3>By client type</h3>
+          <div id="ua-table" class="data-table"></div>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="/admin.js"></script>
+  </body>
+</html>

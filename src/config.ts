@@ -21,6 +21,8 @@ const Schema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  APP_ENVIRONMENT: z.string().trim().min(1).optional(),
+  ADMIN_TOKEN: z.string().trim().min(8).optional(),
 });
 
 export type Config = z.infer<typeof Schema>;

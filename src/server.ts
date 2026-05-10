@@ -32,6 +32,7 @@ import { ChainedPriceProvider } from './prices/provider.js';
 import type { PriceProvider, PriceQuote } from './prices/types.js';
 import { composeSnapshot, type Snapshot } from './snapshot.js';
 import { TickerQueue } from './ticker-queue.js';
+import { RequestStatsCollector } from './request-stats.js';
 
 const LISTINGS_TTL_MS = 30_000;
 const PRICE_TTL_MS = 30_000;
@@ -40,6 +41,15 @@ const SNAPSHOT_TTL_MS = 15_000;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 
+function shouldSkipMetrics(reqPath: string): boolean {
+  return (
+    reqPath === '/healthz' ||
+    reqPath === '/admin' ||
+    reqPath.startsWith('/admin.') ||
+    reqPath.startsWith('/api/admin/')
+  );
+}
+
 interface Deps {
   config: Config;
   log: Logger;
@@ -47,6 +57,7 @@ interface Deps {
   fetchQuote: (symbol: string) => Promise<PriceQuote>;
   db?: Pool | null;
   tickerQueue?: TickerQueue | null;
+  requestStats?: RequestStatsCollector | null;
 }
 
 async function enrichWithBidHistory(deps: Deps, listings: Listing[]): Promise<Listing[]> {
@@ -91,6 +102,7 @@ function buildDeps(
   log: Logger,
   db: Pool | null,
   tickerQueue: TickerQueue | null = null,
+  requestStats: RequestStatsCollector | null = null,
 ): Deps {
   const priceCache = db ? new DbBackedCache<PriceQuote>(db) : new TtlCache<PriceQuote>();
   const listingCache = db ? new DbBackedCache<Listing[]>(db) : new TtlCache<Listing[]>();
@@ -119,7 +131,7 @@ function buildDeps(
     };
   }
 
-  return { config, log, fetchListings, fetchQuote, db, tickerQueue };
+  return { config, log, fetchListings, fetchQuote, db, tickerQueue, requestStats };
 }
 
 export function createApp(deps: Deps): express.Express {
@@ -146,6 +158,19 @@ export function createApp(deps: Deps): express.Express {
     }),
   );
   app.use(compression());
+
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (deps.requestStats && !shouldSkipMetrics(req.path)) {
+      const startTime = deps.requestStats.recordStart();
+      const userAgent = req.headers['user-agent'];
+      const originalSend = res.send;
+      res.send = function (data: unknown) {
+        deps.requestStats?.recordEnd(startTime, req.path, res.statusCode, req.ip ?? '', userAgent);
+        return originalSend.call(this, data);
+      };
+    }
+    next();
+  });
 
   const apiLimiter = rateLimit({
     windowMs: 60_000,
@@ -254,7 +279,153 @@ export function createApp(deps: Deps): express.Express {
         next(err);
       }
     });
+
   }
+
+  const requireAdminToken = (req: Request, res: Response, next: NextFunction): void => {
+    if (!deps.config.ADMIN_TOKEN) {
+      res.status(503).json({ error: 'admin_unavailable', detail: 'ADMIN_TOKEN not configured' });
+      return;
+    }
+    const headerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+    const queryToken = typeof req.query.token === 'string' ? req.query.token.trim() : '';
+    const provided = headerToken || queryToken;
+    if (!provided || provided !== deps.config.ADMIN_TOKEN) {
+      res.status(401).json({ error: 'unauthorized' });
+      return;
+    }
+    next();
+  };
+
+  app.get('/api/admin/stats', apiLimiter, requireAdminToken, async (req: Request, res: Response, next: NextFunction) => {
+    if (!deps.db) {
+      res.status(503).json({ error: 'stats_unavailable', detail: 'database not configured' });
+      return;
+    }
+    try {
+      const hoursStr = typeof req.query.hours === 'string' ? req.query.hours.trim() : '24';
+      const hours = Math.max(1, Math.min(2160, Number.parseInt(hoursStr, 10) || 24));
+      const envFilter = typeof req.query.environment === 'string' ? req.query.environment.trim() : '';
+      const requestedInterval = typeof req.query.interval === 'string' ? req.query.interval.trim() : '';
+      let interval: '5min' | 'hour' | 'day';
+      if (requestedInterval === '5min' || requestedInterval === 'hour' || requestedInterval === 'day') {
+        interval = requestedInterval;
+      } else if (hours <= 48) {
+        interval = '5min';
+      } else if (hours <= 720) {
+        interval = 'hour';
+      } else {
+        interval = 'day';
+      }
+      const sessionInterval = interval === '5min' ? 'hour' : interval;
+
+      const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+      const params: unknown[] = [since, interval];
+      const sessionParams: unknown[] = [since, sessionInterval];
+      let envClause = '';
+      if (envFilter && /^[a-zA-Z0-9_-]{1,32}$/.test(envFilter)) {
+        envClause = ' AND environment = $3';
+        params.push(envFilter);
+        sessionParams.push(envFilter);
+      }
+
+      const hourly = await deps.db.query(
+        `
+        SELECT hour, endpoint, status_code, environment, request_count, unique_ips,
+               max_concurrent, avg_concurrent, min_concurrent,
+               bot_count, mobile_count, desktop_count, other_count
+        FROM request_stats
+        WHERE hour >= $1 AND interval = $2${envClause}
+        ORDER BY hour DESC, environment, endpoint, status_code
+        `,
+        params,
+      );
+      const ipEnvClause = envFilter && /^[a-zA-Z0-9_-]{1,32}$/.test(envFilter)
+        ? ' AND environment = $2'
+        : '';
+      const ipParams: unknown[] = [since];
+      if (ipEnvClause) ipParams.push(envFilter);
+
+      const summaryRequests = await deps.db.query(
+        `
+        SELECT environment,
+               SUM(request_count)::INTEGER AS total_requests,
+               MAX(max_concurrent)::INTEGER AS peak_concurrent,
+               AVG(avg_concurrent)::NUMERIC(10,2) AS avg_concurrent,
+               SUM(bot_count)::INTEGER AS bot_count,
+               SUM(mobile_count)::INTEGER AS mobile_count,
+               SUM(desktop_count)::INTEGER AS desktop_count,
+               SUM(other_count)::INTEGER AS other_count
+        FROM request_stats
+        WHERE hour >= $1 AND interval = $2${envClause}
+        GROUP BY environment
+        ORDER BY environment
+        `,
+        params,
+      );
+      const summaryIps = await deps.db.query(
+        `
+        SELECT environment, COUNT(DISTINCT ip_hash)::INTEGER AS unique_ips
+        FROM seen_ips
+        WHERE hour >= $1${ipEnvClause}
+        GROUP BY environment
+        ORDER BY environment
+        `,
+        ipParams,
+      );
+      const ipsByEnv = new Map(summaryIps.rows.map((r: { environment: string; unique_ips: number }) => [r.environment, r.unique_ips]));
+      const summary = {
+        rows: summaryRequests.rows.map((row: { environment: string }) => ({
+          ...row,
+          unique_ips: ipsByEnv.get(row.environment) ?? 0,
+        })),
+      };
+      const sessions = await deps.db.query(
+        `
+        SELECT environment,
+               SUM(session_count)::INTEGER AS total_sessions,
+               SUM(bounce_count)::INTEGER AS bounce_count,
+               CASE WHEN SUM(session_count) > 0
+                    THEN (SUM(total_duration_seconds) / SUM(session_count))::NUMERIC(10,2)
+                    ELSE 0 END AS avg_duration_seconds,
+               CASE WHEN SUM(session_count) > 0
+                    THEN (SUM(total_requests)::NUMERIC / SUM(session_count))::NUMERIC(10,2)
+                    ELSE 0 END AS avg_requests_per_session
+        FROM session_stats
+        WHERE hour >= $1 AND interval = $2${envClause}
+        GROUP BY environment
+        ORDER BY environment
+        `,
+        sessionParams,
+      );
+      const environments = await deps.db.query(
+        `SELECT DISTINCT environment FROM request_stats ORDER BY environment`,
+      );
+      res.status(200).set('Cache-Control', 'no-store').json({
+        summary: summary.rows,
+        sessions: sessions.rows,
+        hourly: hourly.rows,
+        environments: environments.rows.map((r: { environment: string }) => r.environment),
+        currentEnvironment: deps.config.APP_ENVIRONMENT ?? deps.config.NODE_ENV,
+        windowHours: hours,
+        interval,
+        asOf: new Date().toISOString(),
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get('/api/admin/live', apiLimiter, requireAdminToken, (_req: Request, res: Response) => {
+    if (!deps.requestStats) {
+      res.status(503).json({ error: 'live_unavailable', detail: 'request stats not configured' });
+      return;
+    }
+    res.status(200).set('Cache-Control', 'no-store').json({
+      ...deps.requestStats.getLiveSnapshot(),
+      asOf: new Date().toISOString(),
+    });
+  });
 
   app.use(express.static(PUBLIC_DIR, { maxAge: '1h', extensions: ['html'] }));
 
@@ -311,7 +482,18 @@ async function main(): Promise<void> {
     await tickerQueue.start();
   }
 
-  const deps = buildDeps(config, log, db, tickerQueue);
+  let requestStats: RequestStatsCollector | null = null;
+  if (db) {
+    const environment = config.APP_ENVIRONMENT ?? config.NODE_ENV;
+    requestStats = new RequestStatsCollector(db, environment);
+    requestStats.start();
+    requestStats.purgeOldStats().catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn('request stats purge failed', { error: message });
+    });
+  }
+
+  const deps = buildDeps(config, log, db, tickerQueue, requestStats);
   const app = createApp(deps);
   const server = app.listen(config.PORT, () => {
     log.info('listening', { port: config.PORT, sellerId: config.EBAY_SELLER_ID });
@@ -320,6 +502,7 @@ async function main(): Promise<void> {
   const shutdown = (signal: string): void => {
     log.info('shutting down', { signal });
     if (tickerQueue) tickerQueue.stop();
+    if (requestStats) requestStats.stop();
     server.close(() => {
       if (db) {
         db.end().finally(() => process.exit(0));
