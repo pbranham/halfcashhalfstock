@@ -171,7 +171,7 @@ function renderSummary(data) {
     card.innerHTML = `
       <h4>Environment <span class="${tagClass}">${escapeHtml(row.environment)}</span></h4>
       <div class="stat-row"><span class="label">Total requests</span><span class="value">${fmt(row.total_requests)}</span></div>
-      <div class="stat-row"><span class="label">Approx. unique IPs</span><span class="value">${fmt(row.approx_unique_ips)}</span></div>
+      <div class="stat-row"><span class="label">Unique visitors</span><span class="value">${fmt(row.unique_ips)}</span></div>
       <div class="stat-row"><span class="label">Peak concurrent</span><span class="value">${fmt(row.peak_concurrent)}</span></div>
       <div class="stat-row"><span class="label">Avg concurrent</span><span class="value">${fmt(row.avg_concurrent)}</span></div>
       <div class="stat-row"><span class="label">Desktop / Mobile / Bot</span><span class="value">${pct(row.desktop_count)}% / ${pct(row.mobile_count)}% / ${pct(row.bot_count)}%</span></div>
@@ -255,22 +255,19 @@ function renderEndpointTable(data) {
         endpoint: row.endpoint,
         environment: row.environment,
         requests: 0,
-        unique_ips: 0,
       });
     }
-    const entry = counts.get(key);
-    entry.requests += Number(row.request_count);
-    entry.unique_ips += Number(row.unique_ips);
+    counts.get(key).requests += Number(row.request_count);
   }
   const sorted = Array.from(counts.values()).sort((a, b) => b.requests - a.requests);
   if (sorted.length === 0) {
     endpointTable.innerHTML = '<p style="opacity: 0.6;">No data.</p>';
     return;
   }
-  let html = '<table><thead><tr><th>Endpoint</th><th>Env</th><th class="numeric">Requests</th><th class="numeric">Unique IPs</th></tr></thead><tbody>';
+  let html = '<table><thead><tr><th>Endpoint</th><th>Env</th><th class="numeric">Requests</th></tr></thead><tbody>';
   for (const row of sorted) {
     const pillClass = isDevEnv(row.environment) ? 'env-pill dev' : 'env-pill';
-    html += `<tr><td>${escapeHtml(row.endpoint)}</td><td><span class="${pillClass}">${escapeHtml(row.environment)}</span></td><td class="numeric">${fmt(row.requests)}</td><td class="numeric">${fmt(row.unique_ips)}</td></tr>`;
+    html += `<tr><td>${escapeHtml(row.endpoint)}</td><td><span class="${pillClass}">${escapeHtml(row.environment)}</span></td><td class="numeric">${fmt(row.requests)}</td></tr>`;
   }
   html += '</tbody></table>';
   endpointTable.innerHTML = html;

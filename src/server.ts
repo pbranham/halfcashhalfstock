@@ -340,11 +340,16 @@ export function createApp(deps: Deps): express.Express {
         `,
         params,
       );
-      const summary = await deps.db.query(
+      const ipEnvClause = envFilter && /^[a-zA-Z0-9_-]{1,32}$/.test(envFilter)
+        ? ' AND environment = $2'
+        : '';
+      const ipParams: unknown[] = [since];
+      if (ipEnvClause) ipParams.push(envFilter);
+
+      const summaryRequests = await deps.db.query(
         `
         SELECT environment,
                SUM(request_count)::INTEGER AS total_requests,
-               SUM(unique_ips)::INTEGER AS approx_unique_ips,
                MAX(max_concurrent)::INTEGER AS peak_concurrent,
                AVG(avg_concurrent)::NUMERIC(10,2) AS avg_concurrent,
                SUM(bot_count)::INTEGER AS bot_count,
@@ -358,6 +363,23 @@ export function createApp(deps: Deps): express.Express {
         `,
         params,
       );
+      const summaryIps = await deps.db.query(
+        `
+        SELECT environment, COUNT(DISTINCT ip_hash)::INTEGER AS unique_ips
+        FROM seen_ips
+        WHERE hour >= $1${ipEnvClause}
+        GROUP BY environment
+        ORDER BY environment
+        `,
+        ipParams,
+      );
+      const ipsByEnv = new Map(summaryIps.rows.map((r: { environment: string; unique_ips: number }) => [r.environment, r.unique_ips]));
+      const summary = {
+        rows: summaryRequests.rows.map((row: { environment: string }) => ({
+          ...row,
+          unique_ips: ipsByEnv.get(row.environment) ?? 0,
+        })),
+      };
       const sessions = await deps.db.query(
         `
         SELECT environment,

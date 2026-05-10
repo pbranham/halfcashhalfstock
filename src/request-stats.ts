@@ -1,6 +1,13 @@
+import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 
 type UaClass = 'bot' | 'mobile' | 'desktop' | 'other';
+
+const IP_HASH_SALT = 'hchs.metrics.v1';
+
+function hashIp(ip: string): string {
+  return createHash('sha256').update(IP_HASH_SALT + ip).digest('hex').slice(0, 16);
+}
 
 interface RequestRecord {
   startTime: number;
@@ -192,10 +199,41 @@ export class RequestStatsCollector {
 
     if (recordsToFlush.length > 0) {
       await this.flushRequestStats(recordsToFlush, samplesToFlush);
+      await this.flushSeenIps(recordsToFlush);
     }
     if (sessionAggsToFlush.size > 0) {
       await this.flushSessionStats(sessionAggsToFlush);
     }
+  }
+
+  private async flushSeenIps(records: RequestRecord[]): Promise<void> {
+    if (!this.db) return;
+    const seen = new Set<string>();
+    const rows: { hash: string; hour: Date }[] = [];
+    for (const record of records) {
+      if (!record.ip) continue;
+      const hour = new Date(Math.floor(record.startTime / 3_600_000) * 3_600_000);
+      const hash = hashIp(record.ip);
+      const key = `${hash}|${hour.toISOString()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({ hash, hour });
+    }
+    if (rows.length === 0) return;
+
+    const values: unknown[] = [];
+    const placeholders: string[] = [];
+    let i = 0;
+    for (const row of rows) {
+      values.push(row.hash, row.hour, this.environment);
+      placeholders.push(`($${++i}, $${++i}, $${++i})`);
+    }
+    await this.db.query(
+      `INSERT INTO seen_ips (ip_hash, hour, environment)
+       VALUES ${placeholders.join(', ')}
+       ON CONFLICT (ip_hash, hour, environment) DO NOTHING`,
+      values,
+    );
   }
 
   private async flushRequestStats(records: RequestRecord[], samples: number[]): Promise<void> {
@@ -453,6 +491,10 @@ export class RequestStatsCollector {
     await this.db.query(
       `DELETE FROM session_stats WHERE interval = 'day' AND hour < $1`,
       [dailyCutoff],
+    );
+    await this.db.query(
+      `DELETE FROM seen_ips WHERE hour < $1`,
+      [hourlyCutoff],
     );
   }
 
