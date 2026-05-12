@@ -19,6 +19,8 @@ import { runMigrations } from './db/migrate.js';
 import {
   persistSnapshot,
   readBidsForItem,
+  readListingDetail,
+  readListingSnapshots,
   readOhlcStats,
   type SnapshotPersistInput,
 } from './db/persist.js';
@@ -212,6 +214,35 @@ export function createApp(deps: Deps): express.Express {
         .status(200)
         .set('Cache-Control', 'public, max-age=15')
         .json(snapshot);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get('/api/item', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
+    if (!deps.db) {
+      res.status(503).json({ error: 'item_unavailable', detail: 'database not configured' });
+      return;
+    }
+    const itemId = typeof req.query.id === 'string' ? req.query.id.trim() : '';
+    if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
+      res.status(400).json({ error: 'bad_request', detail: 'missing or invalid id' });
+      return;
+    }
+    try {
+      const [listing, bids, snapshots] = await Promise.all([
+        readListingDetail(deps.db, itemId),
+        readBidsForItem(deps.db, itemId),
+        readListingSnapshots(deps.db, itemId),
+      ]);
+      if (!listing) {
+        res.status(404).json({ error: 'not_found', detail: 'item not seen by this server' });
+        return;
+      }
+      res
+        .status(200)
+        .set('Cache-Control', 'public, max-age=15')
+        .json({ listing, bids, snapshots, asOf: new Date().toISOString() });
     } catch (err) {
       next(err);
     }

@@ -38,6 +38,50 @@ export async function upsertListing(pool: Pool, listing: Listing): Promise<void>
   );
 }
 
+export async function insertListingSnapshotIfChanged(
+  pool: Pool,
+  listing: Listing,
+): Promise<boolean> {
+  const last = await pool.query<{
+    current_price_usd: string;
+    current_bid_count: number;
+    ends_at: Date | null;
+  }>(
+    `SELECT current_price_usd, current_bid_count, ends_at
+     FROM listing_snapshots
+     WHERE item_id = $1
+     ORDER BY observed_at DESC
+     LIMIT 1`,
+    [listing.itemId],
+  );
+
+  const lastRow = last.rows[0];
+  if (lastRow) {
+    const samePrice = Number(lastRow.current_price_usd) === listing.priceUsd;
+    const sameBidCount = lastRow.current_bid_count === (listing.bidCount ?? 0);
+    const lastEndsIso = lastRow.ends_at ? new Date(lastRow.ends_at).toISOString() : null;
+    const sameEndsAt = lastEndsIso === listing.endsAt;
+    if (samePrice && sameBidCount && sameEndsAt) {
+      return false;
+    }
+  }
+
+  await pool.query(
+    `INSERT INTO listing_snapshots (
+       item_id, current_price_usd, current_bid_count, currency, is_auction, ends_at
+     ) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      listing.itemId,
+      listing.priceUsd,
+      listing.bidCount ?? 0,
+      listing.currency,
+      listing.isAuction,
+      listing.endsAt,
+    ],
+  );
+  return true;
+}
+
 export async function insertBids(
   pool: Pool,
   itemId: string,
@@ -66,26 +110,79 @@ export async function insertBids(
   return res.rowCount ?? 0;
 }
 
+export async function reconcileBids(
+  pool: Pool,
+  itemId: string,
+  freshBids: readonly BidRecord[],
+): Promise<{ inserted: number; removed: number }> {
+  const existing = await pool.query<{
+    bidder: string;
+    bid_time: Date;
+    bid_amount_usd: string;
+  }>(
+    `SELECT bidder, bid_time, bid_amount_usd
+     FROM bids
+     WHERE item_id = $1 AND removed_at IS NULL`,
+    [itemId],
+  );
+
+  const freshKeys = new Set(
+    freshBids
+      .filter((b) => b.bidTime && Number.isFinite(b.bidAmount))
+      .map((b) => `${b.bidder || 'unknown'}|${new Date(b.bidTime).toISOString()}`),
+  );
+
+  const toMarkRemoved = existing.rows.filter((row) => {
+    const key = `${row.bidder}|${row.bid_time.toISOString()}`;
+    return !freshKeys.has(key);
+  });
+
+  let removed = 0;
+  if (toMarkRemoved.length > 0) {
+    const values: unknown[] = [itemId];
+    const clauses = toMarkRemoved.map((row) => {
+      const base = values.length + 1;
+      values.push(row.bidder, row.bid_time);
+      return `(bidder = $${base} AND bid_time = $${base + 1})`;
+    });
+    const res = await pool.query(
+      `UPDATE bids SET removed_at = NOW()
+       WHERE item_id = $1 AND removed_at IS NULL AND (${clauses.join(' OR ')})`,
+      values,
+    );
+    removed = res.rowCount ?? 0;
+  }
+
+  const inserted = freshBids.length > 0 ? await insertBids(pool, itemId, freshBids) : 0;
+  return { inserted, removed };
+}
+
 export async function persistSnapshot(
   pool: Pool,
   inputs: readonly SnapshotPersistInput[],
-): Promise<{ listings: number; bids: number }> {
+): Promise<{ listings: number; bids: number; removedBids: number }> {
   let listingsTouched = 0;
   let bidsInserted = 0;
+  let bidsRemoved = 0;
   for (const { listing, bids } of inputs) {
     await upsertListing(pool, listing);
+    await insertListingSnapshotIfChanged(pool, listing);
     listingsTouched += 1;
-    if (bids && bids.length > 0) {
-      bidsInserted += await insertBids(pool, listing.itemId, bids);
+    if (bids) {
+      const { inserted, removed } = await reconcileBids(pool, listing.itemId, bids);
+      bidsInserted += inserted;
+      bidsRemoved += removed;
     }
   }
-  return { listings: listingsTouched, bids: bidsInserted };
+  return { listings: listingsTouched, bids: bidsInserted, removedBids: bidsRemoved };
 }
 
 export interface BidRow {
   bidder: string;
   bidTime: string;
   bidAmountUsd: number;
+  firstSeenAt: string | null;
+  removedAt: string | null;
 }
 
 export async function readBidsForItem(pool: Pool, itemId: string): Promise<BidRow[]> {
@@ -93,8 +190,10 @@ export async function readBidsForItem(pool: Pool, itemId: string): Promise<BidRo
     bidder: string;
     bid_time: Date;
     bid_amount_usd: string;
+    first_seen_at: Date | null;
+    removed_at: Date | null;
   }>(
-    `SELECT bidder, bid_time, bid_amount_usd
+    `SELECT bidder, bid_time, bid_amount_usd, first_seen_at, removed_at
      FROM bids
      WHERE item_id = $1
      ORDER BY bid_time ASC`,
@@ -104,6 +203,93 @@ export async function readBidsForItem(pool: Pool, itemId: string): Promise<BidRo
     bidder: row.bidder,
     bidTime: row.bid_time.toISOString(),
     bidAmountUsd: Number(row.bid_amount_usd),
+    firstSeenAt: row.first_seen_at ? row.first_seen_at.toISOString() : null,
+    removedAt: row.removed_at ? row.removed_at.toISOString() : null,
+  }));
+}
+
+export interface ListingDetail {
+  itemId: string;
+  title: string;
+  imageUrl: string | null;
+  itemWebUrl: string | null;
+  isAuction: boolean;
+  endsAt: string | null;
+  currentPriceUsd: number;
+  currentBidCount: number;
+  currency: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+export async function readListingDetail(
+  pool: Pool,
+  itemId: string,
+): Promise<ListingDetail | null> {
+  const res = await pool.query<{
+    item_id: string;
+    title: string;
+    image_url: string | null;
+    item_web_url: string | null;
+    is_auction: boolean;
+    ends_at: Date | null;
+    current_price_usd: string;
+    current_bid_count: number;
+    currency: string;
+    first_seen_at: Date;
+    last_seen_at: Date;
+  }>(
+    `SELECT item_id, title, image_url, item_web_url, is_auction, ends_at,
+            current_price_usd, current_bid_count, currency, first_seen_at, last_seen_at
+     FROM listings
+     WHERE item_id = $1`,
+    [itemId],
+  );
+  const row = res.rows[0];
+  if (!row) return null;
+  return {
+    itemId: row.item_id,
+    title: row.title,
+    imageUrl: row.image_url,
+    itemWebUrl: row.item_web_url,
+    isAuction: row.is_auction,
+    endsAt: row.ends_at ? row.ends_at.toISOString() : null,
+    currentPriceUsd: Number(row.current_price_usd),
+    currentBidCount: row.current_bid_count,
+    currency: row.currency,
+    firstSeenAt: row.first_seen_at.toISOString(),
+    lastSeenAt: row.last_seen_at.toISOString(),
+  };
+}
+
+export interface ListingSnapshotRow {
+  observedAt: string;
+  currentPriceUsd: number;
+  currentBidCount: number;
+  endsAt: string | null;
+}
+
+export async function readListingSnapshots(
+  pool: Pool,
+  itemId: string,
+): Promise<ListingSnapshotRow[]> {
+  const res = await pool.query<{
+    observed_at: Date;
+    current_price_usd: string;
+    current_bid_count: number;
+    ends_at: Date | null;
+  }>(
+    `SELECT observed_at, current_price_usd, current_bid_count, ends_at
+     FROM listing_snapshots
+     WHERE item_id = $1
+     ORDER BY observed_at ASC`,
+    [itemId],
+  );
+  return res.rows.map((row) => ({
+    observedAt: row.observed_at.toISOString(),
+    currentPriceUsd: Number(row.current_price_usd),
+    currentBidCount: row.current_bid_count,
+    endsAt: row.ends_at ? row.ends_at.toISOString() : null,
   }));
 }
 

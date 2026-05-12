@@ -371,6 +371,17 @@ main {
   color: var(--fg-muted);
 }
 
+.item-audit-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+  padding-bottom: 1px;
+}
+
+.item-audit-link:hover {
+  color: var(--fg);
+}
+
 .item-bid {
   font-size: 22px;
   font-weight: 700;
