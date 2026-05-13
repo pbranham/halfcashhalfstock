@@ -19,6 +19,7 @@ import { runMigrations } from './db/migrate.js';
 import {
   persistSnapshot,
   readBidsForItem,
+  readEndedListings,
   readListingDetail,
   readListingSnapshots,
   readOhlcStats,
@@ -208,7 +209,8 @@ export function createApp(deps: Deps): express.Express {
       const snapshot = await snapshotCache.get(`snapshot:${symbol}`, SNAPSHOT_TTL_MS, async () => {
         const [listings, quote] = await Promise.all([deps.fetchListings(), deps.fetchQuote(symbol)]);
         const enriched = await enrichWithBidHistory(deps, listings);
-        return composeSnapshot(enriched, quote);
+        const ended = deps.db ? await readEndedListings(deps.db) : [];
+        return composeSnapshot(enriched, quote, ended);
       });
       res
         .status(200)
@@ -573,7 +575,18 @@ export function createApp(deps: Deps): express.Express {
     }
   });
 
-  app.use(express.static(PUBLIC_DIR, { maxAge: '1h', extensions: ['html'] }));
+  app.use(express.static(PUBLIC_DIR, {
+    extensions: ['html'],
+    etag: true,
+    lastModified: true,
+    setHeaders: (res, filePath) => {
+      if (/\.(png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf)$/i.test(filePath)) {
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+      } else {
+        res.setHeader('Cache-Control', 'no-cache');
+      }
+    },
+  }));
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     const message = err instanceof Error ? err.message : 'unknown error';

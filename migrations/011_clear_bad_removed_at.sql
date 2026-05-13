@@ -1,0 +1,11 @@
+-- Hotfix: clear ALL removed_at values. The previous reconciliation logic
+-- assumed eBay's GetAllBidders returns every bid, but it actually returns
+-- one entry per unique bidder (their highest bid). When a bidder re-bid,
+-- their earlier DB entry stopped matching the API response and got
+-- incorrectly marked as removed.
+--
+-- We have no way to distinguish bids that were genuinely retracted from
+-- bids that were incorrectly flagged, so we restore everything. The
+-- reconciliation logic is being disabled going forward; until we have a
+-- reliable retraction-detection mechanism, all bids stay active.
+UPDATE bids SET removed_at = NULL WHERE removed_at IS NOT NULL;

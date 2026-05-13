@@ -122,6 +122,19 @@
       <section id="items" class="items" aria-live="polite">
         <div class="empty">Loading live auctions…</div>
       </section>
+
+      <section id="ended-section" class="ended-section" hidden>
+        <header class="ended-header">
+          <h2>Recently ended</h2>
+          <button id="ended-toggle" class="ended-toggle" type="button" aria-expanded="true">Hide</button>
+        </header>
+        <p class="ended-help">
+          Auctions that have ended in the last 14 days. Final price reflects the last
+          observed bid before the auction closed.
+        </p>
+        <section id="ended-totals" class="totals ended-totals-grid" aria-live="polite"></section>
+        <section id="ended-items" class="items ended-items" aria-live="polite"></section>
+      </section>
     </main>
     <footer>
       <p>

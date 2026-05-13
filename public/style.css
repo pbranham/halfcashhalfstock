@@ -441,6 +441,68 @@ main {
   color: var(--accent);
 }
 
+.tag-ended {
+  border-color: #888;
+  color: #aaa;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.ended-section {
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.ended-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.ended-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  opacity: 0.85;
+}
+
+.ended-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 0.3rem 0.7rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.ended-toggle:hover {
+  color: var(--fg);
+  border-color: var(--fg-muted);
+}
+
+.ended-help {
+  font-size: 0.85rem;
+  opacity: 0.7;
+  margin: 0 0 1rem;
+}
+
+.ended-section.is-collapsed .ended-totals-grid,
+.ended-section.is-collapsed .ended-items,
+.ended-section.is-collapsed .ended-help {
+  display: none;
+}
+
+.ended-item {
+  opacity: 0.85;
+}
+
+.ended-item .item-bid {
+  color: var(--fg-muted);
+}
+
 .empty {
   padding: 40px 0;
   text-align: center;

@@ -1,6 +1,7 @@
 import { splitHalfCashHalfStock, sumSplits, type HalfSplit } from './math.js';
 import type { Listing } from './ebay/seller.js';
 import type { PriceQuote } from './prices/types.js';
+import type { EndedListingRow } from './db/persist.js';
 
 export interface ListingView {
   itemId: string;
@@ -16,6 +17,20 @@ export interface ListingView {
   lastBidTime: string | null;
 }
 
+export interface EndedListingView {
+  itemId: string;
+  title: string;
+  imageUrl: string | null;
+  itemWebUrl: string | null;
+  isAuction: boolean;
+  endsAt: string | null;
+  endedAt: string;
+  finalPriceUsd: number;
+  finalBidCount: number;
+  currency: string;
+  split: HalfSplit | null;
+}
+
 export interface LastBidSummary {
   itemId: string;
   title: string;
@@ -27,6 +42,7 @@ export interface Snapshot {
   generatedAt: string;
   stock: PriceQuote;
   items: ListingView[];
+  endedItems: EndedListingView[];
   totals: {
     listingsCount: number;
     pricedCount: number;
@@ -34,10 +50,20 @@ export interface Snapshot {
     bidUsd: number;
     split: HalfSplit;
   };
+  endedTotals: {
+    listingsCount: number;
+    bidsCount: number;
+    bidUsd: number;
+    split: HalfSplit;
+  };
   lastBid: LastBidSummary | null;
 }
 
-export function composeSnapshot(listings: readonly Listing[], stock: PriceQuote): Snapshot {
+export function composeSnapshot(
+  listings: readonly Listing[],
+  stock: PriceQuote,
+  ended: readonly EndedListingRow[] = [],
+): Snapshot {
   const items: ListingView[] = listings.map((l) => ({
     itemId: l.itemId,
     title: l.title,
@@ -71,16 +97,38 @@ export function composeSnapshot(listings: readonly Listing[], stock: PriceQuote)
     }
   }
 
+  const endedItems: EndedListingView[] = ended.map((e) => ({
+    itemId: e.itemId,
+    title: e.title,
+    imageUrl: e.imageUrl,
+    itemWebUrl: e.itemWebUrl,
+    isAuction: e.isAuction,
+    endsAt: e.endsAt,
+    endedAt: e.endedAt,
+    finalPriceUsd: e.finalPriceUsd,
+    finalBidCount: e.finalBidCount,
+    currency: e.currency,
+    split: e.currency === 'USD' ? splitHalfCashHalfStock(e.finalPriceUsd, stock.price) : null,
+  }));
+  const endedPriced = endedItems.filter((i): i is EndedListingView & { split: HalfSplit } => i.split !== null);
+
   return {
     generatedAt: new Date().toISOString(),
     stock,
     items,
+    endedItems,
     totals: {
       listingsCount: items.length,
       pricedCount: priced.length,
       bidsCount: items.reduce((sum, i) => sum + (i.bidCount ?? 0), 0),
       bidUsd: priced.reduce((sum, i) => sum + i.priceUsd, 0),
       split: sumSplits(priced.map((i) => i.split)),
+    },
+    endedTotals: {
+      listingsCount: endedItems.length,
+      bidsCount: endedItems.reduce((sum, i) => sum + i.finalBidCount, 0),
+      bidUsd: endedPriced.reduce((sum, i) => sum + i.finalPriceUsd, 0),
+      split: sumSplits(endedPriced.map((i) => i.split)),
     },
     lastBid,
   };

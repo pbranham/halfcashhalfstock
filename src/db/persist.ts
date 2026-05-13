@@ -160,21 +160,92 @@ export async function reconcileBids(
 export async function persistSnapshot(
   pool: Pool,
   inputs: readonly SnapshotPersistInput[],
-): Promise<{ listings: number; bids: number; removedBids: number }> {
+): Promise<{ listings: number; bids: number; removedBids: number; endedListings: number }> {
   let listingsTouched = 0;
   let bidsInserted = 0;
-  let bidsRemoved = 0;
   for (const { listing, bids } of inputs) {
     await upsertListing(pool, listing);
     await insertListingSnapshotIfChanged(pool, listing);
     listingsTouched += 1;
-    if (bids) {
-      const { inserted, removed } = await reconcileBids(pool, listing.itemId, bids);
-      bidsInserted += inserted;
-      bidsRemoved += removed;
+    if (bids && bids.length > 0) {
+      // NOTE: we deliberately do NOT call reconcileBids here. eBay's
+      // GetAllBidders API returns one entry per unique bidder (their
+      // highest bid), not every individual bid. So when a bidder re-bids,
+      // their old DB entry won't match the new API response — but that
+      // doesn't mean the old bid was retracted. Reconciling against this
+      // incomplete data caused massive false-positive removals during
+      // active auctions. Until we have a reliable retraction-detection
+      // mechanism, just append (ON CONFLICT DO NOTHING) and never remove.
+      bidsInserted += await insertBids(pool, listing.itemId, bids);
     }
   }
-  return { listings: listingsTouched, bids: bidsInserted, removedBids: bidsRemoved };
+  const endedListings = await markEndedListings(pool, inputs.map((i) => i.listing.itemId));
+  return { listings: listingsTouched, bids: bidsInserted, removedBids: 0, endedListings };
+}
+
+export async function markEndedListings(pool: Pool, currentItemIds: readonly string[]): Promise<number> {
+  if (currentItemIds.length === 0) return 0;
+  const result = await pool.query(
+    `UPDATE listings
+     SET ended_at = NOW()
+     WHERE ended_at IS NULL
+       AND ends_at IS NOT NULL
+       AND ends_at < NOW()
+       AND NOT (item_id = ANY($1::text[]))`,
+    [Array.from(currentItemIds)],
+  );
+  return result.rowCount ?? 0;
+}
+
+export interface EndedListingRow {
+  itemId: string;
+  title: string;
+  imageUrl: string | null;
+  itemWebUrl: string | null;
+  isAuction: boolean;
+  endsAt: string | null;
+  endedAt: string;
+  finalPriceUsd: number;
+  finalBidCount: number;
+  currency: string;
+}
+
+export async function readEndedListings(
+  pool: Pool,
+  sinceDays: number = 14,
+): Promise<EndedListingRow[]> {
+  const since = new Date(Date.now() - sinceDays * 86_400_000);
+  const res = await pool.query<{
+    item_id: string;
+    title: string;
+    image_url: string | null;
+    item_web_url: string | null;
+    is_auction: boolean;
+    ends_at: Date | null;
+    ended_at: Date;
+    current_price_usd: string;
+    current_bid_count: number;
+    currency: string;
+  }>(
+    `SELECT item_id, title, image_url, item_web_url, is_auction,
+            ends_at, ended_at, current_price_usd, current_bid_count, currency
+     FROM listings
+     WHERE ended_at IS NOT NULL AND ended_at >= $1
+     ORDER BY ended_at DESC`,
+    [since],
+  );
+  return res.rows.map((row) => ({
+    itemId: row.item_id,
+    title: row.title,
+    imageUrl: row.image_url,
+    itemWebUrl: row.item_web_url,
+    isAuction: row.is_auction,
+    endsAt: row.ends_at ? row.ends_at.toISOString() : null,
+    endedAt: row.ended_at.toISOString(),
+    finalPriceUsd: Number(row.current_price_usd),
+    finalBidCount: row.current_bid_count,
+    currency: row.currency,
+  }));
 }
 
 export interface BidRow {
