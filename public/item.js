@@ -34,6 +34,13 @@ function fmtTime(iso) {
   return new Date(iso).toLocaleString();
 }
 
+function ebayItemUrl(itemId) {
+  if (!itemId) return 'https://www.ebay.com/';
+  const parts = String(itemId).split('|');
+  const legacyNumber = parts.length >= 2 && parts[1] ? parts[1] : itemId;
+  return `https://www.ebay.com/itm/${encodeURIComponent(legacyNumber)}`;
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -50,7 +57,7 @@ function showError(message) {
 }
 
 function renderHeader(listing) {
-  const ebayUrl = listing.itemWebUrl || `https://www.ebay.com/itm/${encodeURIComponent(listing.itemId)}`;
+  const ebayUrl = listing.itemWebUrl || ebayItemUrl(listing.itemId);
   const img = listing.imageUrl ? `<img src="${escapeHtml(listing.imageUrl)}" alt="" loading="lazy" />` : '';
   headerEl.innerHTML = `
     ${img}
