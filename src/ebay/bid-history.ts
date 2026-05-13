@@ -13,11 +13,6 @@ export interface CachedBidHistory {
   lastBidAmount: number | null;
 }
 
-// Permanent cache keyed by (itemId, bidCount). A given bid count for a given
-// item is immutable — once we've fetched the bid history at bid count N,
-// it never changes. New bids increase the count, which becomes a new key.
-const bidHistoryCache = new Map<string, CachedBidHistory>();
-
 export async function fetchBidHistory(
   itemId: string,
   currentBidCount: number,
@@ -25,14 +20,10 @@ export async function fetchBidHistory(
   userToken: string,
   db?: Pool | null,
 ): Promise<CachedBidHistory | null> {
-  const cacheKey = `${itemId}|${currentBidCount}`;
-  const cached = bidHistoryCache.get(cacheKey);
-  if (cached) return cached;
-
   try {
     let history: ItemBidHistory;
 
-    const dbBids = db ? await checkDbBids(db, itemId) : null;
+    const dbBids = db ? await checkDbActiveBids(db, itemId) : null;
     if (dbBids && dbBids.length === currentBidCount) {
       history = {
         itemId,
@@ -49,25 +40,24 @@ export async function fetchBidHistory(
     }
 
     const lastBid = history.bids.length > 0 ? history.bids[history.bids.length - 1] : null;
-    const result: CachedBidHistory = {
+    return {
       bidCount: history.bidCount,
       currentPrice: history.currentPrice,
       bids: history.bids,
       lastBidTime: lastBid?.bidTime ?? null,
       lastBidAmount: lastBid?.bidAmount ?? null,
     };
-
-    bidHistoryCache.set(cacheKey, result);
-    return result;
   } catch {
     return null;
   }
 }
 
-async function checkDbBids(pool: Pool, itemId: string): Promise<BidRecord[] | null> {
+async function checkDbActiveBids(pool: Pool, itemId: string): Promise<BidRecord[] | null> {
   try {
     const result = await pool.query(
-      'SELECT bidder, bid_time, bid_amount_usd FROM bids WHERE item_id = $1 ORDER BY bid_time ASC',
+      `SELECT bidder, bid_time, bid_amount_usd FROM bids
+       WHERE item_id = $1 AND removed_at IS NULL
+       ORDER BY bid_time ASC`,
       [itemId],
     );
     if (result.rows.length === 0) return null;

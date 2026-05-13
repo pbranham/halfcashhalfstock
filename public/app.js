@@ -224,6 +224,14 @@ function renderItem(item, symbol) {
   }
   const remaining = timeRemaining(item.endsAt);
   if (remaining) meta.appendChild(el('span', { textContent: remaining }));
+  meta.appendChild(
+    el('a', {
+      class: 'item-audit-link',
+      href: `/item?id=${encodeURIComponent(item.itemId)}`,
+      textContent: 'history →',
+      title: 'View bid and price history audit for this item',
+    }),
+  );
   body.appendChild(meta);
 
   const bidRow = el('div', { class: 'item-bid-row' });

@@ -283,19 +283,116 @@
   background: #5da06e;
 }
 
-.hourly-bar:hover::after {
-  content: attr(data-label);
-  position: absolute;
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #000;
-  color: #fff;
+.hourly-bar.is-selected {
+  background: #a5e8b6;
+  outline: 2px solid #fff;
+}
+
+.hourly-bar.is-selected.dev {
+  background: #ffd54f;
+}
+
+.hourly-detail {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.8rem;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  min-height: 1.5em;
+  opacity: 0.85;
+}
+
+.maintenance-section {
+  border-color: #5a3a2a;
+}
+
+.maintenance-help {
+  font-size: 0.8rem;
+  opacity: 0.7;
+  margin: 0 0 1rem;
+}
+
+.maintenance-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.maintenance-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.maintenance-row .env-pill {
+  flex: 0 0 auto;
+}
+
+.maintenance-row .row-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.maintenance-row input[type="text"] {
   padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border, #2d5b3e);
   border-radius: 4px;
-  font-size: 0.75rem;
-  white-space: nowrap;
-  z-index: 10;
+  background: var(--card-bg, #142b1d);
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+  width: 7rem;
+}
+
+.admin-btn-danger {
+  background: #5a1f1f;
+  color: #fff;
+  border-color: #7a2f2f;
+}
+
+.admin-btn-danger:hover {
+  background: #7a2f2f;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 1rem;
+}
+
+.modal[hidden] {
+  display: none;
+}
+
+.modal-content {
+  background: var(--card-bg, #142b1d);
+  border: 1px solid var(--border, #2d5b3e);
+  border-radius: 8px;
+  padding: 1.5rem;
+  max-width: 420px;
+  width: 100%;
+}
+
+.modal-content p {
+  margin: 0 0 1.25rem;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
 }
 
 .data-table {

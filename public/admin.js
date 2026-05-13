@@ -2,6 +2,8 @@ const STORAGE_KEY = 'hchs.admin.token';
 const REFRESH_INTERVAL_MS = 30_000;
 const LIVE_REFRESH_INTERVAL_MS = 5_000;
 
+let selectedBarKey = null;
+
 const authScreen = document.getElementById('auth-screen');
 const dashboard = document.getElementById('dashboard');
 const authForm = document.getElementById('auth-form');
@@ -18,6 +20,12 @@ const statusTable = document.getElementById('status-table');
 const uaTable = document.getElementById('ua-table');
 const liveGrid = document.getElementById('live-grid');
 const liveUpdated = document.getElementById('live-updated');
+const hourlyDetail = document.getElementById('hourly-detail');
+const maintenanceControls = document.getElementById('maintenance-controls');
+const confirmModal = document.getElementById('confirm-modal');
+const confirmText = document.getElementById('confirm-text');
+const confirmOk = document.getElementById('confirm-ok');
+const confirmCancel = document.getElementById('confirm-cancel');
 const envFilter = document.getElementById('env-filter');
 const windowFilter = document.getElementById('window-filter');
 const refreshBtn = document.getElementById('refresh-btn');
@@ -213,6 +221,7 @@ function renderHourlyChart(data) {
   hourlyChart.innerHTML = '';
   if (!data.hourly || data.hourly.length === 0) {
     hourlyChart.innerHTML = '<p style="opacity: 0.6;">No requests in this window.</p>';
+    hourlyDetail.textContent = '';
     return;
   }
 
@@ -234,16 +243,44 @@ function renderHourlyChart(data) {
   );
   const maxCount = Math.max(...sorted.map((b) => b.count), 1);
 
+  let foundSelected = false;
   for (const bucket of sorted) {
-    const bar = document.createElement('div');
+    const bar = document.createElement('button');
+    bar.type = 'button';
     bar.className = isDevEnv(bucket.environment) ? 'hourly-bar dev' : 'hourly-bar';
     const heightPct = Math.max(2, (bucket.count / maxCount) * 100);
     bar.style.height = `${heightPct}%`;
     const date = new Date(bucket.hour);
+    const key = `${bucket.hour}|${bucket.environment}`;
     const label = `${date.toLocaleString()} — ${bucket.environment}: ${bucket.count} req`;
-    bar.setAttribute('data-label', label);
+    bar.setAttribute('aria-label', label);
+    bar.dataset.key = key;
+    bar.dataset.label = label;
+    if (key === selectedBarKey) {
+      bar.classList.add('is-selected');
+      foundSelected = true;
+    }
+    bar.addEventListener('click', () => selectBar(bar, label));
     hourlyChart.appendChild(bar);
   }
+
+  if (foundSelected) {
+    const selected = hourlyChart.querySelector('.hourly-bar.is-selected');
+    if (selected) hourlyDetail.textContent = selected.dataset.label;
+  } else {
+    const last = sorted[sorted.length - 1];
+    if (last) {
+      const lastDate = new Date(last.hour);
+      hourlyDetail.textContent = `Latest: ${lastDate.toLocaleString()} — ${last.environment}: ${last.count} req · Tap any bar for details.`;
+    }
+  }
+}
+
+function selectBar(bar, label) {
+  hourlyChart.querySelectorAll('.hourly-bar.is-selected').forEach((el) => el.classList.remove('is-selected'));
+  bar.classList.add('is-selected');
+  selectedBarKey = bar.dataset.key;
+  hourlyDetail.textContent = label;
 }
 
 function renderEndpointTable(data) {
@@ -345,6 +382,107 @@ function populateEnvFilter(data) {
   envFilter.value = current;
 }
 
+function renderMaintenance(data) {
+  maintenanceControls.innerHTML = '';
+  if (!data.environments || data.environments.length === 0) {
+    maintenanceControls.innerHTML = '<p style="opacity: 0.6;">No environments to manage.</p>';
+    return;
+  }
+  for (const env of data.environments) {
+    const row = document.createElement('div');
+    row.className = 'maintenance-row';
+    const pillClass = isDevEnv(env) ? 'env-pill dev' : 'env-pill';
+    row.innerHTML = `
+      <span class="${pillClass}">${escapeHtml(env)}</span>
+      <input type="text" placeholder="rename to..." class="rename-input" data-from="${escapeHtml(env)}" />
+      <div class="row-actions">
+        <button type="button" class="admin-btn rename-btn" data-from="${escapeHtml(env)}">Rename</button>
+        <button type="button" class="admin-btn admin-btn-danger delete-btn" data-env="${escapeHtml(env)}">Delete</button>
+      </div>
+    `;
+    maintenanceControls.appendChild(row);
+  }
+
+  maintenanceControls.querySelectorAll('.delete-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const env = btn.dataset.env;
+      confirmAction(
+        `Delete ALL data for environment "${env}"? This permanently removes request_stats, session_stats, and seen_ips rows. Cannot be undone.`,
+        () => doCleanup({ action: 'delete_environment', environment: env }),
+      );
+    });
+  });
+  maintenanceControls.querySelectorAll('.rename-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const from = btn.dataset.from;
+      const input = maintenanceControls.querySelector(`.rename-input[data-from="${from}"]`);
+      const to = (input?.value || '').trim();
+      if (!to) {
+        alert('Enter a target environment name to rename to.');
+        return;
+      }
+      if (!/^[a-zA-Z0-9_-]{1,32}$/.test(to)) {
+        alert('Target name must be alphanumeric (with - or _), max 32 chars.');
+        return;
+      }
+      confirmAction(
+        `Rename environment "${from}" to "${to}"? Rows that conflict with existing "${to}" data will be discarded.`,
+        () => doCleanup({ action: 'rename_environment', from, to }),
+      );
+    });
+  });
+}
+
+let pendingConfirm = null;
+
+function confirmAction(text, onConfirm) {
+  confirmText.textContent = text;
+  pendingConfirm = onConfirm;
+  confirmModal.hidden = false;
+}
+
+function dismissConfirm() {
+  confirmModal.hidden = true;
+  pendingConfirm = null;
+}
+
+confirmCancel.addEventListener('click', dismissConfirm);
+confirmOk.addEventListener('click', async () => {
+  const fn = pendingConfirm;
+  dismissConfirm();
+  if (fn) await fn();
+});
+
+async function doCleanup(payload) {
+  const token = getToken();
+  if (!token) return;
+  try {
+    const response = await fetch('/api/admin/cleanup', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      alert(`Cleanup failed (${response.status}): ${detail || 'unknown error'}`);
+      return;
+    }
+    const result = await response.json();
+    const counts = result.deleted || result.updated || {};
+    const summary = Object.entries(counts)
+      .map(([k, v]) => `${k}: ${v}`)
+      .join(', ');
+    alert(`Done. ${result.action}: ${summary}`);
+    await loadDashboard();
+    await loadLive();
+  } catch (err) {
+    alert(`Cleanup error: ${err.message}`);
+  }
+}
+
 async function loadDashboard() {
   const token = getToken();
   if (!token) {
@@ -363,6 +501,7 @@ async function loadDashboard() {
     renderEndpointTable(data);
     renderStatusTable(data);
     renderUaTable(data);
+    renderMaintenance(data);
   } catch (err) {
     if (err.message !== 'unauthorized') {
       errorBanner.textContent = `Error: ${err.message}`;

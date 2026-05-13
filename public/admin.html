@@ -76,6 +76,7 @@
         <section class="chart-section">
           <h3 id="hourly-title">Requests by hour</h3>
           <div id="hourly-chart" class="hourly-chart"></div>
+          <div id="hourly-detail" class="hourly-detail">Tap a bar to see details.</div>
         </section>
 
         <section class="chart-section">
@@ -92,7 +93,26 @@
           <h3>By client type</h3>
           <div id="ua-table" class="data-table"></div>
         </section>
+
+        <section class="chart-section maintenance-section">
+          <h3>Maintenance</h3>
+          <p class="maintenance-help">
+            Use these tools to clean up test data. All actions are permanent and
+            cannot be undone.
+          </p>
+          <div id="maintenance-controls" class="maintenance-controls"></div>
+        </section>
       </section>
+
+      <div id="confirm-modal" class="modal" hidden>
+        <div class="modal-content">
+          <p id="confirm-text"></p>
+          <div class="modal-actions">
+            <button id="confirm-cancel" class="admin-btn" type="button">Cancel</button>
+            <button id="confirm-ok" class="admin-btn admin-btn-danger" type="button">Confirm</button>
+          </div>
+        </div>
+      </div>
     </main>
     <script type="module" src="/admin.js"></script>
   </body>

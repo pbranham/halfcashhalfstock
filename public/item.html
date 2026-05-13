@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Item audit — halfcashhalfstock</title>
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#2d5b3e" />
+    <meta name="robots" content="noindex,nofollow" />
+    <script src="/theme-init.js"></script>
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/item.css" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  </head>
+  <body class="item-body">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Back to dashboard">
+        <span class="brand-name">← halfcashhalfstock</span>
+      </a>
+    </header>
+    <main class="item-main">
+      <div id="loading" class="loading">Loading…</div>
+      <div id="error" class="error-banner" hidden></div>
+
+      <section id="item-header" class="item-header" hidden></section>
+
+      <section class="item-section" id="current-section" hidden>
+        <h3>Current state</h3>
+        <div id="current-state" class="stat-grid"></div>
+      </section>
+
+      <section class="item-section" id="chart-section" hidden>
+        <h3>Price &amp; bid count over time</h3>
+        <div class="chart-legend">
+          <span><span class="swatch line-bid"></span>Current bid (USD)</span>
+          <span><span class="swatch line-count"></span>Bid count</span>
+        </div>
+        <div id="chart-wrap" class="chart-wrap"></div>
+        <p class="chart-help" id="chart-help">Hover or tap a point for details.</p>
+      </section>
+
+      <section class="item-section" id="bids-section" hidden>
+        <h3>
+          Bid timeline
+          <span id="bids-summary" class="section-summary"></span>
+        </h3>
+        <div id="bids-table" class="data-table"></div>
+      </section>
+
+      <section class="item-section" id="snapshots-section" hidden>
+        <h3>Observed listing changes</h3>
+        <div id="snapshots-table" class="data-table"></div>
+      </section>
+    </main>
+    <script type="module" src="/item.js"></script>
+  </body>
+</html>
