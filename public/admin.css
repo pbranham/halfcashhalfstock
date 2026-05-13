@@ -405,6 +405,20 @@
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
+.inspect-output {
+  margin-top: 0.75rem;
+  padding: 0.8rem 1rem;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border, #2d5b3e);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
 .data-table {
   overflow-x: auto;
 }

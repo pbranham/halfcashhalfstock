@@ -27,6 +27,9 @@ const checkRemovedBidsBtn = document.getElementById('check-removed-bids-btn');
 const restoreListingsBtn = document.getElementById('restore-listings-btn');
 const backfillNowBtn = document.getElementById('backfill-now-btn');
 const resetBackfillBtn = document.getElementById('reset-backfill-btn');
+const inspectItemInput = document.getElementById('inspect-item-id');
+const inspectBtn = document.getElementById('inspect-btn');
+const inspectOutput = document.getElementById('inspect-output');
 const recoveryResult = document.getElementById('recovery-result');
 const confirmModal = document.getElementById('confirm-modal');
 const confirmText = document.getElementById('confirm-text');
@@ -628,6 +631,30 @@ if (backfillNowBtn) {
 if (resetBackfillBtn) {
   resetBackfillBtn.addEventListener('click', () => {
     confirmAction('Reset backfill attempt counters on all ended listings? They will be re-attempted on the next backfill cycle.', () => recoveryFetch('reset_backfill_attempts'));
+  });
+}
+if (inspectBtn) {
+  inspectBtn.addEventListener('click', async () => {
+    const itemId = (inspectItemInput.value || '').trim();
+    if (!itemId) {
+      alert('Enter an item ID like v1|112233|0');
+      return;
+    }
+    const token = getToken();
+    if (!token) return;
+    inspectOutput.hidden = false;
+    inspectOutput.textContent = 'Fetching...';
+    try {
+      const response = await fetch('/api/admin/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'inspect_bid_history', itemId }),
+      });
+      const data = await response.json();
+      inspectOutput.textContent = JSON.stringify(data, null, 2);
+    } catch (err) {
+      inspectOutput.textContent = `Error: ${err.message}`;
+    }
   });
 }
 

@@ -131,8 +131,23 @@
                 <button id="backfill-now-btn" type="button" class="admin-btn admin-btn-primary">Backfill now</button>
               </div>
             </div>
+            <div class="maintenance-row">
+              <span>Inspect one item (raw eBay API response)</span>
+              <input
+                id="inspect-item-id"
+                type="text"
+                class="rename-input"
+                placeholder="v1|112233|0"
+                spellcheck="false"
+                autocomplete="off"
+              />
+              <div class="row-actions">
+                <button id="inspect-btn" type="button" class="admin-btn">Inspect</button>
+              </div>
+            </div>
           </div>
           <div id="recovery-result" class="recovery-result" hidden></div>
+          <pre id="inspect-output" class="inspect-output" hidden></pre>
         </section>
       </section>
 

@@ -469,7 +469,7 @@ export function createApp(deps: Deps): express.Express {
       return;
     }
     try {
-      const body = req.body as { action?: string; environment?: string; from?: string; to?: string } | undefined;
+      const body = req.body as { action?: string; environment?: string; from?: string; to?: string; itemId?: string } | undefined;
       const action = body?.action;
 
       if (action === 'delete_environment') {
@@ -597,6 +597,71 @@ export function createApp(deps: Deps): express.Express {
           deps.log,
         );
         res.status(200).json({ action: 'backfill_ended_now', ...result });
+        return;
+      }
+
+      if (action === 'inspect_bid_history') {
+        const itemId = (body?.itemId ?? '').trim();
+        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
+          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
+          return;
+        }
+        const userToken = resolveEbayTradingUserToken(deps.config);
+        if (!deps.config.EBAY_DEV_ID || !userToken) {
+          res.status(503).json({
+            error: 'inspect_unavailable',
+            detail: 'EBAY_DEV_ID and EBAY_USER_TOKEN must be set',
+          });
+          return;
+        }
+        try {
+          const { getItemBidHistory } = await import('./ebay/trading.js');
+          const history = await getItemBidHistory(itemId, deps.config.EBAY_DEV_ID, userToken);
+          const dbState = await deps.db.query<{
+            current_price_usd: string;
+            current_bid_count: number;
+            ended_at: Date | null;
+            last_backfilled_at: Date | null;
+            backfill_attempts: number;
+          }>(
+            `SELECT current_price_usd, current_bid_count, ended_at,
+                    last_backfilled_at, backfill_attempts
+             FROM listings WHERE item_id = $1`,
+            [itemId],
+          );
+          const dbBids = await deps.db.query<{ count: string }>(
+            `SELECT COUNT(*)::TEXT AS count FROM bids WHERE item_id = $1`,
+            [itemId],
+          );
+          const dbRow = dbState.rows[0];
+          res.status(200).json({
+            action: 'inspect_bid_history',
+            itemId,
+            api: {
+              bidCount: history.bidCount,
+              currentPrice: history.currentPrice,
+              currentPriceType: typeof history.currentPrice,
+              bidsReturned: history.bids.length,
+              bidsSample: history.bids.slice(0, 5),
+              maxBidAmount: history.bids.length > 0 ? Math.max(...history.bids.map((b) => b.bidAmount)) : 0,
+            },
+            db: {
+              currentPriceUsd: dbRow ? Number(dbRow.current_price_usd) : null,
+              currentBidCount: dbRow?.current_bid_count ?? null,
+              endedAt: dbRow?.ended_at ? dbRow.ended_at.toISOString() : null,
+              lastBackfilledAt: dbRow?.last_backfilled_at ? dbRow.last_backfilled_at.toISOString() : null,
+              backfillAttempts: dbRow?.backfill_attempts ?? null,
+              totalBidRows: Number(dbBids.rows[0]?.count ?? '0'),
+            },
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(200).json({
+            action: 'inspect_bid_history',
+            itemId,
+            error: message,
+          });
+        }
         return;
       }
 
