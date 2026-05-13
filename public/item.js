@@ -180,20 +180,21 @@ function renderChart(snapshots, listing, bids) {
   const pricePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(p.t)} ${yPriceFor(p.price)}`).join(' ');
   const countPath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(p.t)} ${yCountFor(p.count)}`).join(' ');
 
-  const xAxisLabels = [tMin, (tMin + tMax) / 2, tMax].map((t) => {
+  const xAxisLabels = [tMin, (tMin + tMax) / 2, tMax].map((t, i) => {
     const x = xFor(t);
+    const anchor = i === 0 ? 'start' : i === 2 ? 'end' : 'middle';
     const label = new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-    return `<text x="${x}" y="${H - 6}" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.6">${escapeHtml(label)}</text>`;
+    return `<text x="${x}" y="${H - 6}" text-anchor="${anchor}" font-size="13" fill="currentColor" opacity="0.85">${escapeHtml(label)}</text>`;
   }).join('');
 
   const yLeftLabels = [priceMin, (priceMin + priceMax) / 2, priceMax].map((p) => {
     const y = yPriceFor(p);
-    return `<text x="${PAD.left - 6}" y="${y + 3}" text-anchor="end" font-size="10" fill="#4caf50" opacity="0.85">${fmtUsd(p)}</text>`;
+    return `<text x="${PAD.left - 6}" y="${y + 4}" text-anchor="end" font-size="13" fill="#4caf50" opacity="0.95">${fmtUsd(p)}</text>`;
   }).join('');
 
   const yRightLabels = [countMin, (countMin + countMax) / 2, countMax].map((c) => {
     const y = yCountFor(c);
-    return `<text x="${W - PAD.right + 6}" y="${y + 3}" text-anchor="start" font-size="10" fill="#ffb74d" opacity="0.85">${fmtCount(Math.round(c))}</text>`;
+    return `<text x="${W - PAD.right + 6}" y="${y + 4}" text-anchor="start" font-size="13" fill="#ffb74d" opacity="0.95">${fmtCount(Math.round(c))}</text>`;
   }).join('');
 
   const dots = points.map((p, i) => `
@@ -206,20 +207,86 @@ function renderChart(snapshots, listing, bids) {
       <path d="${pricePath}" stroke="#4caf50" stroke-width="2" fill="none" />
       <path d="${countPath}" stroke="#ffb74d" stroke-width="1.5" fill="none" stroke-dasharray="4,3" />
       ${dots}
+      <line class="chart-guide" x1="0" y1="${PAD.top}" x2="0" y2="${PAD.top + innerH}" stroke="#fff" stroke-width="1" stroke-dasharray="3,3" opacity="0" />
+      <circle class="chart-marker-price" cx="0" cy="0" r="6" fill="#a5e8b6" stroke="#0d1f15" stroke-width="2" opacity="0" pointer-events="none" />
+      <circle class="chart-marker-count" cx="0" cy="0" r="5" fill="#ffd54f" stroke="#0d1f15" stroke-width="2" opacity="0" pointer-events="none" />
+      <rect class="chart-hit" x="${PAD.left}" y="${PAD.top}" width="${innerW}" height="${innerH}" fill="transparent" />
       ${xAxisLabels}
       ${yLeftLabels}
       ${yRightLabels}
     </svg>
   `;
 
+  const svg = chartWrap.querySelector('svg');
+  const guide = svg.querySelector('.chart-guide');
+  const markerPrice = svg.querySelector('.chart-marker-price');
+  const markerCount = svg.querySelector('.chart-marker-count');
+  const hitArea = svg.querySelector('.chart-hit');
+
+  const updateFromX = (clientX) => {
+    const rect = svg.getBoundingClientRect();
+    const ratio = (clientX - rect.left) / rect.width;
+    const svgX = ratio * W;
+    let closestIdx = 0;
+    let closestDx = Infinity;
+    for (let i = 0; i < points.length; i++) {
+      const dx = Math.abs(xFor(points[i].t) - svgX);
+      if (dx < closestDx) {
+        closestDx = dx;
+        closestIdx = i;
+      }
+    }
+    const p = points[closestIdx];
+    const px = xFor(p.t);
+    guide.setAttribute('x1', px);
+    guide.setAttribute('x2', px);
+    guide.setAttribute('opacity', '0.5');
+    markerPrice.setAttribute('cx', px);
+    markerPrice.setAttribute('cy', yPriceFor(p.price));
+    markerPrice.setAttribute('opacity', '1');
+    markerCount.setAttribute('cx', px);
+    markerCount.setAttribute('cy', yCountFor(p.count));
+    markerCount.setAttribute('opacity', '1');
+    chartHelp.textContent = `${fmtTime(new Date(p.t).toISOString())} — ${fmtUsd(p.price)} · ${fmtCount(p.count)} bids`;
+  };
+
+  hitArea.style.cursor = 'crosshair';
+  hitArea.addEventListener('mousemove', (e) => updateFromX(e.clientX));
+  hitArea.addEventListener('touchstart', (e) => {
+    if (e.touches[0]) {
+      updateFromX(e.touches[0].clientX);
+      e.preventDefault();
+    }
+  }, { passive: false });
+  hitArea.addEventListener('touchmove', (e) => {
+    if (e.touches[0]) {
+      updateFromX(e.touches[0].clientX);
+      e.preventDefault();
+    }
+  }, { passive: false });
+
   chartWrap.querySelectorAll('.chart-dot').forEach((dot) => {
     dot.style.cursor = 'pointer';
-    dot.addEventListener('click', () => {
+    dot.addEventListener('click', (e) => {
+      e.stopPropagation();
       const idx = Number(dot.dataset.idx);
       const p = points[idx];
+      const px = xFor(p.t);
+      guide.setAttribute('x1', px);
+      guide.setAttribute('x2', px);
+      guide.setAttribute('opacity', '0.5');
+      markerPrice.setAttribute('cx', px);
+      markerPrice.setAttribute('cy', yPriceFor(p.price));
+      markerPrice.setAttribute('opacity', '1');
+      markerCount.setAttribute('cx', px);
+      markerCount.setAttribute('cy', yCountFor(p.count));
+      markerCount.setAttribute('opacity', '1');
       chartHelp.textContent = `${fmtTime(new Date(p.t).toISOString())} — ${fmtUsd(p.price)} · ${fmtCount(p.count)} bids`;
     });
   });
+
+  const last = points[points.length - 1];
+  chartHelp.textContent = `${fmtTime(new Date(last.t).toISOString())} — ${fmtUsd(last.price)} · ${fmtCount(last.count)} bids · Drag along the chart for other times.`;
 
   chartSection.hidden = false;
 }
@@ -241,14 +308,13 @@ function renderBids(bids) {
     const bid = sorted[i];
     if (bid.removedAt) {
       const noteId = `note-${i}`;
-      html += `<tr class="bid-row is-removed has-note" data-note-id="${noteId}">
-        <td>${escapeHtml(fmtTime(bid.bidTime))}</td>
-        <td>${escapeHtml(bid.bidder || 'unknown')}</td>
-        <td class="numeric">${fmtUsd(bid.bidAmountUsd)}</td>
+      html += `<tr class="bid-row is-removed has-note">
+        <td><button type="button" class="bid-note-toggle" data-note-id="${noteId}" aria-expanded="true" aria-label="Toggle removal note">▾</button><span class="bid-strike">${escapeHtml(fmtTime(bid.bidTime))}</span></td>
+        <td><span class="bid-strike">${escapeHtml(bid.bidder || 'unknown')}</span></td>
+        <td class="numeric"><span class="bid-strike">${fmtUsd(bid.bidAmountUsd)}</span></td>
       </tr>
       <tr class="bid-note-row" id="${noteId}">
-        <td colspan="3">
-          <button type="button" class="bid-note-toggle" data-note-id="${noteId}" aria-expanded="true">▾</button>
+        <td colspan="3" class="bid-note-cell">
           <span class="bid-note">Bid retracted or canceled — no longer counted toward total. Detected ${escapeHtml(fmtTime(bid.removedAt))}.</span>
         </td>
       </tr>`;
@@ -268,11 +334,11 @@ function renderBids(bids) {
       e.stopPropagation();
       const noteId = btn.dataset.noteId;
       const noteRow = document.getElementById(noteId);
-      const note = noteRow?.querySelector('.bid-note');
+      if (!noteRow) return;
       const expanded = btn.getAttribute('aria-expanded') === 'true';
       btn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
       btn.textContent = expanded ? '▸' : '▾';
-      if (note) note.hidden = expanded;
+      noteRow.hidden = expanded;
     });
   });
 }

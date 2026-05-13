@@ -177,26 +177,38 @@
 }
 
 .bid-row.is-removed td {
-  opacity: 0.6;
-  text-decoration: line-through;
+  opacity: 0.85;
 }
 
-.bid-note-row td {
-  background: rgba(90, 31, 31, 0.18);
-  border-bottom: 1px solid var(--border, #2d5b3e);
-  padding: 0.4rem 0.65rem 0.5rem 1.5rem;
-  font-size: 0.8rem;
-  color: #ffd0d0;
+.bid-strike {
+  text-decoration: line-through;
+  opacity: 0.6;
 }
 
 .bid-note-toggle {
   background: none;
   border: none;
-  color: inherit;
+  color: #ff9090;
   cursor: pointer;
-  font-size: 0.85rem;
-  padding: 0 0.35rem 0 0;
-  margin-right: 0.25rem;
+  font-size: 0.75rem;
+  padding: 0 0.4rem 0 0;
+  margin: 0;
+  line-height: 1;
+  vertical-align: baseline;
+  display: inline-block;
+  text-decoration: none;
+}
+
+.bid-note-toggle:hover {
+  color: #ffb0b0;
+}
+
+.bid-note-cell {
+  background: rgba(90, 31, 31, 0.18);
+  border-bottom: 1px solid var(--border, #2d5b3e);
+  padding: 0.4rem 0.65rem 0.5rem 1.5rem !important;
+  font-size: 0.8rem;
+  color: #ffd0d0;
 }
 
 .bid-note {
