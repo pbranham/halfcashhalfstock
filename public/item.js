@@ -135,6 +135,47 @@ function buildChartPointsFromBids(bids, listing) {
   return points;
 }
 
+let chartState = null;
+
+function generateTimeLabels(tMin, tMax) {
+  const range = tMax - tMin;
+  const hourMs = 3_600_000;
+  const dayMs = 86_400_000;
+  const labels = [];
+
+  if (range < hourMs * 12) {
+    const stepMs = range < hourMs * 2 ? hourMs / 2 : hourMs;
+    const start = new Date(tMin);
+    start.setMinutes(0, 0, 0);
+    if (start.getTime() < tMin) start.setTime(start.getTime() + stepMs);
+    for (let t = start.getTime(); t <= tMax; t += stepMs) {
+      const d = new Date(t);
+      labels.push({
+        t,
+        primary: d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }),
+        secondary: null,
+        isDayBoundary: d.getHours() === 0 && d.getMinutes() === 0,
+      });
+    }
+  } else {
+    const rangeDays = range / dayMs;
+    const stepDays = Math.max(1, Math.ceil(rangeDays / 8));
+    const start = new Date(tMin);
+    start.setHours(0, 0, 0, 0);
+    if (start.getTime() < tMin) start.setDate(start.getDate() + 1);
+    for (let t = start.getTime(); t <= tMax; t += stepDays * dayMs) {
+      const d = new Date(t);
+      labels.push({
+        t,
+        primary: d.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' }),
+        secondary: null,
+        isDayBoundary: true,
+      });
+    }
+  }
+  return labels;
+}
+
 function renderChart(snapshots, listing, bids) {
   let points = buildChartPointsFromBids(bids, listing);
 
@@ -153,12 +194,26 @@ function renderChart(snapshots, listing, bids) {
   if (points.length < 2) {
     chartWrap.innerHTML = '<p style="opacity: 0.6;">Need at least 2 observations to chart.</p>';
     chartSection.hidden = false;
+    chartState = null;
     return;
   }
 
+  chartState = { points, listing };
+  drawChart();
+  chartSection.hidden = false;
+}
+
+function defaultChartHelp(points) {
+  const last = points[points.length - 1];
+  return `${fmtTime(new Date(last.t).toISOString())} — ${fmtUsd(last.price)} · ${fmtCount(last.count)} bids · Drag along the chart to scrub.`;
+}
+
+function drawChart() {
+  if (!chartState) return;
+  const { points, listing } = chartState;
   const W = chartWrap.clientWidth || 900;
-  const H = chartWrap.clientHeight || 260;
-  const PAD = { top: 16, right: 48, bottom: 28, left: 56 };
+  const H = 280;
+  const PAD = { top: 16, right: 56, bottom: 36, left: 68 };
   const innerW = W - PAD.left - PAD.right;
   const innerH = H - PAD.top - PAD.bottom;
 
@@ -177,37 +232,47 @@ function renderChart(snapshots, listing, bids) {
   const yPriceFor = (p) => PAD.top + innerH - ((p - priceMin) / priceRange) * innerH;
   const yCountFor = (c) => PAD.top + innerH - ((c - countMin) / countRange) * innerH;
 
-  const pricePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(p.t)} ${yPriceFor(p.price)}`).join(' ');
-  const countPath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(p.t)} ${yCountFor(p.count)}`).join(' ');
+  const pricePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(p.t).toFixed(1)} ${yPriceFor(p.price).toFixed(1)}`).join(' ');
+  const countPath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(p.t).toFixed(1)} ${yCountFor(p.count).toFixed(1)}`).join(' ');
 
-  const xAxisLabels = [tMin, (tMin + tMax) / 2, tMax].map((t, i) => {
-    const x = xFor(t);
-    const anchor = i === 0 ? 'start' : i === 2 ? 'end' : 'middle';
-    const label = new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-    return `<text x="${x}" y="${H - 6}" text-anchor="${anchor}" font-size="13" fill="currentColor" opacity="0.85">${escapeHtml(label)}</text>`;
+  const timeLabels = generateTimeLabels(tMin, tMax);
+
+  const gridLines = timeLabels
+    .filter((l) => l.t > tMin && l.t < tMax)
+    .map((l) => {
+      const x = xFor(l.t);
+      const stroke = l.isDayBoundary ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.05)';
+      return `<line x1="${x.toFixed(1)}" y1="${PAD.top}" x2="${x.toFixed(1)}" y2="${PAD.top + innerH}" stroke="${stroke}" stroke-width="1" />`;
+    }).join('');
+
+  const xAxisLabels = timeLabels.map((l) => {
+    const x = xFor(l.t);
+    const clampedX = Math.max(PAD.left + 4, Math.min(W - PAD.right - 4, x));
+    return `<text x="${clampedX.toFixed(1)}" y="${H - 14}" text-anchor="middle" font-size="12" font-weight="500" fill="currentColor" opacity="0.85">${escapeHtml(l.primary)}</text>`;
   }).join('');
 
-  const yLeftLabels = [priceMin, (priceMin + priceMax) / 2, priceMax].map((p) => {
+  const yLeftLabels = [priceMin, priceMin + priceRange / 2, priceMax].map((p) => {
     const y = yPriceFor(p);
-    return `<text x="${PAD.left - 6}" y="${y + 4}" text-anchor="end" font-size="13" fill="#4caf50" opacity="0.95">${fmtUsd(p)}</text>`;
+    return `<text x="${PAD.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="12" font-weight="500" fill="#4caf50" opacity="0.95">${fmtUsd(p)}</text>`;
   }).join('');
 
-  const yRightLabels = [countMin, (countMin + countMax) / 2, countMax].map((c) => {
+  const yRightLabels = [countMin, countMin + countRange / 2, countMax].map((c) => {
     const y = yCountFor(c);
-    return `<text x="${W - PAD.right + 6}" y="${y + 4}" text-anchor="start" font-size="13" fill="#ffb74d" opacity="0.95">${fmtCount(Math.round(c))}</text>`;
+    return `<text x="${W - PAD.right + 8}" y="${(y + 4).toFixed(1)}" text-anchor="start" font-size="12" font-weight="500" fill="#ffb74d" opacity="0.95">${fmtCount(Math.round(c))}</text>`;
   }).join('');
 
   const dots = points.map((p, i) => `
-    <circle class="chart-dot" data-idx="${i}" cx="${xFor(p.t)}" cy="${yPriceFor(p.price)}" r="4" fill="#4caf50" />
+    <circle class="chart-dot" data-idx="${i}" cx="${xFor(p.t).toFixed(1)}" cy="${yPriceFor(p.price).toFixed(1)}" r="3.5" fill="#4caf50" />
   `).join('');
 
   chartWrap.innerHTML = `
-    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
       <rect x="${PAD.left}" y="${PAD.top}" width="${innerW}" height="${innerH}" fill="rgba(255,255,255,0.02)" />
+      ${gridLines}
       <path d="${pricePath}" stroke="#4caf50" stroke-width="2" fill="none" />
       <path d="${countPath}" stroke="#ffb74d" stroke-width="1.5" fill="none" stroke-dasharray="4,3" />
       ${dots}
-      <line class="chart-guide" x1="0" y1="${PAD.top}" x2="0" y2="${PAD.top + innerH}" stroke="#fff" stroke-width="1" stroke-dasharray="3,3" opacity="0" />
+      <line class="chart-guide" x1="0" y1="${PAD.top}" x2="0" y2="${PAD.top + innerH}" stroke="#fff" stroke-width="1" stroke-dasharray="3,3" opacity="0" pointer-events="none" />
       <circle class="chart-marker-price" cx="0" cy="0" r="6" fill="#a5e8b6" stroke="#0d1f15" stroke-width="2" opacity="0" pointer-events="none" />
       <circle class="chart-marker-count" cx="0" cy="0" r="5" fill="#ffd54f" stroke="#0d1f15" stroke-width="2" opacity="0" pointer-events="none" />
       <rect class="chart-hit" x="${PAD.left}" y="${PAD.top}" width="${innerW}" height="${innerH}" fill="transparent" />
@@ -240,7 +305,7 @@ function renderChart(snapshots, listing, bids) {
     const px = xFor(p.t);
     guide.setAttribute('x1', px);
     guide.setAttribute('x2', px);
-    guide.setAttribute('opacity', '0.5');
+    guide.setAttribute('opacity', '0.6');
     markerPrice.setAttribute('cx', px);
     markerPrice.setAttribute('cy', yPriceFor(p.price));
     markerPrice.setAttribute('opacity', '1');
@@ -248,6 +313,13 @@ function renderChart(snapshots, listing, bids) {
     markerCount.setAttribute('cy', yCountFor(p.count));
     markerCount.setAttribute('opacity', '1');
     chartHelp.textContent = `${fmtTime(new Date(p.t).toISOString())} — ${fmtUsd(p.price)} · ${fmtCount(p.count)} bids`;
+  };
+
+  const resetSelection = () => {
+    guide.setAttribute('opacity', '0');
+    markerPrice.setAttribute('opacity', '0');
+    markerCount.setAttribute('opacity', '0');
+    chartHelp.textContent = defaultChartHelp(points);
   };
 
   hitArea.style.cursor = 'crosshair';
@@ -274,7 +346,7 @@ function renderChart(snapshots, listing, bids) {
       const px = xFor(p.t);
       guide.setAttribute('x1', px);
       guide.setAttribute('x2', px);
-      guide.setAttribute('opacity', '0.5');
+      guide.setAttribute('opacity', '0.6');
       markerPrice.setAttribute('cx', px);
       markerPrice.setAttribute('cy', yPriceFor(p.price));
       markerPrice.setAttribute('opacity', '1');
@@ -285,10 +357,9 @@ function renderChart(snapshots, listing, bids) {
     });
   });
 
-  const last = points[points.length - 1];
-  chartHelp.textContent = `${fmtTime(new Date(last.t).toISOString())} — ${fmtUsd(last.price)} · ${fmtCount(last.count)} bids · Drag along the chart for other times.`;
+  chartHelp.textContent = defaultChartHelp(points);
 
-  chartSection.hidden = false;
+  if (chartState) chartState.resetSelection = resetSelection;
 }
 
 function renderBids(bids) {
@@ -389,5 +460,26 @@ async function load() {
     showError(`Error: ${err.message}`);
   }
 }
+
+document.addEventListener('click', (e) => {
+  if (chartState && chartState.resetSelection && chartSection && !chartSection.contains(e.target)) {
+    chartState.resetSelection();
+  }
+});
+
+document.addEventListener('touchstart', (e) => {
+  const target = e.target;
+  if (chartState && chartState.resetSelection && chartSection && target && !chartSection.contains(target)) {
+    chartState.resetSelection();
+  }
+}, { passive: true });
+
+let resizeTimeout = null;
+window.addEventListener('resize', () => {
+  if (resizeTimeout) clearTimeout(resizeTimeout);
+  resizeTimeout = setTimeout(() => {
+    if (chartState) drawChart();
+  }, 150);
+});
 
 load();
