@@ -205,6 +205,13 @@ function renderTotals(snapshot) {
   }
 }
 
+function ebayItemUrl(itemId) {
+  if (!itemId) return 'https://www.ebay.com/';
+  const parts = String(itemId).split('|');
+  const legacyNumber = parts.length >= 2 && parts[1] ? parts[1] : itemId;
+  return `https://www.ebay.com/itm/${encodeURIComponent(legacyNumber)}`;
+}
+
 function renderItem(item, symbol) {
   const card = el('article', { class: 'item' });
   const img = item.imageUrl
@@ -312,7 +319,7 @@ function renderEndedItem(item, symbol) {
   const body = el('div', { class: 'item-body' });
   body.appendChild(
     el('h2', { class: 'item-title' }, [
-      el('a', { href: item.itemWebUrl || `https://www.ebay.com/itm/${encodeURIComponent(item.itemId)}`, target: '_blank', rel: 'noopener noreferrer', textContent: item.title }),
+      el('a', { href: item.itemWebUrl || ebayItemUrl(item.itemId), target: '_blank', rel: 'noopener noreferrer', textContent: item.title }),
     ]),
   );
   const meta = el('div', { class: 'item-meta' });
