@@ -22,6 +22,10 @@ const liveGrid = document.getElementById('live-grid');
 const liveUpdated = document.getElementById('live-updated');
 const hourlyDetail = document.getElementById('hourly-detail');
 const maintenanceControls = document.getElementById('maintenance-controls');
+const restoreBidsBtn = document.getElementById('restore-bids-btn');
+const checkRemovedBidsBtn = document.getElementById('check-removed-bids-btn');
+const restoreListingsBtn = document.getElementById('restore-listings-btn');
+const recoveryResult = document.getElementById('recovery-result');
 const confirmModal = document.getElementById('confirm-modal');
 const confirmText = document.getElementById('confirm-text');
 const confirmOk = document.getElementById('confirm-ok');
@@ -567,6 +571,51 @@ logoutBtn.addEventListener('click', () => {
 envFilter.addEventListener('change', loadDashboard);
 windowFilter.addEventListener('change', loadDashboard);
 autoRefreshToggle.addEventListener('change', startAutoRefresh);
+
+async function recoveryFetch(action) {
+  const token = getToken();
+  if (!token) return;
+  recoveryResult.hidden = true;
+  try {
+    const response = await fetch('/api/admin/cleanup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action }),
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      recoveryResult.textContent = `Error (${response.status}): ${detail || 'unknown'}`;
+      recoveryResult.hidden = false;
+      return;
+    }
+    const data = await response.json();
+    if (action === 'count_removed_bids') {
+      recoveryResult.textContent = `${data.count} bid${data.count === 1 ? '' : 's'} currently marked removed.`;
+    } else if (action === 'restore_all_bids') {
+      recoveryResult.textContent = `Restored ${data.restored} bid${data.restored === 1 ? '' : 's'} (cleared removed_at).`;
+    } else if (action === 'restore_listings') {
+      recoveryResult.textContent = `Restored ${data.restored} listing${data.restored === 1 ? '' : 's'} (cleared ended_at).`;
+    }
+    recoveryResult.hidden = false;
+  } catch (err) {
+    recoveryResult.textContent = `Network error: ${err.message}`;
+    recoveryResult.hidden = false;
+  }
+}
+
+if (checkRemovedBidsBtn) {
+  checkRemovedBidsBtn.addEventListener('click', () => recoveryFetch('count_removed_bids'));
+}
+if (restoreBidsBtn) {
+  restoreBidsBtn.addEventListener('click', () => {
+    confirmAction('Restore ALL bids in the database (clear removed_at)? This is safe to run multiple times.', () => recoveryFetch('restore_all_bids'));
+  });
+}
+if (restoreListingsBtn) {
+  restoreListingsBtn.addEventListener('click', () => {
+    confirmAction('Restore ALL listings (clear ended_at)? Auctions that genuinely ended will get re-marked on the next poll.', () => recoveryFetch('restore_listings'));
+  });
+}
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
