@@ -102,6 +102,31 @@
           </p>
           <div id="maintenance-controls" class="maintenance-controls"></div>
         </section>
+
+        <section class="chart-section maintenance-section">
+          <h3>Bid &amp; listing data recovery</h3>
+          <p class="maintenance-help">
+            Restore bids that were incorrectly marked removed by the old
+            reconciliation logic. Restoring listings clears any auctions that
+            were marked ended in error. Safe to run multiple times.
+          </p>
+          <div class="maintenance-controls">
+            <div class="maintenance-row">
+              <span>Restore all bids (clear removed_at)</span>
+              <div class="row-actions">
+                <button id="check-removed-bids-btn" type="button" class="admin-btn">Check count</button>
+                <button id="restore-bids-btn" type="button" class="admin-btn admin-btn-primary">Restore all</button>
+              </div>
+            </div>
+            <div class="maintenance-row">
+              <span>Restore all listings (clear ended_at)</span>
+              <div class="row-actions">
+                <button id="restore-listings-btn" type="button" class="admin-btn admin-btn-primary">Restore all</button>
+              </div>
+            </div>
+          </div>
+          <div id="recovery-result" class="recovery-result" hidden></div>
+        </section>
       </section>
 
       <div id="confirm-modal" class="modal" hidden>

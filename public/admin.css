@@ -395,6 +395,16 @@
   justify-content: flex-end;
 }
 
+.recovery-result {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.8rem;
+  background: rgba(76, 175, 80, 0.15);
+  border: 1px solid #4caf50;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
 .data-table {
   overflow-x: auto;
 }

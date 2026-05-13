@@ -547,6 +547,39 @@ export function createApp(deps: Deps): express.Express {
         return;
       }
 
+      if (action === 'restore_all_bids') {
+        const result = await deps.db.query(
+          'UPDATE bids SET removed_at = NULL WHERE removed_at IS NOT NULL',
+        );
+        res.status(200).json({
+          action: 'restore_all_bids',
+          restored: result.rowCount ?? 0,
+        });
+        return;
+      }
+
+      if (action === 'restore_listings') {
+        const result = await deps.db.query(
+          'UPDATE listings SET ended_at = NULL WHERE ended_at IS NOT NULL',
+        );
+        res.status(200).json({
+          action: 'restore_listings',
+          restored: result.rowCount ?? 0,
+        });
+        return;
+      }
+
+      if (action === 'count_removed_bids') {
+        const result = await deps.db.query<{ count: string }>(
+          'SELECT COUNT(*)::TEXT AS count FROM bids WHERE removed_at IS NOT NULL',
+        );
+        res.status(200).json({
+          action: 'count_removed_bids',
+          count: Number(result.rows[0]?.count ?? '0'),
+        });
+        return;
+      }
+
       if (action === 'delete_before') {
         const beforeStr = body?.environment ?? '';
         const before = new Date(beforeStr);
