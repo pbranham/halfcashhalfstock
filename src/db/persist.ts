@@ -286,6 +286,7 @@ export interface ListingDetail {
   itemWebUrl: string | null;
   isAuction: boolean;
   endsAt: string | null;
+  endedAt: string | null;
   currentPriceUsd: number;
   currentBidCount: number;
   currency: string;
@@ -304,13 +305,14 @@ export async function readListingDetail(
     item_web_url: string | null;
     is_auction: boolean;
     ends_at: Date | null;
+    ended_at: Date | null;
     current_price_usd: string;
     current_bid_count: number;
     currency: string;
     first_seen_at: Date;
     last_seen_at: Date;
   }>(
-    `SELECT item_id, title, image_url, item_web_url, is_auction, ends_at,
+    `SELECT item_id, title, image_url, item_web_url, is_auction, ends_at, ended_at,
             current_price_usd, current_bid_count, currency, first_seen_at, last_seen_at
      FROM listings
      WHERE item_id = $1`,
@@ -324,6 +326,7 @@ export async function readListingDetail(
     imageUrl: row.image_url,
     itemWebUrl: row.item_web_url,
     isAuction: row.is_auction,
+    endedAt: row.ended_at ? row.ended_at.toISOString() : null,
     endsAt: row.ends_at ? row.ends_at.toISOString() : null,
     currentPriceUsd: Number(row.current_price_usd),
     currentBidCount: row.current_bid_count,

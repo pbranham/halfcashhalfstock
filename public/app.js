@@ -212,6 +212,14 @@ function ebayItemUrl(itemId) {
   return `https://www.ebay.com/itm/${encodeURIComponent(legacyNumber)}`;
 }
 
+// For ended auctions, append orig_cvip=true so eBay shows the original
+// ended listing instead of redirecting to "similar items".
+function endedEbayUrl(itemWebUrl, itemId) {
+  const base = itemWebUrl || ebayItemUrl(itemId);
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}orig_cvip=true`;
+}
+
 function renderItem(item, symbol) {
   const card = el('article', { class: 'item' });
   const img = item.imageUrl
@@ -319,7 +327,7 @@ function renderEndedItem(item, symbol) {
   const body = el('div', { class: 'item-body' });
   body.appendChild(
     el('h2', { class: 'item-title' }, [
-      el('a', { href: item.itemWebUrl || ebayItemUrl(item.itemId), target: '_blank', rel: 'noopener noreferrer', textContent: item.title }),
+      el('a', { href: endedEbayUrl(item.itemWebUrl, item.itemId), target: '_blank', rel: 'noopener noreferrer', textContent: item.title }),
     ]),
   );
   const meta = el('div', { class: 'item-meta' });

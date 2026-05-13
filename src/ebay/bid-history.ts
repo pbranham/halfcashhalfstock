@@ -20,36 +20,50 @@ export async function fetchBidHistory(
   userToken: string,
   db?: Pool | null,
 ): Promise<CachedBidHistory | null> {
-  try {
-    let history: ItemBidHistory;
+  let history: ItemBidHistory | null = null;
 
-    const dbBids = db ? await checkDbActiveBids(db, itemId) : null;
-    if (dbBids && dbBids.length === currentBidCount) {
-      history = {
-        itemId,
-        bidCount: currentBidCount,
-        currentPrice: dbBids[dbBids.length - 1]?.bidAmount ?? 0,
-        bids: dbBids,
-      };
-    } else {
+  const dbBids = db ? await checkDbActiveBids(db, itemId) : null;
+  if (dbBids && dbBids.length === currentBidCount) {
+    history = {
+      itemId,
+      bidCount: currentBidCount,
+      currentPrice: dbBids[dbBids.length - 1]?.bidAmount ?? 0,
+      bids: dbBids,
+    };
+  } else {
+    try {
       history = await tradeCache.get(
         `bid-history-${itemId}`,
         BID_HISTORY_TTL_MS,
         () => getItemBidHistory(itemId, devId, userToken),
       );
+    } catch {
+      history = null;
     }
-
-    const lastBid = history.bids.length > 0 ? history.bids[history.bids.length - 1] : null;
-    return {
-      bidCount: history.bidCount,
-      currentPrice: history.currentPrice,
-      bids: history.bids,
-      lastBidTime: lastBid?.bidTime ?? null,
-      lastBidAmount: lastBid?.bidAmount ?? null,
-    };
-  } catch {
-    return null;
   }
+
+  // Fallback: if the API failed or returned nothing useful, fall back to
+  // whatever bid history we have in the DB so the dashboard's "most
+  // recent bid" line and per-item lastBidTime keep working.
+  if ((!history || history.bids.length === 0) && dbBids && dbBids.length > 0) {
+    history = {
+      itemId,
+      bidCount: dbBids.length,
+      currentPrice: dbBids[dbBids.length - 1]?.bidAmount ?? 0,
+      bids: dbBids,
+    };
+  }
+
+  if (!history) return null;
+
+  const lastBid = history.bids.length > 0 ? history.bids[history.bids.length - 1] : null;
+  return {
+    bidCount: history.bidCount,
+    currentPrice: history.currentPrice,
+    bids: history.bids,
+    lastBidTime: lastBid?.bidTime ?? null,
+    lastBidAmount: lastBid?.bidAmount ?? null,
+  };
 }
 
 async function checkDbActiveBids(pool: Pool, itemId: string): Promise<BidRecord[] | null> {
