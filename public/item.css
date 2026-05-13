@@ -176,20 +176,32 @@
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
-.bid-row.is-removed {
-  opacity: 0.55;
+.bid-row.is-removed td {
+  opacity: 0.6;
   text-decoration: line-through;
 }
 
-.removed-tag {
-  display: inline-block;
-  font-size: 0.7rem;
-  padding: 0.1rem 0.4rem;
-  border-radius: 4px;
-  background: #5a1f1f;
-  color: #ffe;
-  margin-left: 0.4rem;
-  text-decoration: none;
+.bid-note-row td {
+  background: rgba(90, 31, 31, 0.18);
+  border-bottom: 1px solid var(--border, #2d5b3e);
+  padding: 0.4rem 0.65rem 0.5rem 1.5rem;
+  font-size: 0.8rem;
+  color: #ffd0d0;
+}
+
+.bid-note-toggle {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0 0.35rem 0 0;
+  margin-right: 0.25rem;
+}
+
+.bid-note {
+  font-style: italic;
+  opacity: 0.85;
 }
 
 .error-banner {

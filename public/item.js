@@ -102,22 +102,52 @@ function renderCurrentState(listing, bids) {
   currentSection.hidden = false;
 }
 
-function renderChart(snapshots, listing) {
-  if (!snapshots || snapshots.length === 0) {
-    chartSection.hidden = true;
-    return;
+function buildChartPointsFromBids(bids, listing) {
+  if (!bids || bids.length === 0) return [];
+  const events = [];
+  for (const bid of bids) {
+    events.push({ time: new Date(bid.bidTime).getTime(), type: 'place', bid });
+    if (bid.removedAt) {
+      events.push({ time: new Date(bid.removedAt).getTime(), type: 'remove', bid });
+    }
   }
+  events.sort((a, b) => a.time - b.time);
 
-  // Append current state as the most recent point if it differs from the latest snapshot.
-  const points = snapshots.map((s) => ({
-    t: new Date(s.observedAt).getTime(),
-    price: Number(s.currentPriceUsd),
-    count: Number(s.currentBidCount),
-  }));
-  const last = points[points.length - 1];
-  const nowMs = Date.now();
-  if (last && (last.price !== listing.currentPriceUsd || last.count !== listing.currentBidCount)) {
-    points.push({ t: nowMs, price: listing.currentPriceUsd, count: listing.currentBidCount });
+  const active = new Map();
+  const points = [];
+  for (const event of events) {
+    const key = `${event.bid.bidder}|${event.bid.bidTime}`;
+    if (event.type === 'place') {
+      active.set(key, event.bid.bidAmountUsd);
+    } else {
+      active.delete(key);
+    }
+    const amounts = Array.from(active.values());
+    const price = amounts.length > 0 ? Math.max(...amounts) : 0;
+    points.push({ t: event.time, price, count: active.size });
+  }
+  if (listing && points.length > 0) {
+    const last = points[points.length - 1];
+    if (last.price !== listing.currentPriceUsd || last.count !== listing.currentBidCount) {
+      points.push({ t: Date.now(), price: listing.currentPriceUsd, count: listing.currentBidCount });
+    }
+  }
+  return points;
+}
+
+function renderChart(snapshots, listing, bids) {
+  let points = buildChartPointsFromBids(bids, listing);
+
+  if (points.length < 2 && snapshots && snapshots.length > 0) {
+    points = snapshots.map((s) => ({
+      t: new Date(s.observedAt).getTime(),
+      price: Number(s.currentPriceUsd),
+      count: Number(s.currentBidCount),
+    }));
+    const last = points[points.length - 1];
+    if (last && (last.price !== listing.currentPriceUsd || last.count !== listing.currentBidCount)) {
+      points.push({ t: Date.now(), price: listing.currentPriceUsd, count: listing.currentBidCount });
+    }
   }
 
   if (points.length < 2) {
@@ -206,20 +236,45 @@ function renderBids(bids) {
   bidsSummary.textContent = `${bids.length} total · ${active} active · ${removed} removed`;
 
   const sorted = [...bids].sort((a, b) => (a.bidTime < b.bidTime ? 1 : -1));
-  let html = '<table><thead><tr><th>Bid time</th><th>Bidder</th><th class="numeric">Amount</th><th>Status</th></tr></thead><tbody>';
-  for (const bid of sorted) {
-    const removedTag = bid.removedAt ? `<span class="removed-tag">REMOVED ${escapeHtml(fmtTime(bid.removedAt))}</span>` : '';
-    const status = bid.removedAt ? 'Removed' : 'Active';
-    const rowClass = bid.removedAt ? 'bid-row is-removed' : 'bid-row';
-    html += `<tr class="${rowClass}">
-      <td>${escapeHtml(fmtTime(bid.bidTime))}</td>
-      <td>${escapeHtml(bid.bidder || 'unknown')}</td>
-      <td class="numeric">${fmtUsd(bid.bidAmountUsd)}</td>
-      <td>${status}${removedTag}</td>
-    </tr>`;
+  let html = '<table><thead><tr><th>Bid time</th><th>Bidder</th><th class="numeric">Amount</th></tr></thead><tbody>';
+  for (let i = 0; i < sorted.length; i++) {
+    const bid = sorted[i];
+    if (bid.removedAt) {
+      const noteId = `note-${i}`;
+      html += `<tr class="bid-row is-removed has-note" data-note-id="${noteId}">
+        <td>${escapeHtml(fmtTime(bid.bidTime))}</td>
+        <td>${escapeHtml(bid.bidder || 'unknown')}</td>
+        <td class="numeric">${fmtUsd(bid.bidAmountUsd)}</td>
+      </tr>
+      <tr class="bid-note-row" id="${noteId}">
+        <td colspan="3">
+          <button type="button" class="bid-note-toggle" data-note-id="${noteId}" aria-expanded="true">▾</button>
+          <span class="bid-note">Bid retracted or canceled — no longer counted toward total. Detected ${escapeHtml(fmtTime(bid.removedAt))}.</span>
+        </td>
+      </tr>`;
+    } else {
+      html += `<tr class="bid-row">
+        <td>${escapeHtml(fmtTime(bid.bidTime))}</td>
+        <td>${escapeHtml(bid.bidder || 'unknown')}</td>
+        <td class="numeric">${fmtUsd(bid.bidAmountUsd)}</td>
+      </tr>`;
+    }
   }
   html += '</tbody></table>';
   bidsTable.innerHTML = html;
+
+  bidsTable.querySelectorAll('.bid-note-toggle').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const noteId = btn.dataset.noteId;
+      const noteRow = document.getElementById(noteId);
+      const note = noteRow?.querySelector('.bid-note');
+      const expanded = btn.getAttribute('aria-expanded') === 'true';
+      btn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+      btn.textContent = expanded ? '▸' : '▾';
+      if (note) note.hidden = expanded;
+    });
+  });
 }
 
 function renderSnapshots(snapshots) {
@@ -261,7 +316,7 @@ async function load() {
     loading.hidden = true;
     renderHeader(data.listing);
     renderCurrentState(data.listing, data.bids);
-    renderChart(data.snapshots, data.listing);
+    renderChart(data.snapshots, data.listing, data.bids);
     renderBids(data.bids);
     renderSnapshots(data.snapshots);
   } catch (err) {
