@@ -36,6 +36,7 @@ import type { PriceProvider, PriceQuote } from './prices/types.js';
 import { composeSnapshot, type Snapshot } from './snapshot.js';
 import { TickerQueue } from './ticker-queue.js';
 import { RequestStatsCollector } from './request-stats.js';
+import { backfillEndedListings } from './ebay/backfill.js';
 
 const LISTINGS_TTL_MS = 30_000;
 const PRICE_TTL_MS = 30_000;
@@ -580,6 +581,38 @@ export function createApp(deps: Deps): express.Express {
         return;
       }
 
+      if (action === 'backfill_ended_now') {
+        const userToken = resolveEbayTradingUserToken(deps.config);
+        if (!deps.config.EBAY_DEV_ID || !userToken) {
+          res.status(503).json({
+            error: 'backfill_unavailable',
+            detail: 'EBAY_DEV_ID and EBAY_USER_TOKEN must be set',
+          });
+          return;
+        }
+        const result = await backfillEndedListings(
+          deps.db,
+          deps.config.EBAY_DEV_ID,
+          userToken,
+          deps.log,
+        );
+        res.status(200).json({ action: 'backfill_ended_now', ...result });
+        return;
+      }
+
+      if (action === 'reset_backfill_attempts') {
+        const result = await deps.db.query(
+          `UPDATE listings
+           SET backfill_attempts = 0, last_backfilled_at = NULL
+           WHERE ended_at IS NOT NULL`,
+        );
+        res.status(200).json({
+          action: 'reset_backfill_attempts',
+          reset: result.rowCount ?? 0,
+        });
+        return;
+      }
+
       if (action === 'delete_before') {
         const beforeStr = body?.environment ?? '';
         const before = new Date(beforeStr);
@@ -685,6 +718,23 @@ async function main(): Promise<void> {
     });
   }
 
+  let backfillInterval: NodeJS.Timeout | null = null;
+  const backfillUserToken = resolveEbayTradingUserToken(config);
+  if (db && config.EBAY_DEV_ID && backfillUserToken) {
+    const devIdLocal = config.EBAY_DEV_ID;
+    const tokenLocal = backfillUserToken;
+    const dbLocal = db;
+    const runBackfill = (): void => {
+      backfillEndedListings(dbLocal, devIdLocal, tokenLocal, log).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error('backfill loop error', { error: message });
+      });
+    };
+    backfillInterval = setInterval(runBackfill, 60_000);
+    backfillInterval.unref();
+    runBackfill();
+  }
+
   const deps = buildDeps(config, log, db, tickerQueue, requestStats);
   const app = createApp(deps);
   const server = app.listen(config.PORT, () => {
@@ -695,6 +745,7 @@ async function main(): Promise<void> {
     log.info('shutting down', { signal });
     if (tickerQueue) tickerQueue.stop();
     if (requestStats) requestStats.stop();
+    if (backfillInterval) clearInterval(backfillInterval);
     server.close(() => {
       if (db) {
         db.end().finally(() => process.exit(0));

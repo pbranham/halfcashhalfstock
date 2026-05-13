@@ -25,6 +25,8 @@ const maintenanceControls = document.getElementById('maintenance-controls');
 const restoreBidsBtn = document.getElementById('restore-bids-btn');
 const checkRemovedBidsBtn = document.getElementById('check-removed-bids-btn');
 const restoreListingsBtn = document.getElementById('restore-listings-btn');
+const backfillNowBtn = document.getElementById('backfill-now-btn');
+const resetBackfillBtn = document.getElementById('reset-backfill-btn');
 const recoveryResult = document.getElementById('recovery-result');
 const confirmModal = document.getElementById('confirm-modal');
 const confirmText = document.getElementById('confirm-text');
@@ -595,6 +597,10 @@ async function recoveryFetch(action) {
       recoveryResult.textContent = `Restored ${data.restored} bid${data.restored === 1 ? '' : 's'} (cleared removed_at).`;
     } else if (action === 'restore_listings') {
       recoveryResult.textContent = `Restored ${data.restored} listing${data.restored === 1 ? '' : 's'} (cleared ended_at).`;
+    } else if (action === 'backfill_ended_now') {
+      recoveryResult.textContent = `Backfill complete. Attempted ${data.attempted}, succeeded ${data.backfilled}, failed ${data.failed}. Inserted ${data.bidsInserted} new bid${data.bidsInserted === 1 ? '' : 's'}, updated ${data.pricesUpdated} final price${data.pricesUpdated === 1 ? '' : 's'}.`;
+    } else if (action === 'reset_backfill_attempts') {
+      recoveryResult.textContent = `Reset backfill state on ${data.reset} ended listing${data.reset === 1 ? '' : 's'}. They'll be re-attempted on the next backfill cycle.`;
     }
     recoveryResult.hidden = false;
   } catch (err) {
@@ -614,6 +620,14 @@ if (restoreBidsBtn) {
 if (restoreListingsBtn) {
   restoreListingsBtn.addEventListener('click', () => {
     confirmAction('Restore ALL listings (clear ended_at)? Auctions that genuinely ended will get re-marked on the next poll.', () => recoveryFetch('restore_listings'));
+  });
+}
+if (backfillNowBtn) {
+  backfillNowBtn.addEventListener('click', () => recoveryFetch('backfill_ended_now'));
+}
+if (resetBackfillBtn) {
+  resetBackfillBtn.addEventListener('click', () => {
+    confirmAction('Reset backfill attempt counters on all ended listings? They will be re-attempted on the next backfill cycle.', () => recoveryFetch('reset_backfill_attempts'));
   });
 }
 
