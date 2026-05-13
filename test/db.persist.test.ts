@@ -127,31 +127,12 @@ describe('persistSnapshot', () => {
     expect(sqls.some((s) => /INSERT INTO bids/.test(s))).toBe(true);
   });
 
-  it('marks stored bids as removed when they vanish from a fresh fetch', async () => {
+  it('does NOT mark bids as removed (reconciliation disabled)', async () => {
+    // GetAllBidders only returns each bidder's highest bid, not every bid,
+    // so reconciliation produced false-positive removals. Until we have
+    // reliable retraction detection, persistSnapshot only appends.
     const pool = makePool();
-    pool.query.mockImplementation(async (sql: string) => {
-      if (/SELECT bidder, bid_time, bid_amount_usd[\s\S]+FROM bids/.test(sql)) {
-        return {
-          rows: [
-            {
-              bidder: 'a',
-              bid_time: new Date('2026-05-07T12:00:00Z'),
-              bid_amount_usd: '10',
-            },
-            {
-              bidder: 'b',
-              bid_time: new Date('2026-05-07T12:05:00Z'),
-              bid_amount_usd: '12',
-            },
-          ],
-          rowCount: 2,
-        };
-      }
-      if (/UPDATE bids SET removed_at/.test(sql)) {
-        return { rows: [], rowCount: 1 };
-      }
-      return { rows: [], rowCount: 1 };
-    });
+    pool.query.mockResolvedValue({ rows: [], rowCount: 1 });
 
     const result = await persistSnapshot(pool as unknown as Pool, [
       {
@@ -160,9 +141,9 @@ describe('persistSnapshot', () => {
       },
     ]);
 
-    expect(result.removedBids).toBe(1);
+    expect(result.removedBids).toBe(0);
     const sqls = pool.query.mock.calls.map(([sql]) => sql);
-    expect(sqls.some((s) => /UPDATE bids SET removed_at/.test(s))).toBe(true);
+    expect(sqls.some((s) => /UPDATE bids SET removed_at/.test(s))).toBe(false);
   });
 });
 

@@ -163,19 +163,24 @@ export async function persistSnapshot(
 ): Promise<{ listings: number; bids: number; removedBids: number; endedListings: number }> {
   let listingsTouched = 0;
   let bidsInserted = 0;
-  let bidsRemoved = 0;
   for (const { listing, bids } of inputs) {
     await upsertListing(pool, listing);
     await insertListingSnapshotIfChanged(pool, listing);
     listingsTouched += 1;
-    if (bids) {
-      const { inserted, removed } = await reconcileBids(pool, listing.itemId, bids);
-      bidsInserted += inserted;
-      bidsRemoved += removed;
+    if (bids && bids.length > 0) {
+      // NOTE: we deliberately do NOT call reconcileBids here. eBay's
+      // GetAllBidders API returns one entry per unique bidder (their
+      // highest bid), not every individual bid. So when a bidder re-bids,
+      // their old DB entry won't match the new API response — but that
+      // doesn't mean the old bid was retracted. Reconciling against this
+      // incomplete data caused massive false-positive removals during
+      // active auctions. Until we have a reliable retraction-detection
+      // mechanism, just append (ON CONFLICT DO NOTHING) and never remove.
+      bidsInserted += await insertBids(pool, listing.itemId, bids);
     }
   }
   const endedListings = await markEndedListings(pool, inputs.map((i) => i.listing.itemId));
-  return { listings: listingsTouched, bids: bidsInserted, removedBids: bidsRemoved, endedListings };
+  return { listings: listingsTouched, bids: bidsInserted, removedBids: 0, endedListings };
 }
 
 export async function markEndedListings(pool: Pool, currentItemIds: readonly string[]): Promise<number> {
