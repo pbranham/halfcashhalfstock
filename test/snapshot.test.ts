@@ -124,4 +124,34 @@ describe('composeSnapshot', () => {
     );
     expect(snapshot.items[0]?.lastBidTime).toBe('2026-05-07T12:00:00.000Z');
   });
+
+  it('includes ended listings with their own totals', () => {
+    const snapshot = composeSnapshot(
+      [listing({ itemId: 'v1|1', priceUsd: 100 })],
+      QUOTE,
+      [
+        {
+          itemId: 'v1|9',
+          title: 'Ended item',
+          imageUrl: null,
+          itemWebUrl: 'https://example.com',
+          isAuction: true,
+          endsAt: '2026-05-06T00:00:00.000Z',
+          endedAt: '2026-05-06T01:00:00.000Z',
+          finalPriceUsd: 500,
+          finalBidCount: 7,
+          currency: 'USD',
+        },
+      ],
+    );
+    expect(snapshot.endedItems).toHaveLength(1);
+    expect(snapshot.endedItems[0]?.itemId).toBe('v1|9');
+    expect(snapshot.endedItems[0]?.split?.cashUsd).toBe(250);
+    expect(snapshot.endedTotals.listingsCount).toBe(1);
+    expect(snapshot.endedTotals.bidsCount).toBe(7);
+    expect(snapshot.endedTotals.bidUsd).toBe(500);
+    // Active totals should remain unaffected by ended items.
+    expect(snapshot.totals.listingsCount).toBe(1);
+    expect(snapshot.totals.bidUsd).toBe(100);
+  });
 });

@@ -261,6 +261,96 @@ function renderItem(item, symbol) {
   return card;
 }
 
+function renderEndedSection(snapshot) {
+  const section = document.getElementById('ended-section');
+  const root = document.getElementById('ended-items');
+  const totalsRoot = document.getElementById('ended-totals');
+  if (!section || !root || !totalsRoot) return;
+
+  const endedItems = snapshot?.endedItems ?? [];
+  if (endedItems.length === 0) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+
+  totalsRoot.replaceChildren();
+  const totals = snapshot.endedTotals;
+  if (totals) {
+    const symbol = snapshot.stock?.symbol ?? activeSymbol;
+    const stats = [
+      { label: 'Ended listings', value: integer.format(totals.listingsCount) },
+      { label: 'Total bids on ended', value: integer.format(totals.bidsCount) },
+      { label: 'Sum of final bids', value: usd.format(totals.bidUsd) },
+      { label: 'Cash half (final)', value: usd.format(totals.split.cashUsd) },
+      { label: `${symbol} shares (final)`, value: shares.format(totals.split.shares) },
+    ];
+    for (const stat of stats) {
+      totalsRoot.appendChild(
+        el('div', { class: 'stat' }, [
+          el('div', { class: 'stat-label', textContent: stat.label }),
+          el('div', { class: 'stat-value', textContent: stat.value }),
+        ]),
+      );
+    }
+  }
+
+  root.replaceChildren();
+  const symbol = snapshot.stock?.symbol ?? activeSymbol;
+  const sorted = [...endedItems].sort((a, b) => (a.endedAt < b.endedAt ? 1 : -1));
+  for (const item of sorted) {
+    root.appendChild(renderEndedItem(item, symbol));
+  }
+}
+
+function renderEndedItem(item, symbol) {
+  const card = el('article', { class: 'item ended-item' });
+  const img = item.imageUrl
+    ? el('img', { class: 'item-image', src: item.imageUrl, alt: item.title, loading: 'lazy' })
+    : el('div', { class: 'item-image' });
+  card.appendChild(img);
+  const body = el('div', { class: 'item-body' });
+  body.appendChild(
+    el('h2', { class: 'item-title' }, [
+      el('a', { href: item.itemWebUrl || `https://www.ebay.com/itm/${encodeURIComponent(item.itemId)}`, target: '_blank', rel: 'noopener noreferrer', textContent: item.title }),
+    ]),
+  );
+  const meta = el('div', { class: 'item-meta' });
+  meta.appendChild(el('span', { class: 'tag tag-ended', textContent: 'Ended' }));
+  if (item.finalBidCount !== null && item.finalBidCount !== undefined) {
+    meta.appendChild(el('span', { textContent: `${item.finalBidCount} bid${item.finalBidCount === 1 ? '' : 's'}` }));
+  }
+  const endedDate = item.endedAt ? new Date(item.endedAt) : null;
+  if (endedDate) meta.appendChild(el('span', { textContent: `Ended ${endedDate.toLocaleString()}` }));
+  meta.appendChild(
+    el('a', {
+      class: 'item-audit-link',
+      href: `/item?id=${encodeURIComponent(item.itemId)}`,
+      textContent: 'history →',
+      title: 'View bid and price history for this item',
+    }),
+  );
+  body.appendChild(meta);
+
+  const bidRow = el('div', { class: 'item-bid-row' });
+  bidRow.appendChild(
+    el('div', { class: 'item-bid', textContent: usd.format(item.finalPriceUsd) }),
+  );
+  bidRow.appendChild(el('span', { class: 'item-bid-time', textContent: 'final' }));
+  body.appendChild(bidRow);
+
+  if (item.split) {
+    const split = el('div', { class: 'item-split' });
+    split.appendChild(el('div', { class: 'label', textContent: 'Cash half' }));
+    split.appendChild(el('div', { class: 'label', textContent: `${symbol} shares` }));
+    split.appendChild(el('div', { class: 'value', textContent: usd.format(item.split.cashUsd) }));
+    split.appendChild(el('div', { class: 'value', textContent: shares.format(item.split.shares) }));
+    body.appendChild(split);
+  }
+  card.appendChild(body);
+  return card;
+}
+
 function renderItems(snapshot, bidDiff) {
   const root = document.getElementById('items');
   if (!root) return;
@@ -454,6 +544,7 @@ async function refresh() {
     renderTotals(snapshot);
     renderMostRecentBid(snapshot);
     renderItems(snapshot, prevBidCounts);
+    renderEndedSection(snapshot);
     lastSnapshot = snapshot;
     prevBidCounts = new Map(
       (snapshot.items ?? []).map((item) => [item.itemId, item.bidCount ?? 0]),
@@ -535,6 +626,18 @@ document.querySelectorAll('.sort-btn').forEach((btn) => {
     if (lastSnapshot) renderItems(lastSnapshot, new Map()); // re-sort; no bid flash
   });
 });
+
+// Ended section collapse toggle
+const endedToggle = document.getElementById('ended-toggle');
+if (endedToggle) {
+  endedToggle.addEventListener('click', () => {
+    const section = document.getElementById('ended-section');
+    if (!section) return;
+    const collapsed = section.classList.toggle('is-collapsed');
+    endedToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    endedToggle.textContent = collapsed ? 'Show' : 'Hide';
+  });
+}
 
 // Brand-icon click toggles theme. Precedence: localStorage > OS preference > dark default.
 const brand = document.querySelector('.brand');
