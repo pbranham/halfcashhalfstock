@@ -229,3 +229,38 @@
   padding: 2rem;
   opacity: 0.7;
 }
+
+.admin-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.admin-btn {
+  background: var(--card-bg, #142b1d);
+  border: 1px solid var(--border, #2d5b3e);
+  color: inherit;
+  padding: 0.45rem 0.85rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.admin-btn:hover {
+  border-color: #a5e8b6;
+}
+
+.admin-output {
+  margin-top: 0.75rem;
+  padding: 0.8rem 1rem;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border, #2d5b3e);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 500px;
+  overflow-y: auto;
+}

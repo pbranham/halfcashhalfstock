@@ -36,6 +36,7 @@ import type { PriceProvider, PriceQuote } from './prices/types.js';
 import { composeSnapshot, type Snapshot } from './snapshot.js';
 import { TickerQueue } from './ticker-queue.js';
 import { RequestStatsCollector } from './request-stats.js';
+import { backfillEndedListings } from './ebay/backfill.js';
 
 const LISTINGS_TTL_MS = 30_000;
 const PRICE_TTL_MS = 30_000;
@@ -468,7 +469,7 @@ export function createApp(deps: Deps): express.Express {
       return;
     }
     try {
-      const body = req.body as { action?: string; environment?: string; from?: string; to?: string } | undefined;
+      const body = req.body as { action?: string; environment?: string; from?: string; to?: string; itemId?: string } | undefined;
       const action = body?.action;
 
       if (action === 'delete_environment') {
@@ -580,6 +581,123 @@ export function createApp(deps: Deps): express.Express {
         return;
       }
 
+      if (action === 'backfill_ended_now') {
+        const userToken = resolveEbayTradingUserToken(deps.config);
+        if (!deps.config.EBAY_DEV_ID || !userToken) {
+          res.status(503).json({
+            error: 'backfill_unavailable',
+            detail: 'EBAY_DEV_ID and EBAY_USER_TOKEN must be set',
+          });
+          return;
+        }
+        const result = await backfillEndedListings(
+          deps.db,
+          deps.config.EBAY_DEV_ID,
+          userToken,
+          deps.log,
+        );
+        res.status(200).json({ action: 'backfill_ended_now', ...result });
+        return;
+      }
+
+      if (action === 'rebackfill_one') {
+        const itemId = (body?.itemId ?? '').trim();
+        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
+          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
+          return;
+        }
+        const userToken = resolveEbayTradingUserToken(deps.config);
+        if (!deps.config.EBAY_DEV_ID || !userToken) {
+          res.status(503).json({ error: 'rebackfill_unavailable', detail: 'Trading API not configured' });
+          return;
+        }
+        await deps.db.query(
+          `UPDATE listings SET last_backfilled_at = NULL, backfill_attempts = 0 WHERE item_id = $1`,
+          [itemId],
+        );
+        const result = await backfillEndedListings(deps.db, deps.config.EBAY_DEV_ID, userToken, deps.log);
+        res.status(200).json({ action: 'rebackfill_one', itemId, ...result });
+        return;
+      }
+
+      if (action === 'inspect_bid_history') {
+        const itemId = (body?.itemId ?? '').trim();
+        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
+          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
+          return;
+        }
+        const userToken = resolveEbayTradingUserToken(deps.config);
+        if (!deps.config.EBAY_DEV_ID || !userToken) {
+          res.status(503).json({
+            error: 'inspect_unavailable',
+            detail: 'EBAY_DEV_ID and EBAY_USER_TOKEN must be set',
+          });
+          return;
+        }
+        try {
+          const { getItemBidHistory } = await import('./ebay/trading.js');
+          const history = await getItemBidHistory(itemId, deps.config.EBAY_DEV_ID, userToken);
+          const dbState = await deps.db.query<{
+            current_price_usd: string;
+            current_bid_count: number;
+            ended_at: Date | null;
+            last_backfilled_at: Date | null;
+            backfill_attempts: number;
+          }>(
+            `SELECT current_price_usd, current_bid_count, ended_at,
+                    last_backfilled_at, backfill_attempts
+             FROM listings WHERE item_id = $1`,
+            [itemId],
+          );
+          const dbBids = await deps.db.query<{ count: string }>(
+            `SELECT COUNT(*)::TEXT AS count FROM bids WHERE item_id = $1`,
+            [itemId],
+          );
+          const dbRow = dbState.rows[0];
+          res.status(200).json({
+            action: 'inspect_bid_history',
+            itemId,
+            api: {
+              bidCount: history.bidCount,
+              currentPrice: history.currentPrice,
+              currentPriceType: typeof history.currentPrice,
+              bidsReturned: history.bids.length,
+              bidsSample: history.bids.slice(0, 5),
+              maxBidAmount: history.bids.length > 0 ? Math.max(...history.bids.map((b) => b.bidAmount)) : 0,
+            },
+            db: {
+              currentPriceUsd: dbRow ? Number(dbRow.current_price_usd) : null,
+              currentBidCount: dbRow?.current_bid_count ?? null,
+              endedAt: dbRow?.ended_at ? dbRow.ended_at.toISOString() : null,
+              lastBackfilledAt: dbRow?.last_backfilled_at ? dbRow.last_backfilled_at.toISOString() : null,
+              backfillAttempts: dbRow?.backfill_attempts ?? null,
+              totalBidRows: Number(dbBids.rows[0]?.count ?? '0'),
+            },
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(200).json({
+            action: 'inspect_bid_history',
+            itemId,
+            error: message,
+          });
+        }
+        return;
+      }
+
+      if (action === 'reset_backfill_attempts') {
+        const result = await deps.db.query(
+          `UPDATE listings
+           SET backfill_attempts = 0, last_backfilled_at = NULL
+           WHERE ended_at IS NOT NULL`,
+        );
+        res.status(200).json({
+          action: 'reset_backfill_attempts',
+          reset: result.rowCount ?? 0,
+        });
+        return;
+      }
+
       if (action === 'delete_before') {
         const beforeStr = body?.environment ?? '';
         const before = new Date(beforeStr);
@@ -685,6 +803,23 @@ async function main(): Promise<void> {
     });
   }
 
+  let backfillInterval: NodeJS.Timeout | null = null;
+  const backfillUserToken = resolveEbayTradingUserToken(config);
+  if (db && config.EBAY_DEV_ID && backfillUserToken) {
+    const devIdLocal = config.EBAY_DEV_ID;
+    const tokenLocal = backfillUserToken;
+    const dbLocal = db;
+    const runBackfill = (): void => {
+      backfillEndedListings(dbLocal, devIdLocal, tokenLocal, log).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error('backfill loop error', { error: message });
+      });
+    };
+    backfillInterval = setInterval(runBackfill, 60_000);
+    backfillInterval.unref();
+    runBackfill();
+  }
+
   const deps = buildDeps(config, log, db, tickerQueue, requestStats);
   const app = createApp(deps);
   const server = app.listen(config.PORT, () => {
@@ -695,6 +830,7 @@ async function main(): Promise<void> {
     log.info('shutting down', { signal });
     if (tickerQueue) tickerQueue.stop();
     if (requestStats) requestStats.stop();
+    if (backfillInterval) clearInterval(backfillInterval);
     server.close(() => {
       if (db) {
         db.end().finally(() => process.exit(0));

@@ -28,7 +28,6 @@ interface ParsedResponse {
     BidArray?: {
       Offer?: OfferNode | OfferNode[];
     };
-    HighestBid?: unknown;
   };
 }
 
@@ -88,10 +87,18 @@ export async function getItemBidHistory(
   // Sort ascending so bids[last] is the most recent bid action.
   bids.sort((a, b) => (a.bidTime < b.bidTime ? -1 : a.bidTime > b.bidTime ? 1 : 0));
 
+  // GetAllBidders does NOT have a top-level HighestBid field — that field
+  // lives per-Offer (each bidder's MaxBid IS their highest contribution).
+  // The actual current/final auction price is the max across all returned
+  // Offers' MaxBid values.
+  const currentPrice = bids.length > 0
+    ? bids.reduce((max, b) => (b.bidAmount > max ? b.bidAmount : max), 0)
+    : 0;
+
   return {
     itemId: tradingItemId,
     bidCount: bids.length,
-    currentPrice: parseMoney(parsed?.GetAllBiddersResponse?.HighestBid),
+    currentPrice,
     bids,
   };
 }
