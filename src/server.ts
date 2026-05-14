@@ -600,6 +600,26 @@ export function createApp(deps: Deps): express.Express {
         return;
       }
 
+      if (action === 'rebackfill_one') {
+        const itemId = (body?.itemId ?? '').trim();
+        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
+          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
+          return;
+        }
+        const userToken = resolveEbayTradingUserToken(deps.config);
+        if (!deps.config.EBAY_DEV_ID || !userToken) {
+          res.status(503).json({ error: 'rebackfill_unavailable', detail: 'Trading API not configured' });
+          return;
+        }
+        await deps.db.query(
+          `UPDATE listings SET last_backfilled_at = NULL, backfill_attempts = 0 WHERE item_id = $1`,
+          [itemId],
+        );
+        const result = await backfillEndedListings(deps.db, deps.config.EBAY_DEV_ID, userToken, deps.log);
+        res.status(200).json({ action: 'rebackfill_one', itemId, ...result });
+        return;
+      }
+
       if (action === 'inspect_bid_history') {
         const itemId = (body?.itemId ?? '').trim();
         if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
