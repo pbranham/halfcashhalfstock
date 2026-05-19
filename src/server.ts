@@ -17,12 +17,14 @@ import { TtlCache, DbBackedCache } from './cache.js';
 import { createPool } from './db/pool.js';
 import { runMigrations } from './db/migrate.js';
 import {
+  forceMarkEnded,
   persistSnapshot,
   readBidsForItem,
   readEndedListings,
   readListingDetail,
   readListingSnapshots,
   readOhlcStats,
+  readStuckListings,
   type SnapshotPersistInput,
 } from './db/persist.js';
 import { EbayAppTokenProvider } from './ebay/auth.js';
@@ -597,6 +599,23 @@ export function createApp(deps: Deps): express.Express {
           deps.log,
         );
         res.status(200).json({ action: 'backfill_ended_now', ...result });
+        return;
+      }
+
+      if (action === 'list_stuck_listings') {
+        const stuck = await readStuckListings(deps.db);
+        res.status(200).json({ action: 'list_stuck_listings', count: stuck.length, items: stuck });
+        return;
+      }
+
+      if (action === 'force_mark_ended') {
+        const itemId = (body?.itemId ?? '').trim();
+        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
+          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
+          return;
+        }
+        const marked = await forceMarkEnded(deps.db, itemId);
+        res.status(200).json({ action: 'force_mark_ended', itemId, marked });
         return;
       }
 

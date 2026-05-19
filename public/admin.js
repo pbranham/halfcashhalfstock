@@ -30,6 +30,8 @@ const resetBackfillBtn = document.getElementById('reset-backfill-btn');
 const inspectItemInput = document.getElementById('inspect-item-id');
 const inspectBtn = document.getElementById('inspect-btn');
 const inspectOutput = document.getElementById('inspect-output');
+const findStuckBtn = document.getElementById('find-stuck-btn');
+const stuckList = document.getElementById('stuck-list');
 const recoveryResult = document.getElementById('recovery-result');
 const confirmModal = document.getElementById('confirm-modal');
 const confirmText = document.getElementById('confirm-text');
@@ -654,6 +656,61 @@ if (inspectBtn) {
       inspectOutput.textContent = JSON.stringify(data, null, 2);
     } catch (err) {
       inspectOutput.textContent = `Error: ${err.message}`;
+    }
+  });
+}
+if (findStuckBtn) {
+  findStuckBtn.addEventListener('click', async () => {
+    const token = getToken();
+    if (!token) return;
+    stuckList.hidden = false;
+    stuckList.textContent = 'Searching…';
+    try {
+      const response = await fetch('/api/admin/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'list_stuck_listings' }),
+      });
+      const data = await response.json();
+      if (!data.items || data.items.length === 0) {
+        stuckList.innerHTML = '<p style="opacity: 0.7;">No stuck listings.</p>';
+        return;
+      }
+      let html = `<p style="margin: 0 0 0.5rem;">${data.count} stuck listing${data.count === 1 ? '' : 's'} (not in active poll, not marked ended).</p>`;
+      html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">';
+      html += '<thead><tr><th style="text-align: left; padding: 0.3rem;">Title</th><th style="text-align: left; padding: 0.3rem;">Item ID</th><th style="text-align: left; padding: 0.3rem;">Last seen</th><th></th></tr></thead><tbody>';
+      for (const row of data.items) {
+        html += `<tr>
+          <td style="padding: 0.3rem;">${escapeHtml(row.title || '')}</td>
+          <td style="padding: 0.3rem; font-family: ui-monospace, Menlo, monospace; font-size: 0.75rem;">${escapeHtml(row.itemId)}</td>
+          <td style="padding: 0.3rem;">${escapeHtml(new Date(row.lastSeenAt).toLocaleString())}</td>
+          <td style="padding: 0.3rem;"><button type="button" class="admin-btn force-end-btn" data-item-id="${escapeHtml(row.itemId)}">Mark ended</button></td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      stuckList.innerHTML = html;
+      stuckList.querySelectorAll('.force-end-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const itemId = btn.dataset.itemId;
+          const t = getToken();
+          if (!t) return;
+          btn.disabled = true;
+          btn.textContent = '…';
+          try {
+            const response = await fetch('/api/admin/cleanup', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${t}` },
+              body: JSON.stringify({ action: 'force_mark_ended', itemId }),
+            });
+            const result = await response.json();
+            btn.textContent = result.marked ? 'Marked' : 'No change';
+          } catch (err) {
+            btn.textContent = 'Error';
+          }
+        });
+      });
+    } catch (err) {
+      stuckList.textContent = `Error: ${err.message}`;
     }
   });
 }

@@ -185,16 +185,69 @@ export async function persistSnapshot(
 
 export async function markEndedListings(pool: Pool, currentItemIds: readonly string[]): Promise<number> {
   if (currentItemIds.length === 0) return 0;
+  // An item is considered ended if it's no longer in the active poll AND
+  // either (a) its advertised end time has passed, or (b) we haven't seen
+  // it in any poll for over an hour (safety net for items where ends_at
+  // was never captured, or eBay's Browse API kept returning it briefly
+  // past its end). The 1-hour buffer protects against brief upstream
+  // outages flipping every item to ended.
   const result = await pool.query(
     `UPDATE listings
-     SET ended_at = NOW()
+     SET ended_at = COALESCE(ends_at, last_seen_at, NOW())
      WHERE ended_at IS NULL
-       AND ends_at IS NOT NULL
-       AND ends_at < NOW()
-       AND NOT (item_id = ANY($1::text[]))`,
+       AND NOT (item_id = ANY($1::text[]))
+       AND (
+         (ends_at IS NOT NULL AND ends_at < NOW())
+         OR (last_seen_at < NOW() - INTERVAL '1 hour')
+       )`,
     [Array.from(currentItemIds)],
   );
   return result.rowCount ?? 0;
+}
+
+export interface StuckListingRow {
+  itemId: string;
+  title: string;
+  endsAt: string | null;
+  lastSeenAt: string;
+  currentPriceUsd: number;
+  currentBidCount: number;
+}
+
+export async function readStuckListings(pool: Pool): Promise<StuckListingRow[]> {
+  const res = await pool.query<{
+    item_id: string;
+    title: string;
+    ends_at: Date | null;
+    last_seen_at: Date;
+    current_price_usd: string;
+    current_bid_count: number;
+  }>(
+    `SELECT item_id, title, ends_at, last_seen_at, current_price_usd, current_bid_count
+     FROM listings
+     WHERE ended_at IS NULL
+       AND last_seen_at < NOW() - INTERVAL '30 minutes'
+     ORDER BY last_seen_at DESC`,
+  );
+  return res.rows.map((row) => ({
+    itemId: row.item_id,
+    title: row.title,
+    endsAt: row.ends_at ? row.ends_at.toISOString() : null,
+    lastSeenAt: row.last_seen_at.toISOString(),
+    currentPriceUsd: Number(row.current_price_usd),
+    currentBidCount: row.current_bid_count,
+  }));
+}
+
+export async function forceMarkEnded(pool: Pool, itemId: string): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE listings
+     SET ended_at = COALESCE(ends_at, last_seen_at, NOW())
+     WHERE item_id = $1
+       AND ended_at IS NULL`,
+    [itemId],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 export interface EndedListingRow {
