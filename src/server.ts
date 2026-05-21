@@ -25,12 +25,20 @@ import {
   readListingSnapshots,
   readOhlcStats,
   readStuckListings,
+  reconcileItemBids,
   type SnapshotPersistInput,
 } from './db/persist.js';
 import { EbayAppTokenProvider } from './ebay/auth.js';
 import { EbayClient } from './ebay/client.js';
 import { listSellerActiveItems, type Listing } from './ebay/seller.js';
 import { fetchBidHistory } from './ebay/bid-history.js';
+import { normalizeTradingItemId } from './ebay/trading.js';
+import {
+  fetchViewbidsHtml,
+  parseViewbids,
+  ViewbidsParseError,
+  sleep,
+} from './ebay/viewbids.js';
 import { FinnhubProvider } from './prices/finnhub.js';
 import { YahooProvider } from './prices/yahoo.js';
 import { ChainedPriceProvider } from './prices/provider.js';
@@ -463,15 +471,21 @@ export function createApp(deps: Deps): express.Express {
     });
   });
 
-  app.use(express.json({ limit: '10kb' }));
+  // Global JSON parser stays tight at 10kb, but skips the cleanup route: its
+  // import_viewbids_html action accepts a pasted eBay page (100KB+).
+  const globalJson = express.json({ limit: '10kb' });
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.path === '/api/admin/cleanup') return next();
+    return globalJson(req, res, next);
+  });
 
-  app.post('/api/admin/cleanup', apiLimiter, requireAdminToken, async (req: Request, res: Response, next: NextFunction) => {
+  app.post('/api/admin/cleanup', express.json({ limit: '4mb' }), apiLimiter, requireAdminToken, async (req: Request, res: Response, next: NextFunction) => {
     if (!deps.db) {
       res.status(503).json({ error: 'cleanup_unavailable', detail: 'database not configured' });
       return;
     }
     try {
-      const body = req.body as { action?: string; environment?: string; from?: string; to?: string; itemId?: string } | undefined;
+      const body = req.body as { action?: string; environment?: string; from?: string; to?: string; itemId?: string; html?: string } | undefined;
       const action = body?.action;
 
       if (action === 'delete_environment') {
@@ -736,6 +750,98 @@ export function createApp(deps: Deps): express.Express {
             seen_ips: ipDel.rowCount ?? 0,
           },
         });
+        return;
+      }
+
+      if (action === 'reconcile_ended_bids') {
+        // sinceDays large enough to cover every ended auction regardless of age.
+        const ended = await readEndedListings(deps.db, 3650);
+        const results: Array<{
+          itemId: string;
+          title: string;
+          status: 'imported' | 'blocked-403' | 'parse-failed' | 'error';
+          detail?: string;
+        }> = [];
+        for (let i = 0; i < ended.length; i += 1) {
+          const listing = ended[i]!;
+          const numericId = normalizeTradingItemId(listing.itemId);
+          try {
+            const fetched = await fetchViewbidsHtml(numericId);
+            if (fetched.status === 'blocked') {
+              results.push({
+                itemId: listing.itemId,
+                title: listing.title,
+                status: 'blocked-403',
+                detail: `eBay blocked the request (HTTP ${fetched.httpStatus}); use paste fallback`,
+              });
+            } else if (fetched.status === 'error') {
+              results.push({
+                itemId: listing.itemId,
+                title: listing.title,
+                status: 'error',
+                detail: fetched.message,
+              });
+            } else {
+              const parsed = parseViewbids(fetched.html);
+              const r = await reconcileItemBids(deps.db, listing.itemId, parsed.bids);
+              results.push({
+                itemId: listing.itemId,
+                title: listing.title,
+                status: 'imported',
+                detail: `deleted ${r.deleted} → inserted ${r.inserted}, final $${r.finalPriceUsd.toFixed(2)}, ${r.bidCount} bids`,
+              });
+            }
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            results.push({
+              itemId: listing.itemId,
+              title: listing.title,
+              status: err instanceof ViewbidsParseError ? 'parse-failed' : 'error',
+              detail: message,
+            });
+          }
+          // Be polite to eBay: randomized delay between page fetches.
+          if (i < ended.length - 1) {
+            await sleep(2000 + Math.floor(Math.random() * 3000));
+          }
+        }
+        res.status(200).json({ action: 'reconcile_ended_bids', count: results.length, results });
+        return;
+      }
+
+      if (action === 'import_viewbids_html') {
+        const itemId = (body?.itemId ?? '').trim();
+        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
+          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
+          return;
+        }
+        const html = body?.html ?? '';
+        if (typeof html !== 'string' || html.trim().length === 0 || html.length > 3_000_000) {
+          res.status(400).json({ error: 'bad_request', detail: 'missing or oversized html' });
+          return;
+        }
+        try {
+          const parsed = parseViewbids(html);
+          const r = await reconcileItemBids(deps.db, itemId, parsed.bids);
+          res.status(200).json({
+            action: 'import_viewbids_html',
+            itemId,
+            status: 'imported',
+            deleted: r.deleted,
+            inserted: r.inserted,
+            finalPriceUsd: r.finalPriceUsd,
+            bidCount: r.bidCount,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(200).json({
+            action: 'import_viewbids_html',
+            itemId,
+            status: 'parse-failed',
+            error: message,
+            diagnostics: err instanceof ViewbidsParseError ? err.diagnostics : undefined,
+          });
+        }
         return;
       }
 

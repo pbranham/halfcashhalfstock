@@ -41,10 +41,12 @@ function ebayItemUrl(itemId) {
   return `https://www.ebay.com/itm/${encodeURIComponent(legacyNumber)}`;
 }
 
+// Append eBay's no-redirect parameter so ended catalog-linked listings show
+// the original page instead of redirecting to "similar items".
 function endedEbayUrl(itemWebUrl, itemId) {
   const base = itemWebUrl || ebayItemUrl(itemId);
   const sep = base.includes('?') ? '&' : '?';
-  return `${base}${sep}orig_cvip=true`;
+  return `${base}${sep}nordt=true&orig_cvip=true`;
 }
 
 function escapeHtml(str) {

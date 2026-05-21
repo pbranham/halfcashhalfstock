@@ -33,6 +33,8 @@ const inspectOutput = document.getElementById('inspect-output');
 const findStuckBtn = document.getElementById('find-stuck-btn');
 const stuckList = document.getElementById('stuck-list');
 const recoveryResult = document.getElementById('recovery-result');
+const reconcileResult = document.getElementById('reconcile-result');
+const reconcileBidsBtn = document.getElementById('reconcile-bids-btn');
 const confirmModal = document.getElementById('confirm-modal');
 const confirmText = document.getElementById('confirm-text');
 const confirmOk = document.getElementById('confirm-ok');
@@ -711,6 +713,109 @@ if (findStuckBtn) {
       });
     } catch (err) {
       stuckList.textContent = `Error: ${err.message}`;
+    }
+  });
+}
+
+function statusBadge(status) {
+  const colors = {
+    imported: '#1a7f37',
+    'blocked-403': '#9a6700',
+    'parse-failed': '#cf222e',
+    error: '#cf222e',
+  };
+  const color = colors[status] || '#57606a';
+  return `<span style="display: inline-block; padding: 0.1rem 0.4rem; border-radius: 4px; background: ${color}; color: #fff; font-size: 0.72rem;">${escapeHtml(status)}</span>`;
+}
+
+async function importViewbidsHtml(itemId, html, btn, statusCell) {
+  const token = getToken();
+  if (!token) return;
+  btn.disabled = true;
+  btn.textContent = 'Importing…';
+  try {
+    const response = await fetch('/api/admin/cleanup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: 'import_viewbids_html', itemId, html }),
+    });
+    const data = await response.json();
+    if (data.status === 'imported') {
+      statusCell.innerHTML = statusBadge('imported');
+      btn.textContent = `Imported (${data.bidCount} bids, $${Number(data.finalPriceUsd).toFixed(2)})`;
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Retry import';
+      statusCell.innerHTML = `${statusBadge('parse-failed')} <span style="font-size: 0.72rem; opacity: 0.8;">${escapeHtml(data.error || 'parse failed')}</span>`;
+    }
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Retry import';
+    statusCell.textContent = `Error: ${err.message}`;
+  }
+}
+
+if (reconcileBidsBtn) {
+  reconcileBidsBtn.addEventListener('click', async () => {
+    const token = getToken();
+    if (!token) return;
+    reconcileResult.hidden = false;
+    reconcileResult.textContent = 'Fetching eBay bid-history pages… this can take ~2 minutes for all listings.';
+    reconcileBidsBtn.disabled = true;
+    try {
+      const response = await fetch('/api/admin/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'reconcile_ended_bids' }),
+      });
+      const data = await response.json();
+      if (!data.results || data.results.length === 0) {
+        reconcileResult.innerHTML = '<p style="opacity: 0.7;">No ended listings to reconcile.</p>';
+        return;
+      }
+      const imported = data.results.filter((r) => r.status === 'imported').length;
+      let html = `<p style="margin: 0 0 0.5rem;">${imported}/${data.count} imported automatically. Paste the page HTML for any blocked/failed item below.</p>`;
+      html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">';
+      html += '<thead><tr><th style="text-align: left; padding: 0.3rem;">Title</th><th style="text-align: left; padding: 0.3rem;">Status</th><th style="text-align: left; padding: 0.3rem;">Detail</th></tr></thead><tbody>';
+      for (const row of data.results) {
+        const needsFallback = row.status !== 'imported';
+        html += `<tr>
+          <td style="padding: 0.3rem;">${escapeHtml(row.title || '')}</td>
+          <td class="reconcile-status" style="padding: 0.3rem;">${statusBadge(row.status)}</td>
+          <td style="padding: 0.3rem; opacity: 0.8;">${escapeHtml(row.detail || '')}</td>
+        </tr>`;
+        if (needsFallback) {
+          html += `<tr data-fallback-for="${escapeHtml(row.itemId)}">
+            <td colspan="3" style="padding: 0.3rem 0.3rem 0.8rem;">
+              <div style="font-size: 0.75rem; opacity: 0.7; margin-bottom: 0.25rem;">
+                Open <a href="https://www.ebay.com/bfl/viewbids/${encodeURIComponent((row.itemId.split('|')[1] || row.itemId))}?item=${encodeURIComponent((row.itemId.split('|')[1] || row.itemId))}&amp;rt=nc" target="_blank" rel="noopener noreferrer">the bid-history page</a>, copy the full page HTML, paste it here:
+              </div>
+              <textarea class="viewbids-paste" data-item-id="${escapeHtml(row.itemId)}" rows="3" style="width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 0.7rem;" placeholder="Paste page HTML…"></textarea>
+              <button type="button" class="admin-btn viewbids-import-btn" data-item-id="${escapeHtml(row.itemId)}" style="margin-top: 0.25rem;">Import pasted HTML</button>
+            </td>
+          </tr>`;
+        }
+      }
+      html += '</tbody></table>';
+      reconcileResult.innerHTML = html;
+      reconcileResult.querySelectorAll('.viewbids-import-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const itemId = btn.dataset.itemId;
+          const textarea = reconcileResult.querySelector(`.viewbids-paste[data-item-id="${CSS.escape(itemId)}"]`);
+          const fallbackRow = reconcileResult.querySelector(`tr[data-fallback-for="${CSS.escape(itemId)}"]`);
+          const statusCell = fallbackRow.previousElementSibling.querySelector('.reconcile-status');
+          const pasted = (textarea.value || '').trim();
+          if (!pasted) {
+            alert('Paste the page HTML first.');
+            return;
+          }
+          importViewbidsHtml(itemId, pasted, btn, statusCell);
+        });
+      });
+    } catch (err) {
+      reconcileResult.textContent = `Network error: ${err.message}`;
+    } finally {
+      reconcileBidsBtn.disabled = false;
     }
   });
 }

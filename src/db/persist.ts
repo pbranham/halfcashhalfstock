@@ -157,6 +157,62 @@ export async function reconcileBids(
   return { inserted, removed };
 }
 
+// One-time authoritative repair of an ended auction's bid history from eBay's
+// public viewbids page. The page is the COMPLETE, final, static record, so this
+// fully replaces the item's bids (delete + insert) rather than merging — the
+// (item_id,bid_time,bidder) unique key can't catch a wrong AMOUNT on an
+// otherwise-matching row, so a merge would leave stale bad data behind.
+export async function reconcileItemBids(
+  pool: Pool,
+  itemId: string,
+  bids: readonly BidRecord[],
+): Promise<{ deleted: number; inserted: number; finalPriceUsd: number; bidCount: number }> {
+  const valid = bids.filter(
+    (b) => b.bidTime && Number.isFinite(b.bidAmount) && b.bidAmount >= 0,
+  );
+  // Guard: never let an empty/failed parse wipe good data.
+  if (valid.length === 0) {
+    throw new Error('reconcileItemBids: refusing to replace bids with zero valid rows');
+  }
+  const finalPriceUsd = valid.reduce((max, b) => (b.bidAmount > max ? b.bidAmount : max), 0);
+  const bidCount = valid.length;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const del = await client.query('DELETE FROM bids WHERE item_id = $1', [itemId]);
+
+    const values: unknown[] = [];
+    const placeholders = valid
+      .map((bid, i) => {
+        const base = i * 4;
+        values.push(itemId, bid.bidder || 'unknown', bid.bidTime, bid.bidAmount);
+        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`;
+      })
+      .join(', ');
+    const ins = await client.query(
+      `INSERT INTO bids (item_id, bidder, bid_time, bid_amount_usd)
+       VALUES ${placeholders}
+       ON CONFLICT (item_id, bid_time, bidder) DO NOTHING`,
+      values,
+    );
+
+    await client.query(
+      `UPDATE listings
+       SET current_price_usd = $2, current_bid_count = $3, last_backfilled_at = NOW()
+       WHERE item_id = $1`,
+      [itemId, finalPriceUsd, bidCount],
+    );
+    await client.query('COMMIT');
+    return { deleted: del.rowCount ?? 0, inserted: ins.rowCount ?? 0, finalPriceUsd, bidCount };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 export async function persistSnapshot(
   pool: Pool,
   inputs: readonly SnapshotPersistInput[],

@@ -103,7 +103,7 @@ export async function getItemBidHistory(
   };
 }
 
-function normalizeTradingItemId(itemId: string): string {
+export function normalizeTradingItemId(itemId: string): string {
   const parts = itemId.split('|');
   if (parts.length >= 2 && parts[1]) return parts[1];
   return itemId;

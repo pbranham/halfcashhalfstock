@@ -151,10 +151,17 @@
                 <button id="find-stuck-btn" type="button" class="admin-btn">Find stuck</button>
               </div>
             </div>
+            <div class="maintenance-row">
+              <span>Reconcile ended bids (fetch eBay bid-history pages; paste fallback for blocked items)</span>
+              <div class="row-actions">
+                <button id="reconcile-bids-btn" type="button" class="admin-btn admin-btn-primary">Reconcile all</button>
+              </div>
+            </div>
           </div>
           <div id="recovery-result" class="recovery-result" hidden></div>
           <pre id="inspect-output" class="inspect-output" hidden></pre>
           <div id="stuck-list" class="stuck-list" hidden></div>
+          <div id="reconcile-result" class="stuck-list" hidden></div>
         </section>
       </section>
 

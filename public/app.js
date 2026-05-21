@@ -212,12 +212,15 @@ function ebayItemUrl(itemId) {
   return `https://www.ebay.com/itm/${encodeURIComponent(legacyNumber)}`;
 }
 
-// For ended auctions, append orig_cvip=true so eBay shows the original
-// ended listing instead of redirecting to "similar items".
+// For ended auctions, append eBay's no-redirect parameter (nordt=true) so the
+// original ended listing is shown instead of redirecting to "similar items".
+// eBay only redirects ended listings that are linked to a catalog/product page
+// (e.g. mass-market goods); nordt=true suppresses that. orig_cvip=true is kept
+// as a harmless legacy hint.
 function endedEbayUrl(itemWebUrl, itemId) {
   const base = itemWebUrl || ebayItemUrl(itemId);
   const sep = base.includes('?') ? '&' : '?';
-  return `${base}${sep}orig_cvip=true`;
+  return `${base}${sep}nordt=true&orig_cvip=true`;
 }
 
 function renderItem(item, symbol) {

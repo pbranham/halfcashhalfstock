@@ -4,6 +4,7 @@ import {
   insertBids,
   persistSnapshot,
   readBidsForItem,
+  reconcileItemBids,
   upsertListing,
 } from '../src/db/persist.js';
 import type { Listing } from '../src/ebay/seller.js';
@@ -105,6 +106,69 @@ describe('insertBids', () => {
     expect(sql).toMatch(/ON CONFLICT \(item_id, bid_time, bidder\) DO NOTHING/);
     // 2 bids x 4 params each = 8 params
     expect(params).toHaveLength(8);
+  });
+});
+
+describe('reconcileItemBids', () => {
+  function makeTxPool() {
+    const client = {
+      query: vi.fn().mockImplementation((sql: string) => {
+        if (/^DELETE/.test(sql)) return Promise.resolve({ rows: [], rowCount: 8 });
+        if (/^INSERT/.test(sql)) return Promise.resolve({ rows: [], rowCount: 12 });
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }),
+      release: vi.fn(),
+    };
+    const pool = { connect: vi.fn().mockResolvedValue(client) };
+    return { pool, client };
+  }
+
+  const BIDS: BidRecord[] = [
+    { bidder: '5***t', bidTime: '2026-05-08T16:00:00.000Z', bidAmount: 4800 },
+    { bidder: 'a***b', bidTime: '2026-05-09T21:20:00.000Z', bidAmount: 5100 },
+    { bidder: '5***t', bidTime: '2026-05-09T21:23:01.000Z', bidAmount: 5200 },
+  ];
+
+  it('replaces bids inside a transaction and updates the listing', async () => {
+    const { pool, client } = makeTxPool();
+    await reconcileItemBids(pool as unknown as Pool, 'v1|336|0', BIDS);
+
+    const sqls = client.query.mock.calls.map(([sql]) => sql as string);
+    expect(sqls[0]).toBe('BEGIN');
+    expect(sqls.some((s) => /^DELETE FROM bids/.test(s))).toBe(true);
+    expect(sqls.some((s) => /^INSERT INTO bids/.test(s))).toBe(true);
+    expect(sqls.some((s) => /UPDATE listings/.test(s) && /last_backfilled_at = NOW\(\)/.test(s))).toBe(true);
+    expect(sqls[sqls.length - 1]).toBe('COMMIT');
+    expect(client.release).toHaveBeenCalledOnce();
+  });
+
+  it('returns the max bid as finalPriceUsd and the row counts', async () => {
+    const { pool } = makeTxPool();
+    const result = await reconcileItemBids(pool as unknown as Pool, 'v1|336|0', BIDS);
+    expect(result).toEqual({ deleted: 8, inserted: 12, finalPriceUsd: 5200, bidCount: 3 });
+  });
+
+  it('refuses to delete when given zero valid bids', async () => {
+    const { pool } = makeTxPool();
+    await expect(
+      reconcileItemBids(pool as unknown as Pool, 'v1|336|0', []),
+    ).rejects.toThrow(/zero valid rows/);
+    expect(pool.connect).not.toHaveBeenCalled();
+  });
+
+  it('rolls back when a query fails mid-transaction', async () => {
+    const { pool, client } = makeTxPool();
+    client.query.mockImplementation((sql: string) => {
+      if (sql === 'BEGIN') return Promise.resolve({ rows: [], rowCount: 0 });
+      if (/^DELETE/.test(sql)) return Promise.reject(new Error('db down'));
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+    await expect(
+      reconcileItemBids(pool as unknown as Pool, 'v1|336|0', BIDS),
+    ).rejects.toThrow('db down');
+    const sqls = client.query.mock.calls.map(([sql]) => sql as string);
+    expect(sqls).toContain('ROLLBACK');
+    expect(client.release).toHaveBeenCalledOnce();
   });
 });
 
