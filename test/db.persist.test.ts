@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
 import {
+  getClosingPriceAt,
   insertBids,
   persistSnapshot,
   readBidsForItem,
@@ -259,5 +260,36 @@ describe('readBidsForItem', () => {
     expect(sql).toMatch(/SELECT bidder, bid_time, bid_amount_usd, first_seen_at, removed_at/);
     expect(sql).toMatch(/ORDER BY bid_time ASC/);
     expect(params).toEqual(['v1|111|0']);
+  });
+});
+
+describe('getClosingPriceAt', () => {
+  it('returns the close from the most-recent-at-or-before period for the ticker', async () => {
+    const pool = makePool();
+    pool.query.mockResolvedValueOnce({ rows: [{ close: '57.42' }], rowCount: 1 });
+    const when = new Date('2026-05-13T15:30:00Z');
+    const price = await getClosingPriceAt(pool as unknown as Pool, 'EBAY', when);
+    expect(price).toBe(57.42);
+    const [sql, params] = pool.query.mock.calls[0];
+    expect(sql).toMatch(/FROM ohlc_data/);
+    expect(sql).toMatch(/period_start <= \$2/);
+    expect(sql).toMatch(/ORDER BY period_start DESC/);
+    // Tie-breaker: 1m beats 15m beats 1d.
+    expect(sql).toMatch(/CASE interval WHEN '1m' THEN 1 WHEN '15m' THEN 2 WHEN '1d' THEN 3/);
+    expect(params).toEqual(['EBAY', when]);
+  });
+
+  it('returns null when no row exists at or before `when`', async () => {
+    const pool = makePool();
+    pool.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const price = await getClosingPriceAt(pool as unknown as Pool, 'EBAY', new Date());
+    expect(price).toBeNull();
+  });
+
+  it('returns null when the stored close is non-finite (defensive)', async () => {
+    const pool = makePool();
+    pool.query.mockResolvedValueOnce({ rows: [{ close: 'not-a-number' }], rowCount: 1 });
+    const price = await getClosingPriceAt(pool as unknown as Pool, 'EBAY', new Date());
+    expect(price).toBeNull();
   });
 });

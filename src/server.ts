@@ -17,6 +17,7 @@ import { TtlCache, DbBackedCache } from './cache.js';
 import { createPool } from './db/pool.js';
 import { runMigrations } from './db/migrate.js';
 import {
+  bulkInsertOhlcData,
   forceMarkEnded,
   persistSnapshot,
   readBidsForItem,
@@ -487,7 +488,16 @@ export function createApp(deps: Deps): express.Express {
       return;
     }
     try {
-      const body = req.body as { action?: string; environment?: string; from?: string; to?: string; itemId?: string; html?: string } | undefined;
+      const body = req.body as {
+        action?: string;
+        environment?: string;
+        from?: string;
+        to?: string;
+        itemId?: string;
+        html?: string;
+        tickers?: unknown;
+        range?: string;
+      } | undefined;
       const action = body?.action;
 
       if (action === 'delete_environment') {
@@ -769,6 +779,44 @@ export function createApp(deps: Deps): express.Express {
           currentBidCount: listing.finalBidCount,
         }));
         res.status(200).json({ action: 'list_ended_for_reconcile', count: items.length, items });
+        return;
+      }
+
+      if (action === 'backfill_ohlc_history') {
+        // Pulls daily OHLC candles from Yahoo and stores them under
+        // interval='1d', which is exempt from purgeOldOhlcData and therefore
+        // accumulates the long-running history we need to value ended
+        // auctions at the EBAY close on the day they ended.
+        const tickersIn = Array.isArray(body?.tickers) ? body.tickers : ['EBAY', 'GME'];
+        const tickers = tickersIn
+          .filter((t): t is string => typeof t === 'string' && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(t))
+          .slice(0, 10);
+        if (tickers.length === 0) {
+          res.status(400).json({ error: 'bad_request', detail: 'no valid tickers' });
+          return;
+        }
+        const range = typeof body?.range === 'string' && /^\d{1,3}(d|mo|y)$/.test(body.range)
+          ? body.range
+          : '90d';
+        const yahoo = new YahooProvider();
+        const perTicker: Array<{ ticker: string; candles: number; inserted: number; error?: string }> = [];
+        for (const ticker of tickers) {
+          try {
+            const candles = await yahoo.getHistoricalCandles(ticker, '1d', range);
+            const inserted = candles.length === 0
+              ? 0
+              : await bulkInsertOhlcData(deps.db, ticker, candles, 'yahoo', '1d');
+            perTicker.push({ ticker, candles: candles.length, inserted });
+          } catch (err) {
+            perTicker.push({
+              ticker,
+              candles: 0,
+              inserted: 0,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        res.status(200).json({ action: 'backfill_ohlc_history', range, results: perTicker });
         return;
       }
 

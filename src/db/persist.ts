@@ -525,6 +525,30 @@ export async function storeOhlcData(
   );
 }
 
+// Look up the EBAY (or any ticker) close price at the moment an auction ended.
+// Picks the OHLC row with the largest period_start at or before `when`,
+// preferring finer granularity at the same period (1m > 15m > 1d). Returns
+// null when no row at or before `when` exists for the ticker.
+export async function getClosingPriceAt(
+  pool: Pool,
+  ticker: string,
+  when: Date,
+): Promise<number | null> {
+  const res = await pool.query<{ close: string }>(
+    `SELECT close
+     FROM ohlc_data
+     WHERE ticker = $1 AND period_start <= $2 AND close IS NOT NULL
+     ORDER BY period_start DESC,
+              CASE interval WHEN '1m' THEN 1 WHEN '15m' THEN 2 WHEN '1d' THEN 3 ELSE 4 END ASC
+     LIMIT 1`,
+    [ticker, when],
+  );
+  const row = res.rows[0];
+  if (!row) return null;
+  const close = Number(row.close);
+  return Number.isFinite(close) ? close : null;
+}
+
 export async function readOhlcData(
   pool: Pool,
   ticker: string,
