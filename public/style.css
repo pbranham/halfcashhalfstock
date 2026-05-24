@@ -666,6 +666,55 @@ footer .disclaimer {
   background: var(--accent-soft);
 }
 
+.seller-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.seller-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 4px 12px;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.seller-btn:hover {
+  border-color: var(--fg-muted);
+  color: var(--fg);
+}
+
+.seller-btn.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.seller-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  opacity: 0.85;
+}
+
+.seller-badge-mine {
+  color: #6ba6c4;
+}
+
+.seller-badge-ryan {
+  color: #c4956b;
+}
+
 /* Bid-update flash */
 @keyframes bid-flash {
   0%   { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(92, 219, 149, 0.3), var(--shadow); }
