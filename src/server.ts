@@ -130,10 +130,17 @@ function buildDeps(
       tokenProvider,
       marketplaceId: config.EBAY_MARKETPLACE_ID,
     });
-    fetchListings = () =>
-      listingCache.get(config.EBAY_SELLER_ID, LISTINGS_TTL_MS, () =>
-        listSellerActiveItems(client, config.EBAY_SELLER_ID),
+    fetchListings = async () => {
+      // Per-seller cache keys so each seller's poll caches independently.
+      const perSeller = await Promise.all(
+        config.sellerIds.map((sellerId) =>
+          listingCache.get(sellerId, LISTINGS_TTL_MS, () =>
+            listSellerActiveItems(client, sellerId),
+          ),
+        ),
       );
+      return perSeller.flat();
+    };
   } else {
     fetchListings = () => {
       throw new Error('eBay credentials are not configured (set EBAY_APP_ID and EBAY_CERT_ID)');
@@ -904,7 +911,7 @@ async function main(): Promise<void> {
   const deps = buildDeps(config, log, db, tickerQueue, requestStats);
   const app = createApp(deps);
   const server = app.listen(config.PORT, () => {
-    log.info('listening', { port: config.PORT, sellerId: config.EBAY_SELLER_ID });
+    log.info('listening', { port: config.PORT, sellerIds: config.sellerIds });
   });
 
   const shutdown = (signal: string): void => {

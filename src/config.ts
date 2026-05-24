@@ -3,13 +3,20 @@ import path from 'node:path';
 import { z } from 'zod';
 export const DEFAULT_EBAY_USER_TOKEN_FILE = '.cache/ebay-auth-token.json';
 
+const SELLER_ID_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+const DEFAULT_SELLER_IDS = ['boilerpaulie', 'ryan_5050'] as const;
+
 const Schema = z.object({
   EBAY_APP_ID: z.string().trim().min(1).optional(),
   EBAY_CERT_ID: z.string().trim().min(1).optional(),
   EBAY_DEV_ID: z.string().trim().min(1).optional(),
   EBAY_USER_TOKEN: z.string().trim().min(1).optional(),
   EBAY_USER_TOKEN_FILE: z.string().trim().min(1).optional(),
-  EBAY_SELLER_ID: z.string().trim().min(1).default('ryan_5050'),
+  // Comma-separated list of seller usernames to poll. Falls back to the
+  // legacy single-value `EBAY_SELLER_ID` env var when unset, then to
+  // DEFAULT_SELLER_IDS. Materialised as `sellerIds: string[]` on the
+  // resolved Config.
+  EBAY_SELLER_IDS: z.string().trim().min(1).optional(),
   EBAY_MARKETPLACE_ID: z.string().trim().min(1).default('EBAY_US'),
   FINNHUB_API_KEY: z.string().trim().min(1).optional(),
   STOCK_SYMBOL: z.string().trim().min(1).default('EBAY'),
@@ -25,7 +32,7 @@ const Schema = z.object({
   ADMIN_TOKEN: z.string().trim().min(8).optional(),
 });
 
-export type Config = z.infer<typeof Schema>;
+export type Config = z.infer<typeof Schema> & { sellerIds: string[] };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = Schema.safeParse(env);
@@ -33,7 +40,26 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     const issues = parsed.error.issues.map((i) => `  - ${i.path.join('.')}: ${i.message}`);
     throw new Error(`Invalid environment configuration:\n${issues.join('\n')}`);
   }
-  return parsed.data;
+  const sellerIds = parseSellerIds(parsed.data.EBAY_SELLER_IDS, env.EBAY_SELLER_ID);
+  return { ...parsed.data, sellerIds };
+}
+
+function parseSellerIds(plural: string | undefined, singular: string | undefined): string[] {
+  const raw = plural ?? singular ?? DEFAULT_SELLER_IDS.join(',');
+  const parts = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (parts.length === 0) {
+    throw new Error('EBAY_SELLER_IDS resolved to an empty list');
+  }
+  for (const p of parts) {
+    if (!SELLER_ID_RE.test(p)) {
+      throw new Error(`Invalid seller id in EBAY_SELLER_IDS: ${p}`);
+    }
+  }
+  // De-duplicate while preserving the user-given order.
+  return Array.from(new Set(parts));
 }
 
 export function hasEbayCredentials(config: Config): boolean {
