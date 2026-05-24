@@ -14,6 +14,7 @@ const QUOTE: PriceQuote = {
 function listing(overrides: Partial<Listing> = {}): Listing {
   return {
     itemId: 'v1|1',
+    sellerId: 'ryan_5050',
     title: 'Test',
     imageUrl: null,
     itemWebUrl: 'https://example.com',

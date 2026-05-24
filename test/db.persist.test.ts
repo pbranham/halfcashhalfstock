@@ -20,6 +20,7 @@ function makePool(): MockPool {
 
 const LISTING: Listing = {
   itemId: 'v1|111|0',
+  sellerId: 'ryan_5050',
   title: 'Cohen Plush',
   imageUrl: 'https://i.ebayimg.com/x.jpg',
   itemWebUrl: 'https://www.ebay.com/itm/111',
@@ -38,9 +39,11 @@ describe('upsertListing', () => {
     expect(pool.query).toHaveBeenCalledOnce();
     const [sql, params] = pool.query.mock.calls[0];
     expect(sql).toMatch(/INSERT INTO listings/);
+    expect(sql).toMatch(/seller_id/);
     expect(sql).toMatch(/ON CONFLICT \(item_id\) DO UPDATE/);
     expect(params).toEqual([
       'v1|111|0',
+      'ryan_5050',
       'Cohen Plush',
       'https://i.ebayimg.com/x.jpg',
       'https://www.ebay.com/itm/111',

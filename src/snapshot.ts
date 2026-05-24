@@ -5,6 +5,7 @@ import type { EndedListingRow } from './db/persist.js';
 
 export interface ListingView {
   itemId: string;
+  sellerId: string;
   title: string;
   imageUrl: string | null;
   itemWebUrl: string;
@@ -19,6 +20,7 @@ export interface ListingView {
 
 export interface EndedListingView {
   itemId: string;
+  sellerId: string;
   title: string;
   imageUrl: string | null;
   itemWebUrl: string | null;
@@ -66,6 +68,7 @@ export function composeSnapshot(
 ): Snapshot {
   const items: ListingView[] = listings.map((l) => ({
     itemId: l.itemId,
+    sellerId: l.sellerId,
     title: l.title,
     imageUrl: l.imageUrl,
     itemWebUrl: l.itemWebUrl,
@@ -99,6 +102,7 @@ export function composeSnapshot(
 
   const endedItems: EndedListingView[] = ended.map((e) => ({
     itemId: e.itemId,
+    sellerId: e.sellerId,
     title: e.title,
     imageUrl: e.imageUrl,
     itemWebUrl: e.itemWebUrl,

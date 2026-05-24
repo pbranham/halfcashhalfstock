@@ -10,11 +10,12 @@ export interface SnapshotPersistInput {
 export async function upsertListing(pool: Pool, listing: Listing): Promise<void> {
   await pool.query(
     `INSERT INTO listings (
-       item_id, title, image_url, item_web_url, is_auction, ends_at,
+       item_id, seller_id, title, image_url, item_web_url, is_auction, ends_at,
        current_price_usd, current_bid_count, currency, first_seen_at, last_seen_at
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
      ON CONFLICT (item_id) DO UPDATE SET
+       seller_id = EXCLUDED.seller_id,
        title = EXCLUDED.title,
        image_url = EXCLUDED.image_url,
        item_web_url = EXCLUDED.item_web_url,
@@ -26,6 +27,7 @@ export async function upsertListing(pool: Pool, listing: Listing): Promise<void>
        last_seen_at = NOW()`,
     [
       listing.itemId,
+      listing.sellerId,
       listing.title,
       listing.imageUrl,
       listing.itemWebUrl,
@@ -308,6 +310,7 @@ export async function forceMarkEnded(pool: Pool, itemId: string): Promise<boolea
 
 export interface EndedListingRow {
   itemId: string;
+  sellerId: string;
   title: string;
   imageUrl: string | null;
   itemWebUrl: string | null;
@@ -326,6 +329,7 @@ export async function readEndedListings(
   const since = new Date(Date.now() - sinceDays * 86_400_000);
   const res = await pool.query<{
     item_id: string;
+    seller_id: string;
     title: string;
     image_url: string | null;
     item_web_url: string | null;
@@ -336,7 +340,7 @@ export async function readEndedListings(
     current_bid_count: number;
     currency: string;
   }>(
-    `SELECT item_id, title, image_url, item_web_url, is_auction,
+    `SELECT item_id, seller_id, title, image_url, item_web_url, is_auction,
             ends_at, ended_at, current_price_usd, current_bid_count, currency
      FROM listings
      WHERE ended_at IS NOT NULL AND ended_at >= $1
@@ -345,6 +349,7 @@ export async function readEndedListings(
   );
   return res.rows.map((row) => ({
     itemId: row.item_id,
+    sellerId: row.seller_id,
     title: row.title,
     imageUrl: row.image_url,
     itemWebUrl: row.item_web_url,
@@ -390,6 +395,7 @@ export async function readBidsForItem(pool: Pool, itemId: string): Promise<BidRo
 
 export interface ListingDetail {
   itemId: string;
+  sellerId: string;
   title: string;
   imageUrl: string | null;
   itemWebUrl: string | null;
@@ -409,6 +415,7 @@ export async function readListingDetail(
 ): Promise<ListingDetail | null> {
   const res = await pool.query<{
     item_id: string;
+    seller_id: string;
     title: string;
     image_url: string | null;
     item_web_url: string | null;
@@ -421,7 +428,7 @@ export async function readListingDetail(
     first_seen_at: Date;
     last_seen_at: Date;
   }>(
-    `SELECT item_id, title, image_url, item_web_url, is_auction, ends_at, ended_at,
+    `SELECT item_id, seller_id, title, image_url, item_web_url, is_auction, ends_at, ended_at,
             current_price_usd, current_bid_count, currency, first_seen_at, last_seen_at
      FROM listings
      WHERE item_id = $1`,
@@ -431,6 +438,7 @@ export async function readListingDetail(
   if (!row) return null;
   return {
     itemId: row.item_id,
+    sellerId: row.seller_id,
     title: row.title,
     imageUrl: row.image_url,
     itemWebUrl: row.item_web_url,
