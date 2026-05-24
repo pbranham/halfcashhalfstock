@@ -784,7 +784,7 @@ if (reconcileBidsBtn) {
         reconcileResult.innerHTML = '<p style="opacity: 0.7;">No ended listings to reconcile.</p>';
         return;
       }
-      let html = `<p style="margin: 0 0 0.5rem;">${data.count} ended item${data.count === 1 ? '' : 's'}. eBay blocks server-side fetches from this IP, so paste each page's HTML manually. Click the title for the item page, the current-state column for the bid-history page, or the source column to open the bid-history page source. Copy the source HTML, paste into the textarea, and click Import.</p>`;
+      let html = `<p style="margin: 0 0 0.5rem;">${data.count} ended item${data.count === 1 ? '' : 's'}. eBay blocks server-side fetches from this IP, so paste each page's HTML manually. Click the title for the item page, the current-state column for the bid-history page, or "Copy view-source URL" to copy the source URL (Chrome blocks direct view-source links). On the bid-history page, Cmd+Option+U (Mac) opens the source. Copy the source HTML, paste into the textarea, and click Import.</p>`;
       html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">';
       html += '<thead><tr><th style="text-align: left; padding: 0.3rem;">Item page</th><th style="text-align: left; padding: 0.3rem;">Bid history</th><th style="text-align: left; padding: 0.3rem;">Source</th></tr></thead><tbody>';
       for (const row of data.items) {
@@ -794,7 +794,7 @@ if (reconcileBidsBtn) {
         html += `<tr>
           <td style="padding: 0.3rem; vertical-align: top;"><a href="${escapeHtml(itemUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(row.title || '')}</a></td>
           <td class="reconcile-status" style="padding: 0.3rem; vertical-align: top; white-space: nowrap;"><a href="${escapeHtml(bidUrl)}" target="_blank" rel="noopener noreferrer">$${Number(row.currentPriceUsd).toFixed(2)} · ${row.currentBidCount} bids</a></td>
-          <td style="padding: 0.3rem; vertical-align: top; white-space: nowrap;"><a href="${escapeHtml(viewSrcUrl)}" target="_blank" rel="noopener noreferrer">view source</a></td>
+          <td style="padding: 0.3rem; vertical-align: top; white-space: nowrap;"><button type="button" class="admin-btn copy-vs-btn" data-vs-url="${escapeHtml(viewSrcUrl)}">Copy view-source URL</button></td>
         </tr>
         <tr data-fallback-for="${escapeHtml(row.itemId)}">
           <td colspan="3" style="padding: 0 0.3rem 0.8rem;">
@@ -805,6 +805,21 @@ if (reconcileBidsBtn) {
       }
       html += '</tbody></table>';
       reconcileResult.innerHTML = html;
+      reconcileResult.querySelectorAll('.copy-vs-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const url = btn.dataset.vsUrl;
+          try {
+            await navigator.clipboard.writeText(url);
+            const original = btn.textContent;
+            btn.textContent = 'Copied!';
+            setTimeout(() => {
+              btn.textContent = original;
+            }, 1500);
+          } catch {
+            window.prompt('Copy this view-source URL:', url);
+          }
+        });
+      });
       reconcileResult.querySelectorAll('.viewbids-import-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
           const itemId = btn.dataset.itemId;
