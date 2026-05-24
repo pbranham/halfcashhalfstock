@@ -33,12 +33,7 @@ import { EbayClient } from './ebay/client.js';
 import { listSellerActiveItems, type Listing } from './ebay/seller.js';
 import { fetchBidHistory } from './ebay/bid-history.js';
 import { normalizeTradingItemId } from './ebay/trading.js';
-import {
-  fetchViewbidsHtml,
-  parseViewbids,
-  ViewbidsParseError,
-  sleep,
-} from './ebay/viewbids.js';
+import { parseViewbids, ViewbidsParseError } from './ebay/viewbids.js';
 import { FinnhubProvider } from './prices/finnhub.js';
 import { YahooProvider } from './prices/yahoo.js';
 import { ChainedPriceProvider } from './prices/provider.js';
@@ -753,59 +748,20 @@ export function createApp(deps: Deps): express.Express {
         return;
       }
 
-      if (action === 'reconcile_ended_bids') {
-        // sinceDays large enough to cover every ended auction regardless of age.
+      if (action === 'list_ended_for_reconcile') {
+        // Just list the ended items with current state. Auto-fetching viewbids
+        // pages from this server's IP has never succeeded (eBay's datacenter-IP
+        // challenge is universal), so the UI goes straight to paste mode for
+        // every item — no 2-minute wait for guaranteed failures.
         const ended = await readEndedListings(deps.db, 3650);
-        const results: Array<{
-          itemId: string;
-          title: string;
-          status: 'imported' | 'blocked-403' | 'parse-failed' | 'error';
-          detail?: string;
-        }> = [];
-        for (let i = 0; i < ended.length; i += 1) {
-          const listing = ended[i]!;
-          const numericId = normalizeTradingItemId(listing.itemId);
-          try {
-            const fetched = await fetchViewbidsHtml(numericId);
-            if (fetched.status === 'blocked') {
-              results.push({
-                itemId: listing.itemId,
-                title: listing.title,
-                status: 'blocked-403',
-                detail: `eBay blocked the request (HTTP ${fetched.httpStatus}); use paste fallback`,
-              });
-            } else if (fetched.status === 'error') {
-              results.push({
-                itemId: listing.itemId,
-                title: listing.title,
-                status: 'error',
-                detail: fetched.message,
-              });
-            } else {
-              const parsed = parseViewbids(fetched.html);
-              const r = await reconcileItemBids(deps.db, listing.itemId, parsed.bids);
-              results.push({
-                itemId: listing.itemId,
-                title: listing.title,
-                status: 'imported',
-                detail: `deleted ${r.deleted} → inserted ${r.inserted}, final $${r.finalPriceUsd.toFixed(2)}, ${r.bidCount} bids`,
-              });
-            }
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            results.push({
-              itemId: listing.itemId,
-              title: listing.title,
-              status: err instanceof ViewbidsParseError ? 'parse-failed' : 'error',
-              detail: message,
-            });
-          }
-          // Be polite to eBay: randomized delay between page fetches.
-          if (i < ended.length - 1) {
-            await sleep(2000 + Math.floor(Math.random() * 3000));
-          }
-        }
-        res.status(200).json({ action: 'reconcile_ended_bids', count: results.length, results });
+        const items = ended.map((listing) => ({
+          itemId: listing.itemId,
+          numericId: normalizeTradingItemId(listing.itemId),
+          title: listing.title,
+          currentPriceUsd: listing.finalPriceUsd,
+          currentBidCount: listing.finalBidCount,
+        }));
+        res.status(200).json({ action: 'list_ended_for_reconcile', count: items.length, items });
         return;
       }
 

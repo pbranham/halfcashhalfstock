@@ -134,12 +134,17 @@ Implementation:
 - `persist.reconcileItemBids(pool, itemId, bids)` — transactional
   delete-and-replace inside `pool.connect()` BEGIN/COMMIT. Refuses to run
   on empty bids (a failed parse can never wipe good data).
-- Two admin actions: `reconcile_ended_bids` (bulk fetch+import with
-  randomized 2–5s delays between items) and `import_viewbids_html`
-  (`{itemId, html}` paste fallback).
-- Admin UI: "Reconcile all" button in `public/admin.html` /
-  `admin.js`, results table with a paste textarea per blocked/failed row
-  and both the `https://...` URL and a `view-source:` URL surfaced.
+- Two admin actions: `list_ended_for_reconcile` (fast, no fetching — just
+  returns the ended items with current state) and `import_viewbids_html`
+  (`{itemId, html}` paste action). The earlier bulk-fetch action was
+  removed: server-side fetching of `bfl/viewbids/*` from the Render IP
+  always returns eBay's "Pardon Our Interruption" challenge page, so the
+  loop was a 2-minute wait for guaranteed failure on every item. Don't
+  re-add it without first verifying the IP/headers situation has changed.
+- Admin UI: "Reconcile all" button shows the full ended-items table
+  immediately, with a paste textarea + "Copy view-source URL" button per
+  row. Chrome blocks `<a href="view-source:...">` navigation, so the UI
+  uses a clipboard-copy button instead of a link.
 
 If a paste parse-fails, get the diagnostics from the admin UI result — do
 NOT have the user paste the full HTML into Claude chat. The diagnostics

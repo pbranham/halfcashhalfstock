@@ -755,49 +755,66 @@ async function importViewbidsHtml(itemId, html, btn, statusCell) {
   }
 }
 
+function viewbidsUrl(numericId) {
+  const id = encodeURIComponent(numericId);
+  return `https://www.ebay.com/bfl/viewbids/${id}?item=${id}&rt=nc`;
+}
+
+async function copyToClipboard(text, btn) {
+  const original = btn.textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = 'Copied!';
+  } catch {
+    btn.textContent = 'Copy failed';
+  }
+  setTimeout(() => { btn.textContent = original; }, 1500);
+}
+
 if (reconcileBidsBtn) {
   reconcileBidsBtn.addEventListener('click', async () => {
     const token = getToken();
     if (!token) return;
     reconcileResult.hidden = false;
-    reconcileResult.textContent = 'Fetching eBay bid-history pages… this can take ~2 minutes for all listings.';
+    reconcileResult.textContent = 'Loading ended items…';
     reconcileBidsBtn.disabled = true;
     try {
       const response = await fetch('/api/admin/cleanup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'reconcile_ended_bids' }),
+        body: JSON.stringify({ action: 'list_ended_for_reconcile' }),
       });
       const data = await response.json();
-      if (!data.results || data.results.length === 0) {
+      if (!data.items || data.items.length === 0) {
         reconcileResult.innerHTML = '<p style="opacity: 0.7;">No ended listings to reconcile.</p>';
         return;
       }
-      const imported = data.results.filter((r) => r.status === 'imported').length;
-      let html = `<p style="margin: 0 0 0.5rem;">${imported}/${data.count} imported automatically. Paste the page HTML for any blocked/failed item below.</p>`;
+      let html = `<p style="margin: 0 0 0.5rem;">${data.count} ended item${data.count === 1 ? '' : 's'}. eBay blocks server-side fetches from this IP, so paste each page's HTML manually. Each row has a button to copy the <code>view-source:</code> URL — paste that into your browser's address bar to get the raw HTML, copy it, then paste it here and click Import.</p>`;
       html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">';
-      html += '<thead><tr><th style="text-align: left; padding: 0.3rem;">Title</th><th style="text-align: left; padding: 0.3rem;">Status</th><th style="text-align: left; padding: 0.3rem;">Detail</th></tr></thead><tbody>';
-      for (const row of data.results) {
-        const needsFallback = row.status !== 'imported';
+      html += '<thead><tr><th style="text-align: left; padding: 0.3rem;">Title</th><th style="text-align: left; padding: 0.3rem;">Current state</th><th style="text-align: left; padding: 0.3rem;">Get HTML</th></tr></thead><tbody>';
+      for (const row of data.items) {
+        const url = viewbidsUrl(row.numericId);
+        const viewSrcUrl = `view-source:${url}`;
         html += `<tr>
-          <td style="padding: 0.3rem;">${escapeHtml(row.title || '')}</td>
-          <td class="reconcile-status" style="padding: 0.3rem;">${statusBadge(row.status)}</td>
-          <td style="padding: 0.3rem; opacity: 0.8;">${escapeHtml(row.detail || '')}</td>
+          <td style="padding: 0.3rem; vertical-align: top;">${escapeHtml(row.title || '')}</td>
+          <td class="reconcile-status" style="padding: 0.3rem; vertical-align: top; white-space: nowrap;">$${Number(row.currentPriceUsd).toFixed(2)} · ${row.currentBidCount} bids</td>
+          <td style="padding: 0.3rem; vertical-align: top; white-space: nowrap;">
+            <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" style="margin-right: 0.5rem;">Open page ↗</a>
+            <button type="button" class="admin-btn copy-vs-btn" data-vs-url="${escapeHtml(viewSrcUrl)}" style="font-size: 0.75rem; padding: 0.15rem 0.4rem;">Copy view-source URL</button>
+          </td>
+        </tr>
+        <tr data-fallback-for="${escapeHtml(row.itemId)}">
+          <td colspan="3" style="padding: 0 0.3rem 0.8rem;">
+            <textarea class="viewbids-paste" data-item-id="${escapeHtml(row.itemId)}" rows="2" style="width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 0.7rem;" placeholder="Paste page HTML…"></textarea>
+            <button type="button" class="admin-btn viewbids-import-btn" data-item-id="${escapeHtml(row.itemId)}" style="margin-top: 0.25rem;">Import pasted HTML</button>
+          </td>
         </tr>`;
-        if (needsFallback) {
-          html += `<tr data-fallback-for="${escapeHtml(row.itemId)}">
-            <td colspan="3" style="padding: 0.3rem 0.3rem 0.8rem;">
-              <div style="font-size: 0.75rem; opacity: 0.7; margin-bottom: 0.25rem;">
-                Open <a href="https://www.ebay.com/bfl/viewbids/${encodeURIComponent((row.itemId.split('|')[1] || row.itemId))}?item=${encodeURIComponent((row.itemId.split('|')[1] || row.itemId))}&amp;rt=nc" target="_blank" rel="noopener noreferrer">the bid-history page</a> (or copy this <code style="user-select: all;">view-source:https://www.ebay.com/bfl/viewbids/${encodeURIComponent((row.itemId.split('|')[1] || row.itemId))}?item=${encodeURIComponent((row.itemId.split('|')[1] || row.itemId))}&amp;rt=nc</code> into your address bar to go straight to source). Paste the full page HTML here:
-              </div>
-              <textarea class="viewbids-paste" data-item-id="${escapeHtml(row.itemId)}" rows="3" style="width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 0.7rem;" placeholder="Paste page HTML…"></textarea>
-              <button type="button" class="admin-btn viewbids-import-btn" data-item-id="${escapeHtml(row.itemId)}" style="margin-top: 0.25rem;">Import pasted HTML</button>
-            </td>
-          </tr>`;
-        }
       }
       html += '</tbody></table>';
       reconcileResult.innerHTML = html;
+      reconcileResult.querySelectorAll('.copy-vs-btn').forEach((btn) => {
+        btn.addEventListener('click', () => copyToClipboard(btn.dataset.vsUrl, btn));
+      });
       reconcileResult.querySelectorAll('.viewbids-import-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
           const itemId = btn.dataset.itemId;
