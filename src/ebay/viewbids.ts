@@ -56,13 +56,17 @@ const MONTHS: Record<string, string> = {
 export function parseEbayDate(raw: string): string {
   const text = raw.replace(/\s+/g, ' ').trim();
 
-  // Format A: Mon-DD-YY HH:MM:SS ZZZ (24-hour)
+  // Format A: Mon-DD-YY HH:MM:SS ZZZ (24-hour, dashes)
   const a = text.match(
     /([A-Za-z]{3})-(\d{1,2})-(\d{2,4})\s+(\d{1,2}):(\d{2}):(\d{2})\s+([A-Za-z]{2,4})/,
   );
-  // Format B: Mon DD, YYYY at H:MM:SS AM/PM ZZZ (12-hour)
+  // Format B: Mon DD, YYYY at H:MM:SS AM/PM ZZZ (month-first 12-hour)
   const b = text.match(
     /([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{2,4})\s+(?:at\s+)?(\d{1,2}):(\d{2}):(\d{2})\s*([AaPp][Mm])\s+([A-Za-z]{2,4})/,
+  );
+  // Format C: DD Mon YYYY at H:MM:SSam/pm ZZZ (day-first 12-hour — eBay viewbids)
+  const c = text.match(
+    /(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})\s+(?:at\s+)?(\d{1,2}):(\d{2}):(\d{2})\s*([AaPp][Mm])\s+([A-Za-z]{2,4})/,
   );
 
   let month: string | undefined;
@@ -92,6 +96,17 @@ export function parseEbayDate(raw: string): string {
     if (meridiem === 'PM' && hour < 12) hour += 12;
     if (meridiem === 'AM' && hour === 12) hour = 0;
     zone = b[8]!.toUpperCase();
+  } else if (c) {
+    day = c[1]!;
+    month = MONTHS[c[2]!.toLowerCase().slice(0, 3)];
+    year = c[3]!;
+    hour = Number(c[4]);
+    minute = c[5]!;
+    second = c[6]!;
+    const meridiem = c[7]!.toUpperCase();
+    if (meridiem === 'PM' && hour < 12) hour += 12;
+    if (meridiem === 'AM' && hour === 12) hour = 0;
+    zone = c[8]!.toUpperCase();
   } else {
     throw new Error(`unrecognized eBay date format: "${raw}"`);
   }
@@ -117,22 +132,34 @@ interface Token {
 }
 
 // The viewbids DOM uses obfuscated, churn-prone class names, so parsing anchors
-// on stable semantic tokens instead of CSS selectors: the "US $" currency
-// prefix, eBay's "5***t" bidder masking, and the date formats above. The HTML
-// is flattened to text, every token located, then tokens are walked in
-// document order — each amount pairs with the most recent bidder and the next
-// date — which matches eBay's per-row render order (bidder, amount, date).
+// on stable semantic tokens instead of CSS selectors: the "$" currency prefix,
+// eBay's "5***t" bidder masking, and the date formats. The HTML is flattened to
+// text, every token located, then tokens are walked in document order with the
+// bidder token serving as a row delimiter — each bidder starts a fresh row and
+// collects the next amount + date that appear after it. The retraction table
+// at the bottom of the page is truncated off so retracted bids don't double-
+// count, and rows preceded by eBay's "automatic bid (proxy bid)" marker are
+// filtered out so the row count matches eBay's reported "Bids" total.
 export function parseViewbids(html: string): ViewbidsParseResult {
-  const text = html
+  const fullText = html
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
     .replace(/<[^>]+>/g, '\n')
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&');
 
+  // Stop before the "Bid retraction and cancellation history" section so the
+  // retracted-bid row doesn't form a phantom 44th row.
+  const retractIdx = fullText.indexOf('Bid retraction and cancellation history');
+  const text = retractIdx > 0 ? fullText.slice(0, retractIdx) : fullText;
+
   const tokens: Token[] = [];
 
-  const amountRe = /US\s*\$\s*([\d,]+\.\d{2})/g;
+  // Amounts: eBay's viewbids page renders bid prices as "$2,900.00" — no
+  // "US $" prefix. The leading "Winning bid: $X" header amount that precedes
+  // every bidder token is dropped naturally by the bidder-delimited walk
+  // below (amounts before the first bidder have no row to attach to).
+  const amountRe = /\$\s*([\d,]+\.\d{2})/g;
   for (let m = amountRe.exec(text); m; m = amountRe.exec(text)) {
     tokens.push({ index: m.index, kind: 'amount', value: m[1]!.replace(/,/g, '') });
   }
@@ -144,8 +171,12 @@ export function parseViewbids(html: string): ViewbidsParseResult {
   }
 
   const dateRe = new RegExp(
+    // Mon-DD-YY HH:MM:SS ZZZ
     '(?:[A-Za-z]{3}-\\d{1,2}-\\d{2,4}\\s+\\d{1,2}:\\d{2}:\\d{2}\\s+[A-Za-z]{2,4})' +
-    '|(?:[A-Za-z]{3,9}\\s+\\d{1,2},?\\s+\\d{2,4}\\s+(?:at\\s+)?\\d{1,2}:\\d{2}:\\d{2}\\s*[AaPp][Mm]\\s+[A-Za-z]{2,4})',
+    // Mon DD, YYYY at H:MM:SS AM/PM ZZZ
+    '|(?:[A-Za-z]{3,9}\\s+\\d{1,2},?\\s+\\d{2,4}\\s+(?:at\\s+)?\\d{1,2}:\\d{2}:\\d{2}\\s*[AaPp][Mm]\\s+[A-Za-z]{2,4})' +
+    // DD Mon YYYY at H:MM:SSam/pm ZZZ (eBay viewbids day-first)
+    '|(?:\\d{1,2}\\s+[A-Za-z]{3,9}\\s+\\d{2,4}\\s+(?:at\\s+)?\\d{1,2}:\\d{2}:\\d{2}\\s*[AaPp][Mm]\\s+[A-Za-z]{2,4})',
     'g',
   );
   for (let m = dateRe.exec(text); m; m = dateRe.exec(text)) {
@@ -156,41 +187,67 @@ export function parseViewbids(html: string): ViewbidsParseResult {
 
   const bids: BidRecord[] = [];
   const seen = new Set<string>();
-  let pendingBidder: string | null = null;
-  let pendingAmount: number | null = null;
+  let dateParseFailures = 0;
+  let autoBidsSkipped = 0;
+  let cur: { bidder: string; bidderIndex: number; amount: number | null; date: string | null } | null = null;
+
+  const isAutoBid = (bidderIdx: number): boolean => {
+    // eBay places the italic marker "This is an automatic bid (proxy bid)
+    // placed by eBay on behalf of the bidder." in the SAME cell as the bidder,
+    // ending immediately before it. Anchor on the unique terminal phrase
+    // "the bidder." right before the bidder token to avoid bleeding across
+    // rows (a wider window would catch the previous row's marker).
+    const window = text.slice(Math.max(0, bidderIdx - 24), bidderIdx);
+    return /the bidder\.\s*$/.test(window);
+  };
+
+  const flush = (): void => {
+    if (!cur || cur.amount === null || cur.date === null) return;
+    if (isAutoBid(cur.bidderIndex)) {
+      autoBidsSkipped += 1;
+      return;
+    }
+    let bidTime: string;
+    try {
+      bidTime = parseEbayDate(cur.date);
+    } catch {
+      dateParseFailures += 1;
+      return;
+    }
+    const key = `${cur.bidder}|${bidTime}|${cur.amount}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    bids.push({ bidder: cur.bidder, bidTime, bidAmount: cur.amount });
+  };
 
   for (const token of tokens) {
     if (token.kind === 'bidder') {
-      pendingBidder = token.value;
-      pendingAmount = null;
-    } else if (token.kind === 'amount') {
-      pendingAmount = Number(token.value);
-    } else if (token.kind === 'date' && pendingBidder && pendingAmount !== null) {
-      let bidTime: string;
-      try {
-        bidTime = parseEbayDate(token.value);
-      } catch {
-        continue;
-      }
-      const key = `${pendingBidder}|${bidTime}|${pendingAmount}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        bids.push({ bidder: pendingBidder, bidTime, bidAmount: pendingAmount });
-      }
-      pendingAmount = null;
+      flush();
+      cur = { bidder: token.value, bidderIndex: token.index, amount: null, date: null };
+    } else if (cur) {
+      if (token.kind === 'amount' && cur.amount === null) cur.amount = Number(token.value);
+      else if (token.kind === 'date' && cur.date === null) cur.date = token.value;
     }
   }
+  flush();
 
   if (bids.length === 0) {
     const counts = {
       bidder: tokens.filter((t) => t.kind === 'bidder').length,
       amount: tokens.filter((t) => t.kind === 'amount').length,
       date: tokens.filter((t) => t.kind === 'date').length,
+      dateParseFailures,
+      autoBidsSkipped,
     };
-    const sample = text.replace(/\n+/g, ' ').trim().slice(0, 600);
+    const firstAmount = tokens.find((t) => t.kind === 'amount');
+    const around = firstAmount
+      ? text.slice(Math.max(0, firstAmount.index - 200), firstAmount.index + 200).replace(/\s+/g, ' ').trim()
+      : '';
+    const rawHasDollar = /\$\s*[\d,]+\.\d{2}/.test(html);
+    const rawHasChallenge = /Pardon Our Interruption|captcha|unusual traffic/i.test(html);
     throw new ViewbidsParseError(
       'no bids found on viewbids page',
-      `tokens=${JSON.stringify(counts)} textSample="${sample}"`,
+      `tokens=${JSON.stringify(counts)} rawHasDollar=${rawHasDollar} rawHasChallenge=${rawHasChallenge} aroundFirstAmount="${around}"`,
     );
   }
 

@@ -42,6 +42,14 @@ describe('parseEbayDate', () => {
   it('throws on an unrecognized format', () => {
     expect(() => parseEbayDate('sometime last week')).toThrow(/unrecognized/i);
   });
+
+  it('parses the day-first eBay viewbids format "13 May 2026 at 11:38:33am PDT"', () => {
+    expect(parseEbayDate('13 May 2026 at 11:38:33am PDT')).toBe('2026-05-13T18:38:33.000Z');
+  });
+
+  it('parses day-first format with single-digit day and pm', () => {
+    expect(parseEbayDate('7 May 2026 at 4:01:28pm PDT')).toBe('2026-05-07T23:01:28.000Z');
+  });
 });
 
 describe('parseViewbids', () => {
@@ -84,6 +92,50 @@ describe('parseViewbids', () => {
     expect(() => parseViewbids('<html><body>nothing here</body></html>')).toThrow(
       ViewbidsParseError,
     );
+  });
+
+  // Mirrors the real eBay viewbids page (PR #18 calibration): bare "$" prefix
+  // with no "US ", day-first "13 May 2026 at 11:38:33am PDT" timestamps, an
+  // italic "automatic bid (proxy bid)" marker on proxy rows that must be
+  // filtered, a "Winning bid" header amount that must NOT count, and a
+  // retraction table at the bottom that must NOT count.
+  const EBAY_FIXTURE = `
+    <html><body>
+    <h1>Bid History</h1>
+    <span>Winning bid:</span><span>$2,900.00</span>
+    <table class="app-bid-history__table">
+      <tr><td><span>Highest Bidder</span>3***2</td><td>$2,900.00</td><td>13 May 2026 at 11:38:33am PDT</td></tr>
+      <tr><td>w***1</td><td>$2,850.00</td><td>13 May 2026 at 11:20:27am PDT</td></tr>
+      <tr><td><span class=italic>This is an automatic bid (proxy bid) placed by eBay on behalf of the bidder.</span>w***1</td><td>$2,550.00</td><td>13 May 2026 at 11:20:27am PDT</td></tr>
+      <tr><td>3***2</td><td>$2,500.00</td><td>13 May 2026 at 11:38:24am PDT</td></tr>
+      <tr><td>Starting price</td><td>$0.01</td><td>6 May 2026 at 12:58:04pm PDT</td></tr>
+    </table>
+    <h2>Bid retraction and cancellation history</h2>
+    <table><tr><td>x***n</td><td>$1,234.00</td><td>7 May 2026 at 10:17:00am PDT</td></tr></table>
+    </body></html>`;
+
+  it('parses real eBay viewbids markup ($, day-first dates) — final price', () => {
+    expect(parseViewbids(EBAY_FIXTURE).finalPriceUsd).toBe(2900);
+  });
+
+  it('filters auto/proxy bids and the starting-price row', () => {
+    // 3 real bidder rows (3***2, w***1, 3***2) — proxy w***1 and Starting price are excluded.
+    const result = parseViewbids(EBAY_FIXTURE);
+    expect(result.bidCount).toBe(3);
+    expect(result.bids.map((b) => b.bidAmount).sort((a, b) => a - b)).toEqual([2500, 2850, 2900]);
+  });
+
+  it('truncates the retraction section so x***n does not appear as a bid', () => {
+    const bidders = parseViewbids(EBAY_FIXTURE).bids.map((b) => b.bidder);
+    expect(bidders).not.toContain('x***n');
+  });
+
+  it('does not double-count the leading "Winning bid" header amount', () => {
+    // If the header amount counted, 3***2's row would see $2,900.00 attached
+    // to itself AND also leak into the next row. Spot-check that w***1's
+    // amount is $2,850, not $2,900.
+    const wStar = parseViewbids(EBAY_FIXTURE).bids.find((b) => b.bidder === 'w***1');
+    expect(wStar?.bidAmount).toBe(2850);
   });
 });
 

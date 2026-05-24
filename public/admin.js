@@ -788,7 +788,7 @@ if (reconcileBidsBtn) {
           html += `<tr data-fallback-for="${escapeHtml(row.itemId)}">
             <td colspan="3" style="padding: 0.3rem 0.3rem 0.8rem;">
               <div style="font-size: 0.75rem; opacity: 0.7; margin-bottom: 0.25rem;">
-                Open <a href="https://www.ebay.com/bfl/viewbids/${encodeURIComponent((row.itemId.split('|')[1] || row.itemId))}?item=${encodeURIComponent((row.itemId.split('|')[1] || row.itemId))}&amp;rt=nc" target="_blank" rel="noopener noreferrer">the bid-history page</a>, copy the full page HTML, paste it here:
+                Open <a href="https://www.ebay.com/bfl/viewbids/${encodeURIComponent((row.itemId.split('|')[1] || row.itemId))}?item=${encodeURIComponent((row.itemId.split('|')[1] || row.itemId))}&amp;rt=nc" target="_blank" rel="noopener noreferrer">the bid-history page</a> (or copy this <code style="user-select: all;">view-source:https://www.ebay.com/bfl/viewbids/${encodeURIComponent((row.itemId.split('|')[1] || row.itemId))}?item=${encodeURIComponent((row.itemId.split('|')[1] || row.itemId))}&amp;rt=nc</code> into your address bar to go straight to source). Paste the full page HTML here:
               </div>
               <textarea class="viewbids-paste" data-item-id="${escapeHtml(row.itemId)}" rows="3" style="width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 0.7rem;" placeholder="Paste page HTML…"></textarea>
               <button type="button" class="admin-btn viewbids-import-btn" data-item-id="${escapeHtml(row.itemId)}" style="margin-top: 0.25rem;">Import pasted HTML</button>
