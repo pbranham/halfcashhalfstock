@@ -61,6 +61,25 @@
           <button id="inspect-btn" type="button" class="admin-btn">Inspect via API</button>
           <button id="rebackfill-btn" type="button" class="admin-btn">Re-backfill this item</button>
         </div>
+
+        <h4 class="admin-subheading">Reconcile from pasted bid history</h4>
+        <p class="admin-help">
+          Open the bid history page for this item on eBay (<code>/bfl/viewbids/&lt;id&gt;?item=&lt;id&gt;&amp;rt=nc</code>),
+          view source, copy the full HTML, and paste it below. Works for live
+          auctions too — useful when the live polling missed a bid or has a
+          stale total. This replaces the saved bid list for this item.
+        </p>
+        <textarea
+          id="import-html"
+          class="admin-textarea"
+          rows="6"
+          placeholder="Paste the full HTML source of eBay's bid history page here…"
+          spellcheck="false"
+        ></textarea>
+        <div class="admin-row">
+          <button id="import-btn" type="button" class="admin-btn">Import bid history</button>
+        </div>
+
         <pre id="admin-output" class="admin-output" hidden></pre>
       </section>
     </main>

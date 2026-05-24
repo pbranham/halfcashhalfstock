@@ -628,7 +628,6 @@ function renderFilteredView(snapshot, bidDiff) {
 
 function updateIntroSymbol(symbol) {
   const display = `$${symbol}`;
-  setText(document.getElementById('intro-symbol'), display);
   setText(document.getElementById('intro-symbol-2'), display);
 }
 

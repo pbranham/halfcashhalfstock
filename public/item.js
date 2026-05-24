@@ -461,12 +461,12 @@ function hasAdminToken() {
   return !!localStorage.getItem(ADMIN_TOKEN_KEY);
 }
 
-async function adminRequest(action) {
+async function adminRequest(action, extraBody = {}) {
   const token = localStorage.getItem(ADMIN_TOKEN_KEY);
   if (!token) {
     adminOutput.hidden = false;
     adminOutput.textContent = 'No admin token. Log in at /admin first.';
-    return;
+    return null;
   }
   adminOutput.hidden = false;
   adminOutput.textContent = `Running ${action}...`;
@@ -474,17 +474,39 @@ async function adminRequest(action) {
     const response = await fetch('/api/admin/cleanup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ action, itemId }),
+      body: JSON.stringify({ action, itemId, ...extraBody }),
     });
     const data = await response.json();
     adminOutput.textContent = JSON.stringify(data, null, 2);
+    return data;
   } catch (err) {
     adminOutput.textContent = `Error: ${err.message}`;
+    return null;
   }
 }
 
 if (inspectBtn) inspectBtn.addEventListener('click', () => adminRequest('inspect_bid_history'));
 if (rebackfillBtn) rebackfillBtn.addEventListener('click', () => adminRequest('rebackfill_one'));
+
+const importBtn = document.getElementById('import-btn');
+const importHtml = document.getElementById('import-html');
+if (importBtn && importHtml) {
+  importBtn.addEventListener('click', async () => {
+    const html = importHtml.value;
+    if (!html || html.trim().length === 0) {
+      adminOutput.hidden = false;
+      adminOutput.textContent = 'Paste the bid-history HTML before clicking Import.';
+      return;
+    }
+    const result = await adminRequest('import_viewbids_html', { html });
+    // On a successful import, refresh the page data so the bid table reflects
+    // the newly reconciled rows without a full reload.
+    if (result && result.status === 'imported') {
+      importHtml.value = '';
+      load();
+    }
+  });
+}
 
 function maybeShowAdminSection() {
   if (adminSection && hasAdminToken()) adminSection.hidden = false;
