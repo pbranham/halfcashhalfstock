@@ -157,6 +157,62 @@ export async function reconcileBids(
   return { inserted, removed };
 }
 
+// One-time authoritative repair of an ended auction's bid history from eBay's
+// public viewbids page. The page is the COMPLETE, final, static record, so this
+// fully replaces the item's bids (delete + insert) rather than merging — the
+// (item_id,bid_time,bidder) unique key can't catch a wrong AMOUNT on an
+// otherwise-matching row, so a merge would leave stale bad data behind.
+export async function reconcileItemBids(
+  pool: Pool,
+  itemId: string,
+  bids: readonly BidRecord[],
+): Promise<{ deleted: number; inserted: number; finalPriceUsd: number; bidCount: number }> {
+  const valid = bids.filter(
+    (b) => b.bidTime && Number.isFinite(b.bidAmount) && b.bidAmount >= 0,
+  );
+  // Guard: never let an empty/failed parse wipe good data.
+  if (valid.length === 0) {
+    throw new Error('reconcileItemBids: refusing to replace bids with zero valid rows');
+  }
+  const finalPriceUsd = valid.reduce((max, b) => (b.bidAmount > max ? b.bidAmount : max), 0);
+  const bidCount = valid.length;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const del = await client.query('DELETE FROM bids WHERE item_id = $1', [itemId]);
+
+    const values: unknown[] = [];
+    const placeholders = valid
+      .map((bid, i) => {
+        const base = i * 4;
+        values.push(itemId, bid.bidder || 'unknown', bid.bidTime, bid.bidAmount);
+        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`;
+      })
+      .join(', ');
+    const ins = await client.query(
+      `INSERT INTO bids (item_id, bidder, bid_time, bid_amount_usd)
+       VALUES ${placeholders}
+       ON CONFLICT (item_id, bid_time, bidder) DO NOTHING`,
+      values,
+    );
+
+    await client.query(
+      `UPDATE listings
+       SET current_price_usd = $2, current_bid_count = $3, last_backfilled_at = NOW()
+       WHERE item_id = $1`,
+      [itemId, finalPriceUsd, bidCount],
+    );
+    await client.query('COMMIT');
+    return { deleted: del.rowCount ?? 0, inserted: ins.rowCount ?? 0, finalPriceUsd, bidCount };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 export async function persistSnapshot(
   pool: Pool,
   inputs: readonly SnapshotPersistInput[],
@@ -185,16 +241,69 @@ export async function persistSnapshot(
 
 export async function markEndedListings(pool: Pool, currentItemIds: readonly string[]): Promise<number> {
   if (currentItemIds.length === 0) return 0;
+  // An item is considered ended if it's no longer in the active poll AND
+  // either (a) its advertised end time has passed, or (b) we haven't seen
+  // it in any poll for over an hour (safety net for items where ends_at
+  // was never captured, or eBay's Browse API kept returning it briefly
+  // past its end). The 1-hour buffer protects against brief upstream
+  // outages flipping every item to ended.
   const result = await pool.query(
     `UPDATE listings
-     SET ended_at = NOW()
+     SET ended_at = COALESCE(ends_at, last_seen_at, NOW())
      WHERE ended_at IS NULL
-       AND ends_at IS NOT NULL
-       AND ends_at < NOW()
-       AND NOT (item_id = ANY($1::text[]))`,
+       AND NOT (item_id = ANY($1::text[]))
+       AND (
+         (ends_at IS NOT NULL AND ends_at < NOW())
+         OR (last_seen_at < NOW() - INTERVAL '1 hour')
+       )`,
     [Array.from(currentItemIds)],
   );
   return result.rowCount ?? 0;
+}
+
+export interface StuckListingRow {
+  itemId: string;
+  title: string;
+  endsAt: string | null;
+  lastSeenAt: string;
+  currentPriceUsd: number;
+  currentBidCount: number;
+}
+
+export async function readStuckListings(pool: Pool): Promise<StuckListingRow[]> {
+  const res = await pool.query<{
+    item_id: string;
+    title: string;
+    ends_at: Date | null;
+    last_seen_at: Date;
+    current_price_usd: string;
+    current_bid_count: number;
+  }>(
+    `SELECT item_id, title, ends_at, last_seen_at, current_price_usd, current_bid_count
+     FROM listings
+     WHERE ended_at IS NULL
+       AND last_seen_at < NOW() - INTERVAL '30 minutes'
+     ORDER BY last_seen_at DESC`,
+  );
+  return res.rows.map((row) => ({
+    itemId: row.item_id,
+    title: row.title,
+    endsAt: row.ends_at ? row.ends_at.toISOString() : null,
+    lastSeenAt: row.last_seen_at.toISOString(),
+    currentPriceUsd: Number(row.current_price_usd),
+    currentBidCount: row.current_bid_count,
+  }));
+}
+
+export async function forceMarkEnded(pool: Pool, itemId: string): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE listings
+     SET ended_at = COALESCE(ends_at, last_seen_at, NOW())
+     WHERE item_id = $1
+       AND ended_at IS NULL`,
+    [itemId],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 export interface EndedListingRow {

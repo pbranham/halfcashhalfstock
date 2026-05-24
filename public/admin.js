@@ -25,7 +25,16 @@ const maintenanceControls = document.getElementById('maintenance-controls');
 const restoreBidsBtn = document.getElementById('restore-bids-btn');
 const checkRemovedBidsBtn = document.getElementById('check-removed-bids-btn');
 const restoreListingsBtn = document.getElementById('restore-listings-btn');
+const backfillNowBtn = document.getElementById('backfill-now-btn');
+const resetBackfillBtn = document.getElementById('reset-backfill-btn');
+const inspectItemInput = document.getElementById('inspect-item-id');
+const inspectBtn = document.getElementById('inspect-btn');
+const inspectOutput = document.getElementById('inspect-output');
+const findStuckBtn = document.getElementById('find-stuck-btn');
+const stuckList = document.getElementById('stuck-list');
 const recoveryResult = document.getElementById('recovery-result');
+const reconcileResult = document.getElementById('reconcile-result');
+const reconcileBidsBtn = document.getElementById('reconcile-bids-btn');
 const confirmModal = document.getElementById('confirm-modal');
 const confirmText = document.getElementById('confirm-text');
 const confirmOk = document.getElementById('confirm-ok');
@@ -595,6 +604,10 @@ async function recoveryFetch(action) {
       recoveryResult.textContent = `Restored ${data.restored} bid${data.restored === 1 ? '' : 's'} (cleared removed_at).`;
     } else if (action === 'restore_listings') {
       recoveryResult.textContent = `Restored ${data.restored} listing${data.restored === 1 ? '' : 's'} (cleared ended_at).`;
+    } else if (action === 'backfill_ended_now') {
+      recoveryResult.textContent = `Backfill complete. Attempted ${data.attempted}, succeeded ${data.backfilled}, failed ${data.failed}. Inserted ${data.bidsInserted} new bid${data.bidsInserted === 1 ? '' : 's'}, updated ${data.pricesUpdated} final price${data.pricesUpdated === 1 ? '' : 's'}.`;
+    } else if (action === 'reset_backfill_attempts') {
+      recoveryResult.textContent = `Reset backfill state on ${data.reset} ended listing${data.reset === 1 ? '' : 's'}. They'll be re-attempted on the next backfill cycle.`;
     }
     recoveryResult.hidden = false;
   } catch (err) {
@@ -614,6 +627,218 @@ if (restoreBidsBtn) {
 if (restoreListingsBtn) {
   restoreListingsBtn.addEventListener('click', () => {
     confirmAction('Restore ALL listings (clear ended_at)? Auctions that genuinely ended will get re-marked on the next poll.', () => recoveryFetch('restore_listings'));
+  });
+}
+if (backfillNowBtn) {
+  backfillNowBtn.addEventListener('click', () => recoveryFetch('backfill_ended_now'));
+}
+if (resetBackfillBtn) {
+  resetBackfillBtn.addEventListener('click', () => {
+    confirmAction('Reset backfill attempt counters on all ended listings? They will be re-attempted on the next backfill cycle.', () => recoveryFetch('reset_backfill_attempts'));
+  });
+}
+if (inspectBtn) {
+  inspectBtn.addEventListener('click', async () => {
+    const itemId = (inspectItemInput.value || '').trim();
+    if (!itemId) {
+      alert('Enter an item ID like v1|112233|0');
+      return;
+    }
+    const token = getToken();
+    if (!token) return;
+    inspectOutput.hidden = false;
+    inspectOutput.textContent = 'Fetching...';
+    try {
+      const response = await fetch('/api/admin/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'inspect_bid_history', itemId }),
+      });
+      const data = await response.json();
+      inspectOutput.textContent = JSON.stringify(data, null, 2);
+    } catch (err) {
+      inspectOutput.textContent = `Error: ${err.message}`;
+    }
+  });
+}
+if (findStuckBtn) {
+  findStuckBtn.addEventListener('click', async () => {
+    const token = getToken();
+    if (!token) return;
+    stuckList.hidden = false;
+    stuckList.textContent = 'Searching…';
+    try {
+      const response = await fetch('/api/admin/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'list_stuck_listings' }),
+      });
+      const data = await response.json();
+      if (!data.items || data.items.length === 0) {
+        stuckList.innerHTML = '<p style="opacity: 0.7;">No stuck listings.</p>';
+        return;
+      }
+      let html = `<p style="margin: 0 0 0.5rem;">${data.count} stuck listing${data.count === 1 ? '' : 's'} (not in active poll, not marked ended).</p>`;
+      html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">';
+      html += '<thead><tr><th style="text-align: left; padding: 0.3rem;">Title</th><th style="text-align: left; padding: 0.3rem;">Item ID</th><th style="text-align: left; padding: 0.3rem;">Last seen</th><th></th></tr></thead><tbody>';
+      for (const row of data.items) {
+        html += `<tr>
+          <td style="padding: 0.3rem;">${escapeHtml(row.title || '')}</td>
+          <td style="padding: 0.3rem; font-family: ui-monospace, Menlo, monospace; font-size: 0.75rem;">${escapeHtml(row.itemId)}</td>
+          <td style="padding: 0.3rem;">${escapeHtml(new Date(row.lastSeenAt).toLocaleString())}</td>
+          <td style="padding: 0.3rem;"><button type="button" class="admin-btn force-end-btn" data-item-id="${escapeHtml(row.itemId)}">Mark ended</button></td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      stuckList.innerHTML = html;
+      stuckList.querySelectorAll('.force-end-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const itemId = btn.dataset.itemId;
+          const t = getToken();
+          if (!t) return;
+          btn.disabled = true;
+          btn.textContent = '…';
+          try {
+            const response = await fetch('/api/admin/cleanup', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${t}` },
+              body: JSON.stringify({ action: 'force_mark_ended', itemId }),
+            });
+            const result = await response.json();
+            btn.textContent = result.marked ? 'Marked' : 'No change';
+          } catch (err) {
+            btn.textContent = 'Error';
+          }
+        });
+      });
+    } catch (err) {
+      stuckList.textContent = `Error: ${err.message}`;
+    }
+  });
+}
+
+function statusBadge(status) {
+  const colors = {
+    imported: '#1a7f37',
+    'blocked-403': '#9a6700',
+    'parse-failed': '#cf222e',
+    error: '#cf222e',
+  };
+  const color = colors[status] || '#57606a';
+  return `<span style="display: inline-block; padding: 0.1rem 0.4rem; border-radius: 4px; background: ${color}; color: #fff; font-size: 0.72rem;">${escapeHtml(status)}</span>`;
+}
+
+async function importViewbidsHtml(itemId, html, btn, statusCell) {
+  const token = getToken();
+  if (!token) return;
+  btn.disabled = true;
+  btn.textContent = 'Importing…';
+  try {
+    const response = await fetch('/api/admin/cleanup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: 'import_viewbids_html', itemId, html }),
+    });
+    const data = await response.json();
+    if (data.status === 'imported') {
+      statusCell.innerHTML = statusBadge('imported');
+      btn.textContent = `Imported (${data.bidCount} bids, $${Number(data.finalPriceUsd).toFixed(2)})`;
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Retry import';
+      statusCell.innerHTML = `${statusBadge('parse-failed')} <span style="font-size: 0.72rem; opacity: 0.8;">${escapeHtml(data.error || 'parse failed')}</span>`;
+    }
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Retry import';
+    statusCell.textContent = `Error: ${err.message}`;
+  }
+}
+
+function viewbidsUrl(numericId) {
+  const id = encodeURIComponent(numericId);
+  return `https://www.ebay.com/bfl/viewbids/${id}?item=${id}&rt=nc`;
+}
+
+function ebayItemPageUrl(numericId) {
+  // nordt=true prevents eBay's "ended → similar items" redirect for
+  // catalog-linked listings (e.g. video games).
+  return `https://www.ebay.com/itm/${encodeURIComponent(numericId)}?nordt=true&orig_cvip=true`;
+}
+
+if (reconcileBidsBtn) {
+  reconcileBidsBtn.addEventListener('click', async () => {
+    const token = getToken();
+    if (!token) return;
+    reconcileResult.hidden = false;
+    reconcileResult.textContent = 'Loading ended items…';
+    reconcileBidsBtn.disabled = true;
+    try {
+      const response = await fetch('/api/admin/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'list_ended_for_reconcile' }),
+      });
+      const data = await response.json();
+      if (!data.items || data.items.length === 0) {
+        reconcileResult.innerHTML = '<p style="opacity: 0.7;">No ended listings to reconcile.</p>';
+        return;
+      }
+      let html = `<p style="margin: 0 0 0.5rem;">${data.count} ended item${data.count === 1 ? '' : 's'}. eBay blocks server-side fetches from this IP, so paste each page's HTML manually. Click the title for the item page, the current-state column for the bid-history page, or "Copy view-source URL" to copy the source URL (Chrome blocks direct view-source links). On the bid-history page, Cmd+Option+U (Mac) opens the source. Copy the source HTML, paste into the textarea, and click Import.</p>`;
+      html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">';
+      html += '<thead><tr><th style="text-align: left; padding: 0.3rem;">Item page</th><th style="text-align: left; padding: 0.3rem;">Bid history</th><th style="text-align: left; padding: 0.3rem;">Source</th></tr></thead><tbody>';
+      for (const row of data.items) {
+        const itemUrl = ebayItemPageUrl(row.numericId);
+        const bidUrl = viewbidsUrl(row.numericId);
+        const viewSrcUrl = `view-source:${bidUrl}`;
+        html += `<tr>
+          <td style="padding: 0.3rem; vertical-align: top;"><a href="${escapeHtml(itemUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(row.title || '')}</a></td>
+          <td class="reconcile-status" style="padding: 0.3rem; vertical-align: top; white-space: nowrap;"><a href="${escapeHtml(bidUrl)}" target="_blank" rel="noopener noreferrer">$${Number(row.currentPriceUsd).toFixed(2)} · ${row.currentBidCount} bids</a></td>
+          <td style="padding: 0.3rem; vertical-align: top; white-space: nowrap;"><button type="button" class="admin-btn copy-vs-btn" data-vs-url="${escapeHtml(viewSrcUrl)}">Copy view-source URL</button></td>
+        </tr>
+        <tr data-fallback-for="${escapeHtml(row.itemId)}">
+          <td colspan="3" style="padding: 0 0.3rem 0.8rem;">
+            <textarea class="viewbids-paste" data-item-id="${escapeHtml(row.itemId)}" rows="2" style="width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 0.7rem;" placeholder="Paste page HTML…"></textarea>
+            <button type="button" class="admin-btn viewbids-import-btn" data-item-id="${escapeHtml(row.itemId)}" style="margin-top: 0.25rem;">Import pasted HTML</button>
+          </td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      reconcileResult.innerHTML = html;
+      reconcileResult.querySelectorAll('.copy-vs-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const url = btn.dataset.vsUrl;
+          try {
+            await navigator.clipboard.writeText(url);
+            const original = btn.textContent;
+            btn.textContent = 'Copied!';
+            setTimeout(() => {
+              btn.textContent = original;
+            }, 1500);
+          } catch {
+            window.prompt('Copy this view-source URL:', url);
+          }
+        });
+      });
+      reconcileResult.querySelectorAll('.viewbids-import-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const itemId = btn.dataset.itemId;
+          const textarea = reconcileResult.querySelector(`.viewbids-paste[data-item-id="${CSS.escape(itemId)}"]`);
+          const fallbackRow = reconcileResult.querySelector(`tr[data-fallback-for="${CSS.escape(itemId)}"]`);
+          const statusCell = fallbackRow.previousElementSibling.querySelector('.reconcile-status');
+          const pasted = (textarea.value || '').trim();
+          if (!pasted) {
+            alert('Paste the page HTML first.');
+            return;
+          }
+          importViewbidsHtml(itemId, pasted, btn, statusCell);
+        });
+      });
+    } catch (err) {
+      reconcileResult.textContent = `Network error: ${err.message}`;
+    } finally {
+      reconcileBidsBtn.disabled = false;
+    }
   });
 }
 

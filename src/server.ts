@@ -17,18 +17,23 @@ import { TtlCache, DbBackedCache } from './cache.js';
 import { createPool } from './db/pool.js';
 import { runMigrations } from './db/migrate.js';
 import {
+  forceMarkEnded,
   persistSnapshot,
   readBidsForItem,
   readEndedListings,
   readListingDetail,
   readListingSnapshots,
   readOhlcStats,
+  readStuckListings,
+  reconcileItemBids,
   type SnapshotPersistInput,
 } from './db/persist.js';
 import { EbayAppTokenProvider } from './ebay/auth.js';
 import { EbayClient } from './ebay/client.js';
 import { listSellerActiveItems, type Listing } from './ebay/seller.js';
 import { fetchBidHistory } from './ebay/bid-history.js';
+import { normalizeTradingItemId } from './ebay/trading.js';
+import { parseViewbids, ViewbidsParseError } from './ebay/viewbids.js';
 import { FinnhubProvider } from './prices/finnhub.js';
 import { YahooProvider } from './prices/yahoo.js';
 import { ChainedPriceProvider } from './prices/provider.js';
@@ -36,6 +41,7 @@ import type { PriceProvider, PriceQuote } from './prices/types.js';
 import { composeSnapshot, type Snapshot } from './snapshot.js';
 import { TickerQueue } from './ticker-queue.js';
 import { RequestStatsCollector } from './request-stats.js';
+import { backfillEndedListings } from './ebay/backfill.js';
 
 const LISTINGS_TTL_MS = 30_000;
 const PRICE_TTL_MS = 30_000;
@@ -460,15 +466,21 @@ export function createApp(deps: Deps): express.Express {
     });
   });
 
-  app.use(express.json({ limit: '10kb' }));
+  // Global JSON parser stays tight at 10kb, but skips the cleanup route: its
+  // import_viewbids_html action accepts a pasted eBay page (100KB+).
+  const globalJson = express.json({ limit: '10kb' });
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.path === '/api/admin/cleanup') return next();
+    return globalJson(req, res, next);
+  });
 
-  app.post('/api/admin/cleanup', apiLimiter, requireAdminToken, async (req: Request, res: Response, next: NextFunction) => {
+  app.post('/api/admin/cleanup', express.json({ limit: '4mb' }), apiLimiter, requireAdminToken, async (req: Request, res: Response, next: NextFunction) => {
     if (!deps.db) {
       res.status(503).json({ error: 'cleanup_unavailable', detail: 'database not configured' });
       return;
     }
     try {
-      const body = req.body as { action?: string; environment?: string; from?: string; to?: string } | undefined;
+      const body = req.body as { action?: string; environment?: string; from?: string; to?: string; itemId?: string; html?: string } | undefined;
       const action = body?.action;
 
       if (action === 'delete_environment') {
@@ -580,6 +592,140 @@ export function createApp(deps: Deps): express.Express {
         return;
       }
 
+      if (action === 'backfill_ended_now') {
+        const userToken = resolveEbayTradingUserToken(deps.config);
+        if (!deps.config.EBAY_DEV_ID || !userToken) {
+          res.status(503).json({
+            error: 'backfill_unavailable',
+            detail: 'EBAY_DEV_ID and EBAY_USER_TOKEN must be set',
+          });
+          return;
+        }
+        const result = await backfillEndedListings(
+          deps.db,
+          deps.config.EBAY_DEV_ID,
+          userToken,
+          deps.log,
+        );
+        res.status(200).json({ action: 'backfill_ended_now', ...result });
+        return;
+      }
+
+      if (action === 'list_stuck_listings') {
+        const stuck = await readStuckListings(deps.db);
+        res.status(200).json({ action: 'list_stuck_listings', count: stuck.length, items: stuck });
+        return;
+      }
+
+      if (action === 'force_mark_ended') {
+        const itemId = (body?.itemId ?? '').trim();
+        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
+          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
+          return;
+        }
+        const marked = await forceMarkEnded(deps.db, itemId);
+        res.status(200).json({ action: 'force_mark_ended', itemId, marked });
+        return;
+      }
+
+      if (action === 'rebackfill_one') {
+        const itemId = (body?.itemId ?? '').trim();
+        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
+          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
+          return;
+        }
+        const userToken = resolveEbayTradingUserToken(deps.config);
+        if (!deps.config.EBAY_DEV_ID || !userToken) {
+          res.status(503).json({ error: 'rebackfill_unavailable', detail: 'Trading API not configured' });
+          return;
+        }
+        await deps.db.query(
+          `UPDATE listings SET last_backfilled_at = NULL, backfill_attempts = 0 WHERE item_id = $1`,
+          [itemId],
+        );
+        const result = await backfillEndedListings(deps.db, deps.config.EBAY_DEV_ID, userToken, deps.log);
+        res.status(200).json({ action: 'rebackfill_one', itemId, ...result });
+        return;
+      }
+
+      if (action === 'inspect_bid_history') {
+        const itemId = (body?.itemId ?? '').trim();
+        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
+          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
+          return;
+        }
+        const userToken = resolveEbayTradingUserToken(deps.config);
+        if (!deps.config.EBAY_DEV_ID || !userToken) {
+          res.status(503).json({
+            error: 'inspect_unavailable',
+            detail: 'EBAY_DEV_ID and EBAY_USER_TOKEN must be set',
+          });
+          return;
+        }
+        try {
+          const { getItemBidHistory } = await import('./ebay/trading.js');
+          const history = await getItemBidHistory(itemId, deps.config.EBAY_DEV_ID, userToken);
+          const dbState = await deps.db.query<{
+            current_price_usd: string;
+            current_bid_count: number;
+            ended_at: Date | null;
+            last_backfilled_at: Date | null;
+            backfill_attempts: number;
+          }>(
+            `SELECT current_price_usd, current_bid_count, ended_at,
+                    last_backfilled_at, backfill_attempts
+             FROM listings WHERE item_id = $1`,
+            [itemId],
+          );
+          const dbBids = await deps.db.query<{ count: string }>(
+            `SELECT COUNT(*)::TEXT AS count FROM bids WHERE item_id = $1`,
+            [itemId],
+          );
+          const dbRow = dbState.rows[0];
+          res.status(200).json({
+            action: 'inspect_bid_history',
+            itemId,
+            api: {
+              bidCount: history.bidCount,
+              currentPrice: history.currentPrice,
+              currentPriceType: typeof history.currentPrice,
+              bidsReturned: history.bids.length,
+              bidsSample: history.bids.slice(0, 5),
+              maxBidAmount: history.bids.length > 0 ? Math.max(...history.bids.map((b) => b.bidAmount)) : 0,
+            },
+            db: {
+              currentPriceUsd: dbRow ? Number(dbRow.current_price_usd) : null,
+              currentBidCount: dbRow?.current_bid_count ?? null,
+              endedAt: dbRow?.ended_at ? dbRow.ended_at.toISOString() : null,
+              lastBackfilledAt: dbRow?.last_backfilled_at ? dbRow.last_backfilled_at.toISOString() : null,
+              backfillAttempts: dbRow?.backfill_attempts ?? null,
+              totalBidRows: Number(dbBids.rows[0]?.count ?? '0'),
+            },
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(200).json({
+            action: 'inspect_bid_history',
+            itemId,
+            error: message,
+          });
+        }
+        return;
+      }
+
+      if (action === 'reset_backfill_attempts') {
+        const result = await deps.db.query(
+          `UPDATE listings
+           SET backfill_attempts = 0, last_backfilled_at = NULL
+           WHERE ended_at IS NOT NULL`,
+        );
+        res.status(200).json({
+          action: 'reset_backfill_attempts',
+          reset: result.rowCount ?? 0,
+        });
+        return;
+      }
+
       if (action === 'delete_before') {
         const beforeStr = body?.environment ?? '';
         const before = new Date(beforeStr);
@@ -599,6 +745,59 @@ export function createApp(deps: Deps): express.Express {
             seen_ips: ipDel.rowCount ?? 0,
           },
         });
+        return;
+      }
+
+      if (action === 'list_ended_for_reconcile') {
+        // Just list the ended items with current state. Auto-fetching viewbids
+        // pages from this server's IP has never succeeded (eBay's datacenter-IP
+        // challenge is universal), so the UI goes straight to paste mode for
+        // every item — no 2-minute wait for guaranteed failures.
+        const ended = await readEndedListings(deps.db, 3650);
+        const items = ended.map((listing) => ({
+          itemId: listing.itemId,
+          numericId: normalizeTradingItemId(listing.itemId),
+          title: listing.title,
+          currentPriceUsd: listing.finalPriceUsd,
+          currentBidCount: listing.finalBidCount,
+        }));
+        res.status(200).json({ action: 'list_ended_for_reconcile', count: items.length, items });
+        return;
+      }
+
+      if (action === 'import_viewbids_html') {
+        const itemId = (body?.itemId ?? '').trim();
+        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
+          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
+          return;
+        }
+        const html = body?.html ?? '';
+        if (typeof html !== 'string' || html.trim().length === 0 || html.length > 3_000_000) {
+          res.status(400).json({ error: 'bad_request', detail: 'missing or oversized html' });
+          return;
+        }
+        try {
+          const parsed = parseViewbids(html);
+          const r = await reconcileItemBids(deps.db, itemId, parsed.bids);
+          res.status(200).json({
+            action: 'import_viewbids_html',
+            itemId,
+            status: 'imported',
+            deleted: r.deleted,
+            inserted: r.inserted,
+            finalPriceUsd: r.finalPriceUsd,
+            bidCount: r.bidCount,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(200).json({
+            action: 'import_viewbids_html',
+            itemId,
+            status: 'parse-failed',
+            error: message,
+            diagnostics: err instanceof ViewbidsParseError ? err.diagnostics : undefined,
+          });
+        }
         return;
       }
 
@@ -685,6 +884,23 @@ async function main(): Promise<void> {
     });
   }
 
+  let backfillInterval: NodeJS.Timeout | null = null;
+  const backfillUserToken = resolveEbayTradingUserToken(config);
+  if (db && config.EBAY_DEV_ID && backfillUserToken) {
+    const devIdLocal = config.EBAY_DEV_ID;
+    const tokenLocal = backfillUserToken;
+    const dbLocal = db;
+    const runBackfill = (): void => {
+      backfillEndedListings(dbLocal, devIdLocal, tokenLocal, log).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error('backfill loop error', { error: message });
+      });
+    };
+    backfillInterval = setInterval(runBackfill, 60_000);
+    backfillInterval.unref();
+    runBackfill();
+  }
+
   const deps = buildDeps(config, log, db, tickerQueue, requestStats);
   const app = createApp(deps);
   const server = app.listen(config.PORT, () => {
@@ -695,6 +911,7 @@ async function main(): Promise<void> {
     log.info('shutting down', { signal });
     if (tickerQueue) tickerQueue.stop();
     if (requestStats) requestStats.stop();
+    if (backfillInterval) clearInterval(backfillInterval);
     server.close(() => {
       if (db) {
         db.end().finally(() => process.exit(0));

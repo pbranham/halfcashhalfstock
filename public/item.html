@@ -51,6 +51,18 @@
         <h3>Observed listing changes</h3>
         <div id="snapshots-table" class="data-table"></div>
       </section>
+
+      <section class="item-section" id="admin-section" hidden>
+        <h3>
+          Admin diagnostics
+          <span class="section-summary">Compare what we have in the DB to what eBay returns right now</span>
+        </h3>
+        <div class="admin-row">
+          <button id="inspect-btn" type="button" class="admin-btn">Inspect via API</button>
+          <button id="rebackfill-btn" type="button" class="admin-btn">Re-backfill this item</button>
+        </div>
+        <pre id="admin-output" class="admin-output" hidden></pre>
+      </section>
     </main>
     <script type="module" src="/item.js"></script>
   </body>

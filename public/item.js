@@ -41,10 +41,12 @@ function ebayItemUrl(itemId) {
   return `https://www.ebay.com/itm/${encodeURIComponent(legacyNumber)}`;
 }
 
+// Append eBay's no-redirect parameter so ended catalog-linked listings show
+// the original page instead of redirecting to "similar items".
 function endedEbayUrl(itemWebUrl, itemId) {
   const base = itemWebUrl || ebayItemUrl(itemId);
   const sep = base.includes('?') ? '&' : '?';
-  return `${base}${sep}orig_cvip=true`;
+  return `${base}${sep}nordt=true&orig_cvip=true`;
 }
 
 function escapeHtml(str) {
@@ -449,6 +451,45 @@ function renderSnapshots(snapshots) {
   snapshotsSection.hidden = false;
 }
 
+const ADMIN_TOKEN_KEY = 'hchs.admin.token';
+const adminSection = document.getElementById('admin-section');
+const inspectBtn = document.getElementById('inspect-btn');
+const rebackfillBtn = document.getElementById('rebackfill-btn');
+const adminOutput = document.getElementById('admin-output');
+
+function hasAdminToken() {
+  return !!localStorage.getItem(ADMIN_TOKEN_KEY);
+}
+
+async function adminRequest(action) {
+  const token = localStorage.getItem(ADMIN_TOKEN_KEY);
+  if (!token) {
+    adminOutput.hidden = false;
+    adminOutput.textContent = 'No admin token. Log in at /admin first.';
+    return;
+  }
+  adminOutput.hidden = false;
+  adminOutput.textContent = `Running ${action}...`;
+  try {
+    const response = await fetch('/api/admin/cleanup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action, itemId }),
+    });
+    const data = await response.json();
+    adminOutput.textContent = JSON.stringify(data, null, 2);
+  } catch (err) {
+    adminOutput.textContent = `Error: ${err.message}`;
+  }
+}
+
+if (inspectBtn) inspectBtn.addEventListener('click', () => adminRequest('inspect_bid_history'));
+if (rebackfillBtn) rebackfillBtn.addEventListener('click', () => adminRequest('rebackfill_one'));
+
+function maybeShowAdminSection() {
+  if (adminSection && hasAdminToken()) adminSection.hidden = false;
+}
+
 async function load() {
   if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
     showError('Missing or invalid item id in URL.');
@@ -471,6 +512,7 @@ async function load() {
     renderChart(data.snapshots, data.listing, data.bids);
     renderBids(data.bids);
     renderSnapshots(data.snapshots);
+    maybeShowAdminSection();
   } catch (err) {
     showError(`Error: ${err.message}`);
   }
