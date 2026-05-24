@@ -760,6 +760,12 @@ function viewbidsUrl(numericId) {
   return `https://www.ebay.com/bfl/viewbids/${id}?item=${id}&rt=nc`;
 }
 
+function ebayItemPageUrl(numericId) {
+  // nordt=true prevents eBay's "ended → similar items" redirect for
+  // catalog-linked listings (e.g. video games).
+  return `https://www.ebay.com/itm/${encodeURIComponent(numericId)}?nordt=true&orig_cvip=true`;
+}
+
 if (reconcileBidsBtn) {
   reconcileBidsBtn.addEventListener('click', async () => {
     const token = getToken();
@@ -778,19 +784,17 @@ if (reconcileBidsBtn) {
         reconcileResult.innerHTML = '<p style="opacity: 0.7;">No ended listings to reconcile.</p>';
         return;
       }
-      let html = `<p style="margin: 0 0 0.5rem;">${data.count} ended item${data.count === 1 ? '' : 's'}. eBay blocks server-side fetches from this IP, so paste each page's HTML manually. Click "View source ↗" on a row to open eBay's bid-history page source in a new tab, copy the HTML, paste it here, and click Import.</p>`;
+      let html = `<p style="margin: 0 0 0.5rem;">${data.count} ended item${data.count === 1 ? '' : 's'}. eBay blocks server-side fetches from this IP, so paste each page's HTML manually. Click the title for the item page, the current-state column for the bid-history page, or the source column to open the bid-history page source. Copy the source HTML, paste into the textarea, and click Import.</p>`;
       html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">';
-      html += '<thead><tr><th style="text-align: left; padding: 0.3rem;">Title</th><th style="text-align: left; padding: 0.3rem;">Current state</th><th style="text-align: left; padding: 0.3rem;">Get HTML</th></tr></thead><tbody>';
+      html += '<thead><tr><th style="text-align: left; padding: 0.3rem;">Item page</th><th style="text-align: left; padding: 0.3rem;">Bid history</th><th style="text-align: left; padding: 0.3rem;">Source</th></tr></thead><tbody>';
       for (const row of data.items) {
-        const url = viewbidsUrl(row.numericId);
-        const viewSrcUrl = `view-source:${url}`;
+        const itemUrl = ebayItemPageUrl(row.numericId);
+        const bidUrl = viewbidsUrl(row.numericId);
+        const viewSrcUrl = `view-source:${bidUrl}`;
         html += `<tr>
-          <td style="padding: 0.3rem; vertical-align: top;">${escapeHtml(row.title || '')}</td>
-          <td class="reconcile-status" style="padding: 0.3rem; vertical-align: top; white-space: nowrap;">$${Number(row.currentPriceUsd).toFixed(2)} · ${row.currentBidCount} bids</td>
-          <td style="padding: 0.3rem; vertical-align: top; white-space: nowrap;">
-            <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" style="margin-right: 0.75rem;">Open page ↗</a>
-            <a href="${escapeHtml(viewSrcUrl)}" target="_blank" rel="noopener noreferrer">View source ↗</a>
-          </td>
+          <td style="padding: 0.3rem; vertical-align: top;"><a href="${escapeHtml(itemUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(row.title || '')}</a></td>
+          <td class="reconcile-status" style="padding: 0.3rem; vertical-align: top; white-space: nowrap;"><a href="${escapeHtml(bidUrl)}" target="_blank" rel="noopener noreferrer">$${Number(row.currentPriceUsd).toFixed(2)} · ${row.currentBidCount} bids</a></td>
+          <td style="padding: 0.3rem; vertical-align: top; white-space: nowrap;"><a href="${escapeHtml(viewSrcUrl)}" target="_blank" rel="noopener noreferrer">view source</a></td>
         </tr>
         <tr data-fallback-for="${escapeHtml(row.itemId)}">
           <td colspan="3" style="padding: 0 0.3rem 0.8rem;">
