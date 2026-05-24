@@ -142,9 +142,10 @@ Implementation:
   loop was a 2-minute wait for guaranteed failure on every item. Don't
   re-add it without first verifying the IP/headers situation has changed.
 - Admin UI: "Reconcile all" button shows the full ended-items table
-  immediately, with a paste textarea + "Copy view-source URL" button per
-  row. Chrome blocks `<a href="view-source:...">` navigation, so the UI
-  uses a clipboard-copy button instead of a link.
+  immediately, with two real links per row ("Open page ↗" and "View
+  source ↗") + a paste textarea + Import button. `view-source:` URLs
+  ARE clickable from `<a href>` — don't replace them with copy-button
+  workarounds.
 
 If a paste parse-fails, get the diagnostics from the admin UI result — do
 NOT have the user paste the full HTML into Claude chat. The diagnostics

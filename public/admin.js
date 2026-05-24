@@ -760,17 +760,6 @@ function viewbidsUrl(numericId) {
   return `https://www.ebay.com/bfl/viewbids/${id}?item=${id}&rt=nc`;
 }
 
-async function copyToClipboard(text, btn) {
-  const original = btn.textContent;
-  try {
-    await navigator.clipboard.writeText(text);
-    btn.textContent = 'Copied!';
-  } catch {
-    btn.textContent = 'Copy failed';
-  }
-  setTimeout(() => { btn.textContent = original; }, 1500);
-}
-
 if (reconcileBidsBtn) {
   reconcileBidsBtn.addEventListener('click', async () => {
     const token = getToken();
@@ -789,7 +778,7 @@ if (reconcileBidsBtn) {
         reconcileResult.innerHTML = '<p style="opacity: 0.7;">No ended listings to reconcile.</p>';
         return;
       }
-      let html = `<p style="margin: 0 0 0.5rem;">${data.count} ended item${data.count === 1 ? '' : 's'}. eBay blocks server-side fetches from this IP, so paste each page's HTML manually. Each row has a button to copy the <code>view-source:</code> URL — paste that into your browser's address bar to get the raw HTML, copy it, then paste it here and click Import.</p>`;
+      let html = `<p style="margin: 0 0 0.5rem;">${data.count} ended item${data.count === 1 ? '' : 's'}. eBay blocks server-side fetches from this IP, so paste each page's HTML manually. Click "View source ↗" on a row to open eBay's bid-history page source in a new tab, copy the HTML, paste it here, and click Import.</p>`;
       html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">';
       html += '<thead><tr><th style="text-align: left; padding: 0.3rem;">Title</th><th style="text-align: left; padding: 0.3rem;">Current state</th><th style="text-align: left; padding: 0.3rem;">Get HTML</th></tr></thead><tbody>';
       for (const row of data.items) {
@@ -799,8 +788,8 @@ if (reconcileBidsBtn) {
           <td style="padding: 0.3rem; vertical-align: top;">${escapeHtml(row.title || '')}</td>
           <td class="reconcile-status" style="padding: 0.3rem; vertical-align: top; white-space: nowrap;">$${Number(row.currentPriceUsd).toFixed(2)} · ${row.currentBidCount} bids</td>
           <td style="padding: 0.3rem; vertical-align: top; white-space: nowrap;">
-            <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" style="margin-right: 0.5rem;">Open page ↗</a>
-            <button type="button" class="admin-btn copy-vs-btn" data-vs-url="${escapeHtml(viewSrcUrl)}" style="font-size: 0.75rem; padding: 0.15rem 0.4rem;">Copy view-source URL</button>
+            <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" style="margin-right: 0.75rem;">Open page ↗</a>
+            <a href="${escapeHtml(viewSrcUrl)}" target="_blank" rel="noopener noreferrer">View source ↗</a>
           </td>
         </tr>
         <tr data-fallback-for="${escapeHtml(row.itemId)}">
@@ -812,9 +801,6 @@ if (reconcileBidsBtn) {
       }
       html += '</tbody></table>';
       reconcileResult.innerHTML = html;
-      reconcileResult.querySelectorAll('.copy-vs-btn').forEach((btn) => {
-        btn.addEventListener('click', () => copyToClipboard(btn.dataset.vsUrl, btn));
-      });
       reconcileResult.querySelectorAll('.viewbids-import-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
           const itemId = btn.dataset.itemId;
