@@ -293,10 +293,12 @@ let chartState = null;
 // edge while waiting out unused future time.
 const Y_SCALES = ['linear', 'log'];
 const X_SCALES = ['linear', 'log-start', 'log-end'];
+// Short directional labels for the in-SVG axis annotations. The arrows
+// indicate which end of the time range the log scale stretches.
 const X_SCALE_LABELS = {
   linear: 'linear',
-  'log-start': 'log from first bid →',
-  'log-end': '← log to latest bid',
+  'log-start': 'log →',
+  'log-end': '← log',
 };
 const chartScale = {
   y: Y_SCALES.includes(localStorage.getItem('hchs.chart.yScale'))
@@ -313,24 +315,16 @@ function persistChartScale(key, value) {
     /* storage disabled — non-fatal */
   }
 }
-function updateScaleButtons() {
-  const yMode = document.getElementById('y-scale-mode');
-  if (yMode) yMode.textContent = chartScale.y;
-  const xMode = document.getElementById('x-scale-mode');
-  if (xMode) xMode.textContent = X_SCALE_LABELS[chartScale.x];
-}
 function cycleYScale() {
   const idx = Y_SCALES.indexOf(chartScale.y);
   chartScale.y = Y_SCALES[(idx + 1) % Y_SCALES.length];
   persistChartScale('hchs.chart.yScale', chartScale.y);
-  updateScaleButtons();
   drawChart();
 }
 function cycleXScale() {
   const idx = X_SCALES.indexOf(chartScale.x);
   chartScale.x = X_SCALES[(idx + 1) % X_SCALES.length];
   persistChartScale('hchs.chart.xScale', chartScale.x);
-  updateScaleButtons();
   drawChart();
 }
 
@@ -451,8 +445,14 @@ function renderChart(snapshots, listing, bids) {
   }
 
   chartState = { points, maxDots, retractionMarkers, listing };
-  drawChart();
+  // Reveal the chart section BEFORE measuring the wrap's width — otherwise
+  // chartWrap.clientWidth is 0 (because the parent is hidden) and drawChart
+  // falls back to its 900px default, leaving a phantom right margin once
+  // the section actually appears. Reading offsetWidth forces a synchronous
+  // layout so the subsequent draw sees the real value.
   chartSection.hidden = false;
+  void chartWrap.offsetWidth;
+  drawChart();
 }
 
 function defaultChartHelp(points) {
@@ -464,8 +464,10 @@ function drawChart() {
   if (!chartState) return;
   const { points, maxDots = [], retractionMarkers = [], listing } = chartState;
   const W = chartWrap.clientWidth || 900;
-  const H = 280;
-  const PAD = { top: 16, right: 56, bottom: 36, left: 68 };
+  // Bump H + PAD.bottom from the original 280/36 to make room below the
+  // x-axis tick labels for the time-mode label without clipping.
+  const H = 296;
+  const PAD = { top: 16, right: 56, bottom: 52, left: 68 };
   const innerW = W - PAD.left - PAD.right;
   const innerH = H - PAD.top - PAD.bottom;
 
@@ -556,7 +558,7 @@ function drawChart() {
   const xAxisLabels = timeLabels.map((l) => {
     const x = xFor(l.t);
     const clampedX = Math.max(PAD.left + 4, Math.min(W - PAD.right - 4, x));
-    return `<text x="${clampedX.toFixed(1)}" y="${H - 14}" text-anchor="middle" font-size="12" font-weight="500" fill="currentColor" opacity="0.85">${escapeHtml(l.primary)}</text>`;
+    return `<text x="${clampedX.toFixed(1)}" y="${H - 28}" text-anchor="middle" font-size="12" font-weight="500" fill="currentColor" opacity="0.85">${escapeHtml(l.primary)}</text>`;
   }).join('');
 
   // Linear Y ticks: just min/mid/max. Log Y ticks: powers of 10 within
@@ -586,8 +588,28 @@ function drawChart() {
   // anywhere in the left label band so any axis label is hittable; the
   // small "linear"/"log" text at the top signals the current mode and
   // hints the band is interactive.
-  // Scale mode labels are rendered in the chart legend (above the SVG)
-  // by updateScaleButtons(); nothing to inject into the SVG itself.
+  // Axis-mode labels live next to their respective axes inside the SVG.
+  // Each is paired with a transparent click rectangle covering the full
+  // margin (left strip for Y, bottom strip for X) so the tap target is
+  // forgiving on mobile. The mode-label text uses opacity for "subtle but
+  // present"; cursor: pointer signals the band is interactive.
+  //
+  // Y label is rotated -90° on the far left of the SVG, in the empty
+  // column to the left of the dollar tick labels (which sit at
+  // x = PAD.left - 8). The rotated text occupies a narrow vertical
+  // ribbon centered around x = 12, so there's no overlap with the
+  // dollar values regardless of how wide they get.
+  const yCenterY = (PAD.top + innerH / 2).toFixed(1);
+  const yScaleBadge = `
+    <rect class="chart-y-hit" x="0" y="${PAD.top}" width="${PAD.left}" height="${innerH}" fill="transparent" style="cursor: pointer;" />
+    <text class="chart-y-mode" x="12" y="${yCenterY}" text-anchor="middle" transform="rotate(-90 12 ${yCenterY})" font-size="11" fill="currentColor" opacity="0.55" style="pointer-events: none;">$: ${chartScale.y}</text>
+  `;
+  // X label sits below the x-axis tick labels in the extra PAD.bottom
+  // we added. Centered horizontally so it feels like a true axis title.
+  const xScaleBadge = `
+    <rect class="chart-x-hit" x="${PAD.left}" y="${PAD.top + innerH}" width="${innerW}" height="${PAD.bottom}" fill="transparent" style="cursor: pointer;" />
+    <text class="chart-x-mode" x="${(PAD.left + innerW / 2).toFixed(1)}" y="${(H - 8).toFixed(1)}" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.55" style="pointer-events: none;">time: ${X_SCALE_LABELS[chartScale.x]}</text>
+  `;
 
   const yRightLabels = [countMin, countMin + countRange / 2, countMax].map((c) => {
     const y = yCountFor(c);
@@ -644,6 +666,8 @@ function drawChart() {
       ${xAxisLabels}
       ${yLeftLabels}
       ${yRightLabels}
+      ${yScaleBadge}
+      ${xScaleBadge}
     </svg>
   `;
 
@@ -652,6 +676,10 @@ function drawChart() {
   const markerPrice = svg.querySelector('.chart-marker-price');
   const markerCount = svg.querySelector('.chart-marker-count');
   const hitArea = svg.querySelector('.chart-hit');
+  const yHit = svg.querySelector('.chart-y-hit');
+  if (yHit) yHit.addEventListener('click', cycleYScale);
+  const xHit = svg.querySelector('.chart-x-hit');
+  if (xHit) xHit.addEventListener('click', cycleXScale);
 
   const updateFromX = (clientX) => {
     const rect = svg.getBoundingClientRect();
@@ -908,11 +936,5 @@ window.addEventListener('resize', () => {
     if (chartState) drawChart();
   }, 150);
 });
-
-const yScaleBtn = document.getElementById('y-scale-btn');
-if (yScaleBtn) yScaleBtn.addEventListener('click', cycleYScale);
-const xScaleBtn = document.getElementById('x-scale-btn');
-if (xScaleBtn) xScaleBtn.addEventListener('click', cycleXScale);
-updateScaleButtons();
 
 load();
