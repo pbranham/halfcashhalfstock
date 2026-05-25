@@ -151,16 +151,17 @@ interface Token {
 export function parseViewbids(html: string): ViewbidsParseResult {
   // Seller-view pre-processing: when the user is logged in as the auction's
   // seller, eBay renders each bidder as a full username inside a profile
-  // link (e.g. <a href="https://www.ebay.com/usr/someuser?_trksid=…">
+  // link (e.g. <a href=https://www.ebay.com/usr/someuser?_trksid=…>
   // <span>someuser</span></a>) instead of the masked "5***t" form shown to
   // anonymous viewers. The flatten step below would strip the <a> tag and
   // lose the username, so we first inject a synthetic "__BIDDER_<name>__"
-  // marker around every /usr/<name> link. The link's inner content can
-  // contain nested <span> tags (eBay wraps usernames in styled spans, and
-  // the highest-bidder row prefixes a hidden "Highest Bidder" label
-  // inside the same anchor), so we match the inner content with
-  // [\s\S]*? rather than [^<]*. The bidder regex below also matches this
-  // marker.
+  // marker around every /usr/<name> link. Two structural quirks in the
+  // real markup that the regex must tolerate:
+  //   - Attribute values are often UNQUOTED in the minified HTML eBay
+  //     ships (href=https://… not href="https://…").
+  //   - The link's inner content has nested <span> tags AND HTML comments
+  //     like <!--F#5-->, so we match it with [\s\S]*?.
+  // The bidder regex below also matches the synthetic marker.
   //
   // Proxy/auto-bid rows render the username as PLAIN TEXT inside an italic
   // span (no anchor), so they produce no marker and are naturally
@@ -169,7 +170,7 @@ export function parseViewbids(html: string): ViewbidsParseResult {
   // Raw usernames are masked at the API boundary (maskBidder) before any
   // public response, so storing them here is OK.
   const sellerViewHtml = html.replace(
-    /<a\s+[^>]*href\s*=\s*["'][^"']*\/usr\/([A-Za-z0-9._-]+)[^"']*["'][^>]*>[\s\S]*?<\/a>/gi,
+    /<a\s[^>]*\/usr\/([A-Za-z0-9._-]+)[^>]*>[\s\S]*?<\/a>/gi,
     '\n__BIDDER_$1__\n',
   );
 
