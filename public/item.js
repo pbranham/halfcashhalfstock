@@ -282,13 +282,22 @@ function buildChartPointsFromBids(bids, listing) {
 
 let chartState = null;
 
-// Axis scale state, persisted across page loads. Click the axis label band
-// to cycle. Y has two modes (linear ↔ log); X has three (linear datetime
-// → log time-since-start → log time-until-end). Log-end is the killer
-// mode for auctions ending in a sniping flurry — it stretches the final
-// seconds across half the chart so the late action is finally readable.
+// Axis scale state, persisted across page loads. Y has two modes (linear ↔
+// log); X has three (linear datetime → log from first bid → log to latest
+// bid). "Log to latest" stretches the most recent bid events across the
+// right half of the chart, which is the killer mode for auctions ending
+// in a sniping flurry. Note that "latest bid" is the latest bid IN OUR
+// DATA — for a live auction with the scheduled end still in the future,
+// this is not the same as the auction's scheduled end timestamp; we use
+// the data's tMax so the chart doesn't squash all activity to the left
+// edge while waiting out unused future time.
 const Y_SCALES = ['linear', 'log'];
 const X_SCALES = ['linear', 'log-start', 'log-end'];
+const X_SCALE_LABELS = {
+  linear: 'linear',
+  'log-start': 'log from first bid →',
+  'log-end': '← log to latest bid',
+};
 const chartScale = {
   y: Y_SCALES.includes(localStorage.getItem('hchs.chart.yScale'))
     ? localStorage.getItem('hchs.chart.yScale')
@@ -304,16 +313,24 @@ function persistChartScale(key, value) {
     /* storage disabled — non-fatal */
   }
 }
+function updateScaleButtons() {
+  const yMode = document.getElementById('y-scale-mode');
+  if (yMode) yMode.textContent = chartScale.y;
+  const xMode = document.getElementById('x-scale-mode');
+  if (xMode) xMode.textContent = X_SCALE_LABELS[chartScale.x];
+}
 function cycleYScale() {
   const idx = Y_SCALES.indexOf(chartScale.y);
   chartScale.y = Y_SCALES[(idx + 1) % Y_SCALES.length];
   persistChartScale('hchs.chart.yScale', chartScale.y);
+  updateScaleButtons();
   drawChart();
 }
 function cycleXScale() {
   const idx = X_SCALES.indexOf(chartScale.x);
   chartScale.x = X_SCALES[(idx + 1) % X_SCALES.length];
   persistChartScale('hchs.chart.xScale', chartScale.x);
+  updateScaleButtons();
   drawChart();
 }
 
@@ -539,7 +556,7 @@ function drawChart() {
   const xAxisLabels = timeLabels.map((l) => {
     const x = xFor(l.t);
     const clampedX = Math.max(PAD.left + 4, Math.min(W - PAD.right - 4, x));
-    return `<text x="${clampedX.toFixed(1)}" y="${H - 22}" text-anchor="middle" font-size="12" font-weight="500" fill="currentColor" opacity="0.85">${escapeHtml(l.primary)}</text>`;
+    return `<text x="${clampedX.toFixed(1)}" y="${H - 14}" text-anchor="middle" font-size="12" font-weight="500" fill="currentColor" opacity="0.85">${escapeHtml(l.primary)}</text>`;
   }).join('');
 
   // Linear Y ticks: just min/mid/max. Log Y ticks: powers of 10 within
@@ -569,22 +586,8 @@ function drawChart() {
   // anywhere in the left label band so any axis label is hittable; the
   // small "linear"/"log" text at the top signals the current mode and
   // hints the band is interactive.
-  const yScaleBadge = `
-    <rect class="chart-y-hit" x="0" y="${PAD.top}" width="${PAD.left}" height="${innerH}" fill="transparent" style="cursor: pointer;" />
-    <text class="chart-y-mode" x="${PAD.left - 8}" y="${(PAD.top - 4).toFixed(1)}" text-anchor="end" font-size="10" fill="currentColor" opacity="0.55" style="pointer-events: none;">$ ${chartScale.y}</text>
-  `;
-  // X-axis click target + mode badge. Covers the bottom label strip so any
-  // tick label hits. The "from start" / "to end" suffix on the log labels
-  // disambiguates which decade arrow the chart is biased toward.
-  const xModeLabel = chartScale.x === 'log-start'
-    ? 'log from start →'
-    : chartScale.x === 'log-end'
-      ? '← log to end'
-      : 'linear';
-  const xScaleBadge = `
-    <rect class="chart-x-hit" x="${PAD.left}" y="${PAD.top + innerH}" width="${innerW}" height="${PAD.bottom}" fill="transparent" style="cursor: pointer;" />
-    <text class="chart-x-mode" x="${(PAD.left + innerW / 2).toFixed(1)}" y="${(H - 6).toFixed(1)}" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.55" style="pointer-events: none;">time: ${xModeLabel}</text>
-  `;
+  // Scale mode labels are rendered in the chart legend (above the SVG)
+  // by updateScaleButtons(); nothing to inject into the SVG itself.
 
   const yRightLabels = [countMin, countMin + countRange / 2, countMax].map((c) => {
     const y = yCountFor(c);
@@ -641,8 +644,6 @@ function drawChart() {
       ${xAxisLabels}
       ${yLeftLabels}
       ${yRightLabels}
-      ${yScaleBadge}
-      ${xScaleBadge}
     </svg>
   `;
 
@@ -651,10 +652,6 @@ function drawChart() {
   const markerPrice = svg.querySelector('.chart-marker-price');
   const markerCount = svg.querySelector('.chart-marker-count');
   const hitArea = svg.querySelector('.chart-hit');
-  const yHit = svg.querySelector('.chart-y-hit');
-  if (yHit) yHit.addEventListener('click', cycleYScale);
-  const xHit = svg.querySelector('.chart-x-hit');
-  if (xHit) xHit.addEventListener('click', cycleXScale);
 
   const updateFromX = (clientX) => {
     const rect = svg.getBoundingClientRect();
@@ -911,5 +908,11 @@ window.addEventListener('resize', () => {
     if (chartState) drawChart();
   }, 150);
 });
+
+const yScaleBtn = document.getElementById('y-scale-btn');
+if (yScaleBtn) yScaleBtn.addEventListener('click', cycleYScale);
+const xScaleBtn = document.getElementById('x-scale-btn');
+if (xScaleBtn) xScaleBtn.addEventListener('click', cycleXScale);
+updateScaleButtons();
 
 load();

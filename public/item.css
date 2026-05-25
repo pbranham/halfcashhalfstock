@@ -158,6 +158,28 @@
   border-top: 1.5px solid #ffb74d;
 }
 
+/* Push the scale toggles to the end of the legend row. */
+.chart-legend .legend-spacer {
+  flex: 1;
+}
+
+.chart-legend .chart-scale-btn {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: inherit;
+  font: inherit;
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.chart-legend .chart-scale-btn:hover {
+  opacity: 1;
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
 .chart-help {
   font-size: 0.75rem;
   opacity: 0.65;
