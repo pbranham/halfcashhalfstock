@@ -157,7 +157,7 @@ function ebayBidIncrement(amount) {
 // pool and recompute. If the retracted bidder was the leader, the visible
 // price typically drops to the new second-highest + increment.
 function buildChartPointsFromBids(bids, listing) {
-  if (!bids || bids.length === 0) return { points: [], maxDots: [] };
+  if (!bids || bids.length === 0) return { points: [], maxDots: [], retractionMarkers: [] };
 
   const events = [];
   for (const bid of bids) {
@@ -191,10 +191,19 @@ function buildChartPointsFromBids(bids, listing) {
   // means many escalations against rising competition; a single dot
   // means immediately outbid. This mirrors what eBay's bid-history page
   // shows publicly (every proxy row is timestamped at the original
-  // max-placement time).
+  // max-placement time). Dots tied to a specifically-retracted placement
+  // get tagged so the renderer can fade them.
   const maxDots = [];
   let lastLeader = null;
+  let lastLeaderPlacedAt = null;
   let lastVisible = NaN;
+
+  // Index of bids that ended up retracted, keyed by "<bidder>|<bidTimeISO>"
+  // so we can tag any defense dot whose owning placement got pulled.
+  const retractedPlacementKeys = new Set();
+  for (const bid of bids) {
+    if (bid.removedAt) retractedPlacementKeys.add(`${bid.bidder}|${bid.bidTime}`);
+  }
 
   for (const event of events) {
     const list = bidderBids.get(event.bidder) ?? [];
@@ -229,14 +238,35 @@ function buildChartPointsFromBids(bids, listing) {
     }
 
     const leader = maxes[0]?.bidder ?? null;
-    if (leader && leaderPlacedAt && (leader !== lastLeader || visiblePrice !== lastVisible)) {
-      maxDots.push({ t: new Date(leaderPlacedAt).getTime(), price: visiblePrice });
+    if (
+      leader &&
+      leaderPlacedAt &&
+      (leader !== lastLeader ||
+        leaderPlacedAt !== lastLeaderPlacedAt ||
+        visiblePrice !== lastVisible)
+    ) {
+      const retracted = retractedPlacementKeys.has(`${leader}|${leaderPlacedAt}`);
+      maxDots.push({ t: new Date(leaderPlacedAt).getTime(), price: visiblePrice, retracted });
     }
     lastLeader = leader;
+    lastLeaderPlacedAt = leaderPlacedAt;
     lastVisible = visiblePrice;
 
     points.push({ t: event.time, price: visiblePrice, count: activeCount });
   }
+
+  // Retraction markers: one per retracted bid. The renderer draws a
+  // dashed line at the bid's max amount from placement to retraction,
+  // a hollow placement circle on the left, and an × on the right.
+  // eBay's retraction table publicly discloses the retracted max
+  // amount, so showing it at this level reveals nothing extra.
+  const retractionMarkers = bids
+    .filter((b) => b.removedAt)
+    .map((b) => ({
+      placedAt: new Date(b.bidTime).getTime(),
+      retractedAt: new Date(b.removedAt).getTime(),
+      maxAmount: b.bidAmountUsd,
+    }));
 
   // Bridge to live state: if the listing's current price disagrees with our
   // last reconstructed point (e.g. a fresh bid landed between our last
@@ -247,7 +277,7 @@ function buildChartPointsFromBids(bids, listing) {
       points.push({ t: Date.now(), price: listing.currentPriceUsd, count: listing.currentBidCount });
     }
   }
-  return { points, maxDots };
+  return { points, maxDots, retractionMarkers };
 }
 
 let chartState = null;
@@ -292,7 +322,7 @@ function generateTimeLabels(tMin, tMax) {
 }
 
 function renderChart(snapshots, listing, bids) {
-  let { points, maxDots } = buildChartPointsFromBids(bids, listing);
+  let { points, maxDots, retractionMarkers } = buildChartPointsFromBids(bids, listing);
 
   if (points.length < 2 && snapshots && snapshots.length > 0) {
     points = snapshots.map((s) => ({
@@ -304,8 +334,9 @@ function renderChart(snapshots, listing, bids) {
     if (last && (last.price !== listing.currentPriceUsd || last.count !== listing.currentBidCount)) {
       points.push({ t: Date.now(), price: listing.currentPriceUsd, count: listing.currentBidCount });
     }
-    // No bid-level data → no max dots to draw.
+    // No bid-level data → no max dots or retraction markers to draw.
     maxDots = [];
+    retractionMarkers = [];
   }
 
   if (points.length < 2) {
@@ -315,7 +346,7 @@ function renderChart(snapshots, listing, bids) {
     return;
   }
 
-  chartState = { points, maxDots, listing };
+  chartState = { points, maxDots, retractionMarkers, listing };
   drawChart();
   chartSection.hidden = false;
 }
@@ -327,7 +358,7 @@ function defaultChartHelp(points) {
 
 function drawChart() {
   if (!chartState) return;
-  const { points, maxDots = [], listing } = chartState;
+  const { points, maxDots = [], retractionMarkers = [], listing } = chartState;
   const W = chartWrap.clientWidth || 900;
   const H = 280;
   const PAD = { top: 16, right: 56, bottom: 36, left: 68 };
@@ -336,9 +367,13 @@ function drawChart() {
 
   const tMin = points[0].t;
   const tMax = points[points.length - 1].t;
-  // Include maxDots in the y-axis range so a tall defense stack isn't
-  // clipped off the top of the chart.
-  const allPrices = [...points.map((p) => p.price), ...maxDots.map((d) => d.price)];
+  // Include maxDots and retraction maxes in the y-axis range so neither
+  // a tall defense stack nor a parked-then-pulled max is clipped off.
+  const allPrices = [
+    ...points.map((p) => p.price),
+    ...maxDots.map((d) => d.price),
+    ...retractionMarkers.map((r) => r.maxAmount),
+  ];
   const priceMin = Math.min(...allPrices);
   const priceMax = Math.max(...allPrices);
   const countMin = Math.min(...points.map((p) => p.count));
@@ -388,16 +423,38 @@ function drawChart() {
   // Hollow circles stacked at the bidder's max-placement timestamp,
   // one per proxy-defense level their max was forced to. Drawn BEFORE
   // the solid dots so the solid leader-dot sits on top when they
-  // coincide.
-  const maxDotMarkers = maxDots.map((d) => `
-    <circle class="chart-max-dot" cx="${xFor(d.t).toFixed(1)}" cy="${yPriceFor(d.price).toFixed(1)}" r="2.5" fill="none" stroke="#4caf50" stroke-width="1.2" opacity="0.5" pointer-events="none" />
-  `).join('');
+  // coincide. Retracted dots use a muted gray + lower opacity so they
+  // recede visually without disappearing entirely.
+  const maxDotMarkers = maxDots.map((d) => {
+    if (d.retracted) {
+      return `<circle class="chart-max-dot is-retracted" cx="${xFor(d.t).toFixed(1)}" cy="${yPriceFor(d.price).toFixed(1)}" r="2.5" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.28" pointer-events="none" />`;
+    }
+    return `<circle class="chart-max-dot" cx="${xFor(d.t).toFixed(1)}" cy="${yPriceFor(d.price).toFixed(1)}" r="2.5" fill="none" stroke="#4caf50" stroke-width="1.2" opacity="0.5" pointer-events="none" />`;
+  }).join('');
+
+  // Retraction markers: a hollow placement circle at (placedAt, max), a
+  // dashed gray line stretching rightward to the retraction timestamp,
+  // and an × at the right endpoint. All in muted "currentColor" so the
+  // annotation reads as separate from the active green palette.
+  const retractionMarkerSvg = retractionMarkers.map((r) => {
+    const x1 = xFor(r.placedAt).toFixed(1);
+    const x2 = xFor(r.retractedAt).toFixed(1);
+    const y = yPriceFor(r.maxAmount).toFixed(1);
+    const xSize = 4; // half-width of the × glyph
+    return `
+      <circle cx="${x1}" cy="${y}" r="3.5" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.55" pointer-events="none" />
+      <line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="currentColor" stroke-width="1.1" stroke-dasharray="4,3" opacity="0.4" pointer-events="none" />
+      <line x1="${Number(x2) - xSize}" y1="${Number(y) - xSize}" x2="${Number(x2) + xSize}" y2="${Number(y) + xSize}" stroke="currentColor" stroke-width="1.6" opacity="0.65" pointer-events="none" />
+      <line x1="${Number(x2) - xSize}" y1="${Number(y) + xSize}" x2="${Number(x2) + xSize}" y2="${Number(y) - xSize}" stroke="currentColor" stroke-width="1.6" opacity="0.65" pointer-events="none" />
+    `;
+  }).join('');
 
   chartWrap.innerHTML = `
     <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
       <rect x="${PAD.left}" y="${PAD.top}" width="${innerW}" height="${innerH}" fill="rgba(255,255,255,0.02)" />
       ${gridLines}
       ${maxDotMarkers}
+      ${retractionMarkerSvg}
       <path d="${pricePath}" stroke="#4caf50" stroke-width="2" fill="none" />
       <path d="${countPath}" stroke="#ffb74d" stroke-width="1.5" fill="none" stroke-dasharray="4,3" />
       ${dots}
