@@ -282,41 +282,56 @@ function buildChartPointsFromBids(bids, listing) {
 
 let chartState = null;
 
-function generateTimeLabels(tMin, tMax) {
+// Picks an x-axis time step from a fixed ladder so labels stay readable
+// regardless of chart width. Targets ~5 labels on narrow screens (mobile),
+// ~7 mid-size, ~9 desktop — chosen so adjacent labels never run into each
+// other when rendered at the chart's font size. Step is the largest ladder
+// value at or below ideal range/targetCount.
+function generateTimeLabels(tMin, tMax, chartWidth = 900) {
   const range = tMax - tMin;
+  const minuteMs = 60_000;
   const hourMs = 3_600_000;
   const dayMs = 86_400_000;
-  const labels = [];
-
-  if (range < hourMs * 12) {
-    const stepMs = range < hourMs * 2 ? hourMs / 2 : hourMs;
-    const start = new Date(tMin);
-    start.setMinutes(0, 0, 0);
-    if (start.getTime() < tMin) start.setTime(start.getTime() + stepMs);
-    for (let t = start.getTime(); t <= tMax; t += stepMs) {
-      const d = new Date(t);
-      labels.push({
-        t,
-        primary: d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }),
-        secondary: null,
-        isDayBoundary: d.getHours() === 0 && d.getMinutes() === 0,
-      });
+  const targetCount = chartWidth < 500 ? 5 : chartWidth < 800 ? 7 : 9;
+  const ladder = [
+    minuteMs, 2 * minuteMs, 5 * minuteMs, 10 * minuteMs, 15 * minuteMs, 30 * minuteMs,
+    hourMs, 2 * hourMs, 3 * hourMs, 6 * hourMs, 12 * hourMs,
+    dayMs, 2 * dayMs, 3 * dayMs, 7 * dayMs, 14 * dayMs, 30 * dayMs,
+  ];
+  // Smallest ladder step that fits within the target count. We iterate from
+  // finest to coarsest and pick the first that keeps the label count under
+  // budget — preferring more detail over less, but never overcrowding.
+  let stepMs = ladder[ladder.length - 1];
+  for (const s of ladder) {
+    if (range / s <= targetCount) {
+      stepMs = s;
+      break;
     }
-  } else {
-    const rangeDays = range / dayMs;
-    const stepDays = Math.max(1, Math.ceil(rangeDays / 8));
-    const start = new Date(tMin);
+  }
+  const useDateFormat = stepMs >= 12 * hourMs;
+
+  const start = new Date(tMin);
+  if (useDateFormat) {
     start.setHours(0, 0, 0, 0);
     if (start.getTime() < tMin) start.setDate(start.getDate() + 1);
-    for (let t = start.getTime(); t <= tMax; t += stepDays * dayMs) {
-      const d = new Date(t);
-      labels.push({
-        t,
-        primary: d.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' }),
-        secondary: null,
-        isDayBoundary: true,
-      });
-    }
+  } else {
+    // Round up to next step boundary so labels land on tidy times (e.g.
+    // top of the hour for a 1h step, multiples of 5m for a 5m step).
+    start.setSeconds(0, 0);
+    start.setTime(Math.ceil(start.getTime() / stepMs) * stepMs);
+  }
+
+  const labels = [];
+  for (let t = start.getTime(); t <= tMax; t += stepMs) {
+    const d = new Date(t);
+    labels.push({
+      t,
+      primary: useDateFormat
+        ? d.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })
+        : d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }),
+      secondary: null,
+      isDayBoundary: d.getHours() === 0 && d.getMinutes() === 0,
+    });
   }
   return labels;
 }
@@ -410,7 +425,7 @@ function drawChart() {
   const lastX = xFor(points[points.length - 1].t).toFixed(1);
   const countAreaPath = `M ${firstX} ${baselineY} ${countLineSegments.join(' ').replace(/^M /, 'L ')} L ${lastX} ${baselineY} Z`;
 
-  const timeLabels = generateTimeLabels(tMin, tMax);
+  const timeLabels = generateTimeLabels(tMin, tMax, W);
 
   const gridLines = timeLabels
     .filter((l) => l.t > tMin && l.t < tMax)
