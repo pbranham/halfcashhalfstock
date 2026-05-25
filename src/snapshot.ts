@@ -99,8 +99,13 @@ export function composeSnapshot(
     lastBidTime: l.lastBidTime ?? null,
   }));
 
-  const priced = items.filter((i): i is ListingView & { split: HalfSplit; priceUsd: number } =>
-    i.split !== null && i.priceUsd !== null,
+  // Items with at least one real bid AND a USD price contribute to the
+  // dollar totals. No-bid items have priceUsd set to eBay's starting price
+  // which shouldn't roll up into the half/half math until someone actually
+  // bids.
+  const priced = items.filter(
+    (i): i is ListingView & { split: HalfSplit; priceUsd: number } =>
+      i.split !== null && i.priceUsd !== null && (i.bidCount ?? 0) > 0,
   );
 
   let lastBid: LastBidSummary | null = null;
@@ -141,9 +146,16 @@ export function composeSnapshot(
           : null,
     };
   });
-  const endedPriced = endedItems.filter((i): i is EndedListingView & { split: HalfSplit } => i.split !== null);
+  // Same no-bid exclusion for ended items: an auction that ended at the
+  // starting price with zero bids didn't actually clear, so its starting
+  // price shouldn't roll into the ended totals.
+  const endedPriced = endedItems.filter(
+    (i): i is EndedListingView & { split: HalfSplit } =>
+      i.split !== null && (i.finalBidCount ?? 0) > 0,
+  );
   const endedPricedAtEnd = endedItems.filter(
-    (i): i is EndedListingView & { endTimeSplit: HalfSplit } => i.endTimeSplit !== null,
+    (i): i is EndedListingView & { endTimeSplit: HalfSplit } =>
+      i.endTimeSplit !== null && (i.finalBidCount ?? 0) > 0,
   );
 
   return {

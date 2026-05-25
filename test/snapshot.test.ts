@@ -68,6 +68,60 @@ describe('composeSnapshot', () => {
     expect(snapshot.totals.bidUsd).toBe(100);
   });
 
+  it('excludes no-bid items from dollar totals (starting price does not count)', () => {
+    // Two USD listings: one has bids, one is just sitting at its starting
+    // price. Only the first should roll into bidUsd / split.
+    const snapshot = composeSnapshot(
+      [
+        listing({ itemId: 'v1|1', priceUsd: 100, bidCount: 3 }),
+        listing({ itemId: 'v1|2', priceUsd: 200, bidCount: 0 }),
+      ],
+      QUOTE,
+    );
+    expect(snapshot.totals.listingsCount).toBe(2);
+    expect(snapshot.totals.pricedCount).toBe(1);
+    expect(snapshot.totals.bidUsd).toBe(100);
+    expect(snapshot.totals.split).toEqual({ cashUsd: 50, stockUsd: 50, shares: 1 });
+  });
+
+  it('excludes ended no-bid auctions from ended totals', () => {
+    const snapshot = composeSnapshot(
+      [],
+      QUOTE,
+      [
+        {
+          itemId: 'v1|9',
+          sellerId: 'boilerpaulie',
+          title: 'Sold for $500',
+          imageUrl: null,
+          itemWebUrl: null,
+          isAuction: true,
+          endsAt: null,
+          endedAt: '2026-05-06T01:00:00.000Z',
+          finalPriceUsd: 500,
+          finalBidCount: 4,
+          currency: 'USD',
+        },
+        {
+          itemId: 'v1|10',
+          sellerId: 'boilerpaulie',
+          title: 'Ended with no bids',
+          imageUrl: null,
+          itemWebUrl: null,
+          isAuction: true,
+          endsAt: null,
+          endedAt: '2026-05-06T02:00:00.000Z',
+          finalPriceUsd: 9999, // starting price, but should NOT count
+          finalBidCount: 0,
+          currency: 'USD',
+        },
+      ],
+    );
+    expect(snapshot.endedTotals.listingsCount).toBe(2);
+    expect(snapshot.endedTotals.bidUsd).toBe(500);
+    expect(snapshot.endedTotals.split.cashUsd).toBe(250);
+  });
+
   it('produces empty totals for empty listings', () => {
     const snapshot = composeSnapshot([], QUOTE);
     expect(snapshot.totals).toEqual({

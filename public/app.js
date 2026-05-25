@@ -22,6 +22,15 @@ const SELLER_PILL_TO_ID = {
   mine: 'boilerpaulie',
   ryan: 'ryan_5050',
 };
+// Each filter has a thematic stock pairing: Ryan wants to buy eBay, I want
+// to buy GameStop. Picking a filter swaps the ticker to match. The user can
+// still manually pick a different ticker afterward — the auto-swap only
+// fires on filter changes.
+const SELLER_FILTER_DEFAULT_TICKER = {
+  all: 'EBAY',
+  mine: 'GME',
+  ryan: 'EBAY',
+};
 function loadSellerFilterFromStorage() {
   const stored = localStorage.getItem('hchs.sellerFilter');
   return stored && stored in SELLER_PILL_TO_ID ? stored : 'all';
@@ -153,9 +162,14 @@ function sortEndedItems(items, sort) {
 }
 
 // Recompute totals from a filtered subset so the on-page numbers reflect the
-// active seller filter. Mirrors the server-side composeSnapshot math.
+// active seller filter. Mirrors the server-side composeSnapshot math:
+// no-bid items are excluded from the dollar totals (their priceUsd is just
+// the starting price, which shouldn't count until someone bids).
 function aggregateActiveTotals(items, stockPrice) {
-  const priced = items.filter((i) => i.priceUsd !== null && i.priceUsd !== undefined);
+  const priced = items.filter(
+    (i) =>
+      i.priceUsd !== null && i.priceUsd !== undefined && (i.bidCount ?? 0) > 0,
+  );
   const bidUsd = priced.reduce((sum, i) => sum + i.priceUsd, 0);
   const cashUsd = bidUsd / 2;
   const stockUsd = bidUsd / 2;
@@ -170,16 +184,24 @@ function aggregateActiveTotals(items, stockPrice) {
 }
 
 function aggregateEndedTotals(items, stockPrice) {
-  // Live split: every USD-priced item contributes at the current stock price.
-  const priced = items.filter((i) => i.split !== null && i.split !== undefined);
+  // No-bid auctions (finalBidCount === 0) didn't actually clear at any real
+  // price, so they shouldn't roll into the ended totals.
+  const hasBid = (i) => (i.finalBidCount ?? 0) > 0;
+
+  // Live split: every USD-priced item with at least one bid contributes at
+  // the current stock price.
+  const priced = items.filter((i) => i.split !== null && i.split !== undefined && hasBid(i));
   const bidUsd = priced.reduce((sum, i) => sum + i.finalPriceUsd, 0);
   const cashUsd = bidUsd / 2;
   const stockUsd = bidUsd / 2;
   const shares = stockPrice > 0 ? stockUsd / stockPrice : 0;
 
   // End-time split: sum each item's pre-computed endTimeSplit. Items where
-  // OHLC history is missing simply drop out of this aggregate.
-  const pricedAtEnd = items.filter((i) => i.endTimeSplit !== null && i.endTimeSplit !== undefined);
+  // OHLC history is missing OR that never received a bid drop out of this
+  // aggregate.
+  const pricedAtEnd = items.filter(
+    (i) => i.endTimeSplit !== null && i.endTimeSplit !== undefined && hasBid(i),
+  );
   const splitAtEnd = pricedAtEnd.reduce(
     (acc, i) => ({
       cashUsd: acc.cashUsd + i.endTimeSplit.cashUsd,
@@ -303,10 +325,15 @@ function renderTotals(snapshot, totals) {
     );
   }
   if (pricedCount < listingsCount) {
+    // "Excluded" covers both reasons: non-USD currency or no bids yet.
     root.appendChild(
       el('div', { class: 'stat' }, [
-        el('div', { class: 'stat-label', textContent: 'Excluded (currency)' }),
-        el('div', { class: 'stat-value', textContent: integer.format(listingsCount - pricedCount) }),
+        el('div', { class: 'stat-label', textContent: 'Excluded from totals' }),
+        el('div', {
+          class: 'stat-value',
+          textContent: integer.format(listingsCount - pricedCount),
+          title: 'Listings not contributing to the half/half totals — either non-USD currency or no bids placed yet.',
+        }),
       ]),
     );
   }
@@ -821,7 +848,28 @@ document.querySelectorAll('.seller-btn').forEach((btn) => {
     document.querySelectorAll('.seller-btn').forEach((b) =>
       b.classList.toggle('is-active', b === btn),
     );
-    if (lastSnapshot) renderFilteredView(lastSnapshot, new Map()); // re-filter; no bid flash
+
+    // Thematic ticker swap: Mine→$GME, Ryan→$EBAY, All→$EBAY. Re-fetch the
+    // snapshot for the new symbol if it changed; otherwise just re-filter
+    // the cached snapshot in place.
+    const preferredTicker = SELLER_FILTER_DEFAULT_TICKER[currentSellerFilter];
+    if (preferredTicker && preferredTicker !== activeSymbol) {
+      activeSymbol = preferredTicker;
+      saveTickerToStorage(activeSymbol);
+      document.querySelectorAll('.stock-btn').forEach((b) =>
+        b.classList.toggle('is-active', b.dataset.symbol === activeSymbol),
+      );
+      const tickerInput = document.getElementById('ticker-input');
+      if (tickerInput) tickerInput.value = '';
+      updateIntroSymbol(activeSymbol);
+      // Re-render the filtered view immediately with the cached snapshot so
+      // the filter change feels instant, then refresh against the new
+      // ticker in the background.
+      if (lastSnapshot) renderFilteredView(lastSnapshot, new Map());
+      refresh();
+    } else if (lastSnapshot) {
+      renderFilteredView(lastSnapshot, new Map()); // re-filter; no bid flash
+    }
   });
 });
 
