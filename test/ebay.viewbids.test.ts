@@ -189,6 +189,42 @@ describe('parseViewbids', () => {
     // the active section's only valid bidder is 3***2 at $100.00.
     expect(parseViewbids(RETRACTION_FIXTURE).finalPriceUsd).toBe(100);
   });
+
+  // Fixture mirroring the seller's logged-in view of bid history: bidders
+  // appear as full usernames inside <a href="/usr/<name>">…</a> profile
+  // links instead of the masked "5***t" form shown to anonymous viewers.
+  // This is what the user gets when they view their OWN live auction's
+  // bid history.
+  const SELLER_VIEW_FIXTURE = `
+    <html><body>
+    <h1>Status for seller: Your item has been bid up to $40.00.</h1>
+    <table>
+      <tr>
+        <td><a href="https://www.ebay.com/usr/some_buyer">some_buyer</a></td>
+        <td>$40.00</td>
+        <td>24 May 2026 at 7:45:00pm PDT</td>
+      </tr>
+      <tr>
+        <td><a href="https://www.ebay.com/usr/another-bidder">another-bidder</a></td>
+        <td>$35.00</td>
+        <td>24 May 2026 at 7:30:12pm PDT</td>
+      </tr>
+      <tr>
+        <td>Starting price</td>
+        <td>$0.99</td>
+        <td>22 May 2026 at 10:00:00am PDT</td>
+      </tr>
+    </table>
+    </body></html>`;
+
+  it('parses the seller-logged-in view where bidders are /usr/ profile links', () => {
+    const result = parseViewbids(SELLER_VIEW_FIXTURE);
+    expect(result.bidCount).toBe(2);
+    expect(result.finalPriceUsd).toBe(40);
+    // Full usernames are stored raw; the API layer masks them on egress.
+    const bidders = result.bids.map((b) => b.bidder).sort();
+    expect(bidders).toEqual(['another-bidder', 'some_buyer']);
+  });
 });
 
 describe('fetchViewbidsHtml', () => {

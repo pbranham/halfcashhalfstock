@@ -149,7 +149,21 @@ interface Token {
 // count, and rows preceded by eBay's "automatic bid (proxy bid)" marker are
 // filtered out so the row count matches eBay's reported "Bids" total.
 export function parseViewbids(html: string): ViewbidsParseResult {
-  const fullText = html
+  // Seller-view pre-processing: when the user is logged in as the auction's
+  // seller, eBay renders each bidder as a full username inside a profile
+  // link (e.g. <a href="https://www.ebay.com/usr/someuser">someuser</a>)
+  // instead of the masked "5***t" form shown to anonymous viewers. The
+  // flatten step below would strip the <a> tag and lose the username, so
+  // we first inject a synthetic "__BIDDER_<name>__" marker around every
+  // /usr/<name> link. The bidder regex below also matches that marker.
+  // Raw usernames are masked at the API boundary (maskBidder) before any
+  // public response, so storing them here is OK.
+  const sellerViewHtml = html.replace(
+    /<a\s+[^>]*href\s*=\s*["'][^"']*\/usr\/([A-Za-z0-9._-]+)[^"']*["'][^>]*>[^<]*<\/a>/gi,
+    '\n__BIDDER_$1__\n',
+  );
+
+  const fullText = sellerViewHtml
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
     .replace(/<[^>]+>/g, '\n')
@@ -174,10 +188,15 @@ export function parseViewbids(html: string): ViewbidsParseResult {
     tokens.push({ index: m.index, kind: 'amount', value: m[1]!.replace(/,/g, '') });
   }
 
-  // Anonymized bidder, e.g. "5***t" / "a***b" / "1***2".
-  const bidderRe = /([0-9A-Za-z])\*{2,4}([0-9A-Za-z])/g;
+  // Bidder tokens: either the anonymized "5***t" form (anonymous view) or
+  // the synthetic "__BIDDER_<name>__" marker we injected for /usr/ profile
+  // links (seller-logged-in view).
+  const bidderRe = /([0-9A-Za-z])\*{2,4}([0-9A-Za-z])|__BIDDER_([A-Za-z0-9._-]+)__/g;
   for (let m = bidderRe.exec(text); m; m = bidderRe.exec(text)) {
-    tokens.push({ index: m.index, kind: 'bidder', value: m[0] });
+    // Marker capture group is m[3]; mask group is m[0]. Prefer the captured
+    // full username when present so the stored bidder reflects identity.
+    const value = m[3] ?? m[0];
+    tokens.push({ index: m.index, kind: 'bidder', value });
   }
 
   const dateRe = new RegExp(
@@ -255,9 +274,10 @@ export function parseViewbids(html: string): ViewbidsParseResult {
       : '';
     const rawHasDollar = /\$\s*[\d,]+\.\d{2}/.test(html);
     const rawHasChallenge = /Pardon Our Interruption|captcha|unusual traffic/i.test(html);
+    const sellerView = /Status for seller/i.test(html) || /__BIDDER_/.test(text);
     throw new ViewbidsParseError(
       'no bids found on viewbids page',
-      `tokens=${JSON.stringify(counts)} rawHasDollar=${rawHasDollar} rawHasChallenge=${rawHasChallenge} aroundFirstAmount="${around}"`,
+      `tokens=${JSON.stringify(counts)} sellerView=${sellerView} rawHasDollar=${rawHasDollar} rawHasChallenge=${rawHasChallenge} aroundFirstAmount="${around}"`,
     );
   }
 
@@ -282,9 +302,10 @@ export function parseRetractedSection(retractionText: string): RetractedBid[] {
   for (let m = amountRe.exec(retractionText); m; m = amountRe.exec(retractionText)) {
     tokens.push({ index: m.index, kind: 'amount', value: m[1]!.replace(/,/g, '') });
   }
-  const bidderRe = /([0-9A-Za-z])\*{2,4}([0-9A-Za-z])/g;
+  const bidderRe = /([0-9A-Za-z])\*{2,4}([0-9A-Za-z])|__BIDDER_([A-Za-z0-9._-]+)__/g;
   for (let m = bidderRe.exec(retractionText); m; m = bidderRe.exec(retractionText)) {
-    tokens.push({ index: m.index, kind: 'bidder', value: m[0] });
+    const value = m[3] ?? m[0];
+    tokens.push({ index: m.index, kind: 'bidder', value });
   }
   const dateRe = new RegExp(
     '(?:[A-Za-z]{3}-\\d{1,2}-\\d{2,4}\\s+\\d{1,2}:\\d{2}:\\d{2}\\s+[A-Za-z]{2,4})' +
