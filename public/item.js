@@ -119,30 +119,111 @@ function renderCurrentState(listing, bids) {
   currentSection.hidden = false;
 }
 
+// eBay's bid-increment table (USD). Returns the increment applied when
+// raising a current bid to outbid a proxy at the given amount.
+// See https://www.ebay.com/help/buying/bidding/automatic-bidding
+const EBAY_BID_INCREMENTS = [
+  [0, 0.05],
+  [0.99, 0.25],
+  [4.99, 0.50],
+  [24.99, 1.00],
+  [99.99, 2.50],
+  [249.99, 5.00],
+  [499.99, 10.00],
+  [999.99, 25.00],
+  [2499.99, 50.00],
+  [4999.99, 100.00],
+];
+function ebayBidIncrement(amount) {
+  let increment = 0.05;
+  for (const [threshold, inc] of EBAY_BID_INCREMENTS) {
+    if (amount > threshold) increment = inc;
+  }
+  return increment;
+}
+
+// Reconstruct the auction's visible current price over time from the active
+// max-bids in the database. The price displayed on eBay's listing page at
+// any moment is determined by the SECOND-highest max bid plus one
+// increment, capped at the highest max — NOT the highest max itself
+// (which is held in reserve by the proxy bidding system).
+//
+// Worked example: leader has hidden max $39. Someone bids $11. Visible
+// jumps to $11.50 ($11 + 50¢ increment), not to $39. eBay's bid-history
+// page emits a "proxy bid" row at that $11.50 amount for the leader; we
+// derive the same number ourselves so we don't need to store those rows.
+//
+// Retracted bids: at the retraction timestamp we remove that bid from the
+// pool and recompute. If the retracted bidder was the leader, the visible
+// price typically drops to the new second-highest + increment.
 function buildChartPointsFromBids(bids, listing) {
   if (!bids || bids.length === 0) return [];
+
   const events = [];
   for (const bid of bids) {
-    events.push({ time: new Date(bid.bidTime).getTime(), type: 'place', bid });
+    events.push({
+      time: new Date(bid.bidTime).getTime(),
+      type: 'place',
+      bidder: bid.bidder,
+      amount: bid.bidAmountUsd,
+      placedAt: bid.bidTime,
+    });
     if (bid.removedAt) {
-      events.push({ time: new Date(bid.removedAt).getTime(), type: 'remove', bid });
+      events.push({
+        time: new Date(bid.removedAt).getTime(),
+        type: 'remove',
+        bidder: bid.bidder,
+        amount: bid.bidAmountUsd,
+        placedAt: bid.bidTime,
+      });
     }
   }
   events.sort((a, b) => a.time - b.time);
 
-  const active = new Map();
+  // Track all currently-active max bids grouped by bidder. A single bidder
+  // can have multiple active bids if they raised their max multiple times;
+  // their "effective max" is the highest active amount among them.
+  const bidderBids = new Map();
   const points = [];
+
   for (const event of events) {
-    const key = `${event.bid.bidder}|${event.bid.bidTime}`;
+    const list = bidderBids.get(event.bidder) ?? [];
     if (event.type === 'place') {
-      active.set(key, event.bid.bidAmountUsd);
+      list.push({ amount: event.amount, placedAt: event.placedAt });
+      bidderBids.set(event.bidder, list);
     } else {
-      active.delete(key);
+      const idx = list.findIndex((b) => b.amount === event.amount && b.placedAt === event.placedAt);
+      if (idx >= 0) list.splice(idx, 1);
+      if (list.length === 0) bidderBids.delete(event.bidder);
+      else bidderBids.set(event.bidder, list);
     }
-    const amounts = Array.from(active.values());
-    const price = amounts.length > 0 ? Math.max(...amounts) : 0;
-    points.push({ t: event.time, price, count: active.size });
+
+    // Effective max per bidder; active bid count; visible price.
+    let activeCount = 0;
+    const maxes = [];
+    for (const [bidder, items] of bidderBids) {
+      activeCount += items.length;
+      maxes.push({ bidder, amount: Math.max(...items.map((b) => b.amount)) });
+    }
+    maxes.sort((a, b) => b.amount - a.amount);
+
+    let visiblePrice = 0;
+    if (maxes.length === 1) {
+      // Single bidder: we don't know the auction's starting price, so this
+      // is the best approximation — slightly overstates until a second
+      // bidder enters, but that's typically seconds-to-minutes.
+      visiblePrice = maxes[0].amount;
+    } else if (maxes.length >= 2) {
+      const [highest, second] = maxes;
+      visiblePrice = Math.min(highest.amount, second.amount + ebayBidIncrement(second.amount));
+    }
+
+    points.push({ t: event.time, price: visiblePrice, count: activeCount });
   }
+
+  // Bridge to live state: if the listing's current price disagrees with our
+  // last reconstructed point (e.g. a fresh bid landed between our last
+  // import and now), append a "now" point so the chart catches up.
   if (listing && points.length > 0) {
     const last = points[points.length - 1];
     if (last.price !== listing.currentPriceUsd || last.count !== listing.currentBidCount) {
