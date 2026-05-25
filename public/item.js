@@ -388,7 +388,27 @@ function drawChart() {
   const yCountFor = (c) => PAD.top + innerH - ((c - countMin) / countRange) * innerH;
 
   const pricePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(p.t).toFixed(1)} ${yPriceFor(p.price).toFixed(1)}`).join(' ');
-  const countPath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(p.t).toFixed(1)} ${yCountFor(p.count).toFixed(1)}`).join(' ');
+  // Bid-count as a step area (cumulative bids only ever go up between
+  // events). Step path holds the count flat between bid events and jumps
+  // at each placement, then closes down to the chart's bottom edge so
+  // the SVG can fill it. Subtler than a dashed line — lives in the
+  // background without competing with the price line.
+  const baselineY = (PAD.top + innerH).toFixed(1);
+  const countLineSegments = [];
+  for (let i = 0; i < points.length; i++) {
+    const x = xFor(points[i].t).toFixed(1);
+    const y = yCountFor(points[i].count).toFixed(1);
+    if (i === 0) {
+      countLineSegments.push(`M ${x} ${y}`);
+    } else {
+      const prevY = yCountFor(points[i - 1].count).toFixed(1);
+      countLineSegments.push(`L ${x} ${prevY}`, `L ${x} ${y}`);
+    }
+  }
+  const countLinePath = countLineSegments.join(' ');
+  const firstX = xFor(points[0].t).toFixed(1);
+  const lastX = xFor(points[points.length - 1].t).toFixed(1);
+  const countAreaPath = `M ${firstX} ${baselineY} ${countLineSegments.join(' ').replace(/^M /, 'L ')} L ${lastX} ${baselineY} Z`;
 
   const timeLabels = generateTimeLabels(tMin, tMax);
 
@@ -452,11 +472,12 @@ function drawChart() {
   chartWrap.innerHTML = `
     <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
       <rect x="${PAD.left}" y="${PAD.top}" width="${innerW}" height="${innerH}" fill="rgba(255,255,255,0.02)" />
+      <path d="${countAreaPath}" fill="#ffb74d" opacity="0.18" stroke="none" />
+      <path d="${countLinePath}" stroke="#ffb74d" stroke-width="1.2" fill="none" opacity="0.7" />
       ${gridLines}
       ${maxDotMarkers}
       ${retractionMarkerSvg}
       <path d="${pricePath}" stroke="#4caf50" stroke-width="2" fill="none" />
-      <path d="${countPath}" stroke="#ffb74d" stroke-width="1.5" fill="none" stroke-dasharray="4,3" />
       ${dots}
       <line class="chart-guide" x1="0" y1="${PAD.top}" x2="0" y2="${PAD.top + innerH}" stroke="#fff" stroke-width="1" stroke-dasharray="3,3" opacity="0" pointer-events="none" />
       <circle class="chart-marker-price" cx="0" cy="0" r="6" fill="#a5e8b6" stroke="#0d1f15" stroke-width="2" opacity="0" pointer-events="none" />
