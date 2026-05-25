@@ -846,15 +846,17 @@ export function createApp(deps: Deps): express.Express {
         }
         try {
           const parsed = parseViewbids(html);
-          const r = await reconcileItemBids(deps.db, itemId, parsed.bids);
+          const r = await reconcileItemBids(deps.db, itemId, parsed.bids, parsed.retractedBids);
           res.status(200).json({
             action: 'import_viewbids_html',
             itemId,
             status: 'imported',
             deleted: r.deleted,
             inserted: r.inserted,
+            retractedInserted: r.retractedInserted,
             finalPriceUsd: r.finalPriceUsd,
             bidCount: r.bidCount,
+            retractedCount: parsed.retractedBids.length,
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);

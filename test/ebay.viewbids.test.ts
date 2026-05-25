@@ -137,6 +137,58 @@ describe('parseViewbids', () => {
     const wStar = parseViewbids(EBAY_FIXTURE).bids.find((b) => b.bidder === 'w***1');
     expect(wStar?.bidAmount).toBe(2850);
   });
+
+  it('yields empty retractedBids when the retraction row only has one date', () => {
+    // The legacy fixture's retraction row only contains one timestamp;
+    // the new parser requires two (bid time + retraction time) so it
+    // should produce zero retracted bids without affecting active parsing.
+    const result = parseViewbids(EBAY_FIXTURE);
+    expect(result.retractedBids).toEqual([]);
+  });
+
+  // Fixture with one active bid and one retraction row containing two dates
+  // (bid placed at, retracted at) — the format we expect eBay's retraction
+  // table to produce.
+  const RETRACTION_FIXTURE = `
+    <html><body>
+    <h1>Bid History</h1>
+    <table class="app-bid-history__table">
+      <tr><td><span>Highest Bidder</span>3***2</td><td>$100.00</td><td>13 May 2026 at 11:38:33am PDT</td></tr>
+      <tr><td>Starting price</td><td>$0.01</td><td>6 May 2026 at 12:58:04pm PDT</td></tr>
+    </table>
+    <h2>Bid retraction and cancellation history</h2>
+    <table>
+      <tr>
+        <td>x***n</td>
+        <td>$1,234.00</td>
+        <td>7 May 2026 at 10:17:00am PDT</td>
+        <td>Retracted because of typing mistake</td>
+        <td>7 May 2026 at 10:25:14am PDT</td>
+      </tr>
+    </table>
+    </body></html>`;
+
+  it('parses a retracted-bid row into retractedBids with both timestamps', () => {
+    const result = parseViewbids(RETRACTION_FIXTURE);
+    expect(result.retractedBids).toHaveLength(1);
+    expect(result.retractedBids[0]).toEqual({
+      bidder: 'x***n',
+      bidAmount: 1234,
+      bidTime: '2026-05-07T17:17:00.000Z',
+      removedAt: '2026-05-07T17:25:14.000Z',
+    });
+  });
+
+  it('keeps retracted bidders out of the active bid list', () => {
+    const bidders = parseViewbids(RETRACTION_FIXTURE).bids.map((b) => b.bidder);
+    expect(bidders).not.toContain('x***n');
+  });
+
+  it('does not affect final price when only retracted bids exceed it', () => {
+    // The retraction row's $1,234.00 must not leak into finalPriceUsd —
+    // the active section's only valid bidder is 3***2 at $100.00.
+    expect(parseViewbids(RETRACTION_FIXTURE).finalPriceUsd).toBe(100);
+  });
 });
 
 describe('fetchViewbidsHtml', () => {

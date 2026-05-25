@@ -7,8 +7,16 @@ import type { BidRecord } from './trading.js';
 // an auction ends. Because the monitored auctions have all ended, the data is
 // permanently static — this is a repair, not an ongoing data source.
 
+export interface RetractedBid extends BidRecord {
+  // ISO timestamp of when the bid was retracted (per eBay's "Bid retraction
+  // and cancellation history" table). bidTime on the parent is when the bid
+  // was originally placed.
+  removedAt: string;
+}
+
 export interface ViewbidsParseResult {
   bids: BidRecord[];
+  retractedBids: RetractedBid[];
   finalPriceUsd: number;
   bidCount: number;
 }
@@ -148,10 +156,12 @@ export function parseViewbids(html: string): ViewbidsParseResult {
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&');
 
-  // Stop before the "Bid retraction and cancellation history" section so the
-  // retracted-bid row doesn't form a phantom 44th row.
+  // Split before the "Bid retraction and cancellation history" section. The
+  // top half holds active bids; the bottom half (if present) holds retracted
+  // bids and gets parsed separately by parseRetractedSection.
   const retractIdx = fullText.indexOf('Bid retraction and cancellation history');
   const text = retractIdx > 0 ? fullText.slice(0, retractIdx) : fullText;
+  const retractionText = retractIdx > 0 ? fullText.slice(retractIdx) : '';
 
   const tokens: Token[] = [];
 
@@ -253,7 +263,79 @@ export function parseViewbids(html: string): ViewbidsParseResult {
 
   bids.sort((x, y) => (x.bidTime < y.bidTime ? -1 : x.bidTime > y.bidTime ? 1 : 0));
   const finalPriceUsd = bids.reduce((max, b) => (b.bidAmount > max ? b.bidAmount : max), 0);
-  return { bids, finalPriceUsd, bidCount: bids.length };
+
+  const retractedBids = retractionText ? parseRetractedSection(retractionText) : [];
+  return { bids, retractedBids, finalPriceUsd, bidCount: bids.length };
+}
+
+// Parses the "Bid retraction and cancellation history" table. Each row on
+// eBay's page lists a bidder, the bid amount, two timestamps (bid placed at,
+// retracted at), and a short explanation. We tokenize the same way as the
+// active section and walk in bidder-delimited groups, collecting the first
+// amount + first TWO dates per row. Best-effort: if a row has fewer than two
+// dates, it's skipped. The slice we receive is purely the retraction section,
+// so misclassifying active bids isn't possible.
+export function parseRetractedSection(retractionText: string): RetractedBid[] {
+  const tokens: Token[] = [];
+
+  const amountRe = /\$\s*([\d,]+\.\d{2})/g;
+  for (let m = amountRe.exec(retractionText); m; m = amountRe.exec(retractionText)) {
+    tokens.push({ index: m.index, kind: 'amount', value: m[1]!.replace(/,/g, '') });
+  }
+  const bidderRe = /([0-9A-Za-z])\*{2,4}([0-9A-Za-z])/g;
+  for (let m = bidderRe.exec(retractionText); m; m = bidderRe.exec(retractionText)) {
+    tokens.push({ index: m.index, kind: 'bidder', value: m[0] });
+  }
+  const dateRe = new RegExp(
+    '(?:[A-Za-z]{3}-\\d{1,2}-\\d{2,4}\\s+\\d{1,2}:\\d{2}:\\d{2}\\s+[A-Za-z]{2,4})' +
+    '|(?:[A-Za-z]{3,9}\\s+\\d{1,2},?\\s+\\d{2,4}\\s+(?:at\\s+)?\\d{1,2}:\\d{2}:\\d{2}\\s*[AaPp][Mm]\\s+[A-Za-z]{2,4})' +
+    '|(?:\\d{1,2}\\s+[A-Za-z]{3,9}\\s+\\d{2,4}\\s+(?:at\\s+)?\\d{1,2}:\\d{2}:\\d{2}\\s*[AaPp][Mm]\\s+[A-Za-z]{2,4})',
+    'g',
+  );
+  for (let m = dateRe.exec(retractionText); m; m = dateRe.exec(retractionText)) {
+    tokens.push({ index: m.index, kind: 'date', value: m[0] });
+  }
+  tokens.sort((x, y) => x.index - y.index);
+
+  const out: RetractedBid[] = [];
+  const seen = new Set<string>();
+  let cur: { bidder: string; amount: number | null; dates: string[] } | null = null;
+
+  const flush = (): void => {
+    if (!cur || cur.amount === null || cur.dates.length < 2) return;
+    let bidTime: string;
+    let removedAt: string;
+    try {
+      bidTime = parseEbayDate(cur.dates[0]!);
+      removedAt = parseEbayDate(cur.dates[1]!);
+    } catch {
+      return;
+    }
+    // If the two parsed timestamps are out of chronological order (retraction
+    // earlier than the bid), eBay rendered the columns in (retraction, bid)
+    // order — swap.
+    if (Date.parse(removedAt) < Date.parse(bidTime)) {
+      const tmp = bidTime;
+      bidTime = removedAt;
+      removedAt = tmp;
+    }
+    const key = `${cur.bidder}|${bidTime}|${cur.amount}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ bidder: cur.bidder, bidTime, bidAmount: cur.amount, removedAt });
+  };
+
+  for (const token of tokens) {
+    if (token.kind === 'bidder') {
+      flush();
+      cur = { bidder: token.value, amount: null, dates: [] };
+    } else if (cur) {
+      if (token.kind === 'amount' && cur.amount === null) cur.amount = Number(token.value);
+      else if (token.kind === 'date' && cur.dates.length < 2) cur.dates.push(token.value);
+    }
+  }
+  flush();
+  return out;
 }
 
 const BROWSER_HEADERS: Record<string, string> = {

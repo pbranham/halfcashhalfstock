@@ -159,16 +159,36 @@ export async function reconcileBids(
   return { inserted, removed };
 }
 
-// One-time authoritative repair of an ended auction's bid history from eBay's
-// public viewbids page. The page is the COMPLETE, final, static record, so this
-// fully replaces the item's bids (delete + insert) rather than merging — the
-// (item_id,bid_time,bidder) unique key can't catch a wrong AMOUNT on an
-// otherwise-matching row, so a merge would leave stale bad data behind.
+// Carries the retraction timestamp alongside the standard BidRecord fields.
+// Mirrors RetractedBid from src/ebay/viewbids.ts but kept local to persist so
+// this module doesn't depend on the eBay subdirectory.
+export interface RetractedBidInput {
+  bidder: string;
+  bidTime: string;
+  bidAmount: number;
+  removedAt: string;
+}
+
+// One-time authoritative repair of an auction's bid history from eBay's public
+// viewbids page. The page is the COMPLETE record (active bids + retracted
+// bids), so this fully replaces the item's bids (delete + insert) rather than
+// merging — the (item_id,bid_time,bidder) unique key can't catch a wrong
+// AMOUNT on an otherwise-matching row, so a merge would leave stale bad data
+// behind. Retracted bids are inserted with `removed_at` populated so they show
+// up in the item-page bid timeline as retracted but don't count toward the
+// listing's bidCount or finalPrice.
 export async function reconcileItemBids(
   pool: Pool,
   itemId: string,
   bids: readonly BidRecord[],
-): Promise<{ deleted: number; inserted: number; finalPriceUsd: number; bidCount: number }> {
+  retracted: readonly RetractedBidInput[] = [],
+): Promise<{
+  deleted: number;
+  inserted: number;
+  retractedInserted: number;
+  finalPriceUsd: number;
+  bidCount: number;
+}> {
   const valid = bids.filter(
     (b) => b.bidTime && Number.isFinite(b.bidAmount) && b.bidAmount >= 0,
   );
@@ -176,6 +196,13 @@ export async function reconcileItemBids(
   if (valid.length === 0) {
     throw new Error('reconcileItemBids: refusing to replace bids with zero valid rows');
   }
+  const validRetracted = retracted.filter(
+    (b) =>
+      b.bidTime &&
+      b.removedAt &&
+      Number.isFinite(b.bidAmount) &&
+      b.bidAmount >= 0,
+  );
   const finalPriceUsd = valid.reduce((max, b) => (b.bidAmount > max ? b.bidAmount : max), 0);
   const bidCount = valid.length;
 
@@ -199,6 +226,25 @@ export async function reconcileItemBids(
       values,
     );
 
+    let retractedInserted = 0;
+    if (validRetracted.length > 0) {
+      const rValues: unknown[] = [];
+      const rPlaceholders = validRetracted
+        .map((bid, i) => {
+          const base = i * 5;
+          rValues.push(itemId, bid.bidder || 'unknown', bid.bidTime, bid.bidAmount, bid.removedAt);
+          return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`;
+        })
+        .join(', ');
+      const rIns = await client.query(
+        `INSERT INTO bids (item_id, bidder, bid_time, bid_amount_usd, removed_at)
+         VALUES ${rPlaceholders}
+         ON CONFLICT (item_id, bid_time, bidder) DO UPDATE SET removed_at = EXCLUDED.removed_at`,
+        rValues,
+      );
+      retractedInserted = rIns.rowCount ?? 0;
+    }
+
     await client.query(
       `UPDATE listings
        SET current_price_usd = $2, current_bid_count = $3, last_backfilled_at = NOW()
@@ -206,7 +252,13 @@ export async function reconcileItemBids(
       [itemId, finalPriceUsd, bidCount],
     );
     await client.query('COMMIT');
-    return { deleted: del.rowCount ?? 0, inserted: ins.rowCount ?? 0, finalPriceUsd, bidCount };
+    return {
+      deleted: del.rowCount ?? 0,
+      inserted: ins.rowCount ?? 0,
+      retractedInserted,
+      finalPriceUsd,
+      bidCount,
+    };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

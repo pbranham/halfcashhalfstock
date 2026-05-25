@@ -149,7 +149,37 @@ describe('reconcileItemBids', () => {
   it('returns the max bid as finalPriceUsd and the row counts', async () => {
     const { pool } = makeTxPool();
     const result = await reconcileItemBids(pool as unknown as Pool, 'v1|336|0', BIDS);
-    expect(result).toEqual({ deleted: 8, inserted: 12, finalPriceUsd: 5200, bidCount: 3 });
+    expect(result).toEqual({
+      deleted: 8,
+      inserted: 12,
+      retractedInserted: 0,
+      finalPriceUsd: 5200,
+      bidCount: 3,
+    });
+  });
+
+  it('also inserts retracted bids with removed_at populated', async () => {
+    const { pool, client } = makeTxPool();
+    const RETRACTED = [
+      {
+        bidder: 'x***n',
+        bidTime: '2026-05-07T17:17:00.000Z',
+        bidAmount: 1234,
+        removedAt: '2026-05-07T17:25:14.000Z',
+      },
+    ];
+    const result = await reconcileItemBids(pool as unknown as Pool, 'v1|336|0', BIDS, RETRACTED);
+    // Two INSERT INTO bids statements: one for active bids, one for retracted.
+    const insertCalls = client.query.mock.calls.filter(([sql]) =>
+      /^INSERT INTO bids/.test(sql as string),
+    );
+    expect(insertCalls.length).toBe(2);
+    // The retracted INSERT writes the removed_at column.
+    const retractedInsert = insertCalls.find(([sql]) =>
+      /removed_at/.test(sql as string),
+    );
+    expect(retractedInsert).toBeDefined();
+    expect(result.retractedInserted).toBe(12); // mock returns rowCount: 12 for INSERTs
   });
 
   it('refuses to delete when given zero valid bids', async () => {
