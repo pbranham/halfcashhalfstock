@@ -282,6 +282,26 @@ function buildChartPointsFromBids(bids, listing) {
 
 let chartState = null;
 
+// Axis scale state, persisted across page loads. Click the axis label band
+// to cycle. Y has two modes: linear ↔ log. (X-axis gets its three-state
+// toggle in a follow-up commit.)
+const Y_SCALES = ['linear', 'log'];
+const chartScale = {
+  y: Y_SCALES.includes(localStorage.getItem('hchs.chart.yScale'))
+    ? localStorage.getItem('hchs.chart.yScale')
+    : 'linear',
+};
+function cycleYScale() {
+  const idx = Y_SCALES.indexOf(chartScale.y);
+  chartScale.y = Y_SCALES[(idx + 1) % Y_SCALES.length];
+  try {
+    localStorage.setItem('hchs.chart.yScale', chartScale.y);
+  } catch (_e) {
+    /* storage disabled — non-fatal */
+  }
+  drawChart();
+}
+
 // Picks an x-axis time step from a fixed ladder so labels stay readable
 // regardless of chart width. Targets ~5 labels on narrow screens (mobile),
 // ~7 mid-size, ~9 desktop — chosen so adjacent labels never run into each
@@ -398,8 +418,17 @@ function drawChart() {
   const countRange = countMax - countMin || 1;
   const tRange = tMax - tMin || 1;
 
+  // Y price: linear or log10. Clamp inputs to 0.01 to avoid log(0) when
+  // the chart spans values that include or approach zero.
+  const LOG_FLOOR = 0.01;
+  const logMin = Math.log10(Math.max(LOG_FLOOR, priceMin));
+  const logMax = Math.log10(Math.max(LOG_FLOOR, priceMax));
+  const logRange = logMax - logMin || 1;
+
   const xFor = (t) => PAD.left + ((t - tMin) / tRange) * innerW;
-  const yPriceFor = (p) => PAD.top + innerH - ((p - priceMin) / priceRange) * innerH;
+  const yPriceFor = chartScale.y === 'log'
+    ? (p) => PAD.top + innerH - ((Math.log10(Math.max(LOG_FLOOR, p)) - logMin) / logRange) * innerH
+    : (p) => PAD.top + innerH - ((p - priceMin) / priceRange) * innerH;
   const yCountFor = (c) => PAD.top + innerH - ((c - countMin) / countRange) * innerH;
 
   const pricePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(p.t).toFixed(1)} ${yPriceFor(p.price).toFixed(1)}`).join(' ');
@@ -441,10 +470,37 @@ function drawChart() {
     return `<text x="${clampedX.toFixed(1)}" y="${H - 14}" text-anchor="middle" font-size="12" font-weight="500" fill="currentColor" opacity="0.85">${escapeHtml(l.primary)}</text>`;
   }).join('');
 
-  const yLeftLabels = [priceMin, priceMin + priceRange / 2, priceMax].map((p) => {
+  // Linear Y ticks: just min/mid/max. Log Y ticks: powers of 10 within
+  // range plus the actual max so the top of the data is anchored.
+  const yTickValues = (() => {
+    if (chartScale.y !== 'log') {
+      return [priceMin, priceMin + priceRange / 2, priceMax];
+    }
+    const ticks = [];
+    const lo = Math.floor(Math.log10(Math.max(LOG_FLOOR, priceMin)));
+    const hi = Math.ceil(Math.log10(Math.max(LOG_FLOOR, priceMax)));
+    for (let exp = lo; exp <= hi; exp++) {
+      const v = Math.pow(10, exp);
+      if (v >= priceMin * 0.99 && v <= priceMax * 1.01) ticks.push(v);
+    }
+    if (ticks.length === 0 || ticks[ticks.length - 1] < priceMax * 0.95) {
+      ticks.push(priceMax);
+    }
+    return ticks;
+  })();
+  const yLeftLabels = yTickValues.map((p) => {
     const y = yPriceFor(p);
     return `<text x="${PAD.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="12" font-weight="500" fill="#4caf50" opacity="0.95">${fmtUsd(p)}</text>`;
   }).join('');
+
+  // Y-axis click target + mode badge. Transparent rect catches clicks
+  // anywhere in the left label band so any axis label is hittable; the
+  // small "linear"/"log" text at the top signals the current mode and
+  // hints the band is interactive.
+  const yScaleBadge = `
+    <rect class="chart-y-hit" x="0" y="${PAD.top}" width="${PAD.left}" height="${innerH}" fill="transparent" style="cursor: pointer;" />
+    <text class="chart-y-mode" x="${PAD.left - 8}" y="${(PAD.top - 4).toFixed(1)}" text-anchor="end" font-size="10" fill="currentColor" opacity="0.55" style="pointer-events: none;">$ ${chartScale.y}</text>
+  `;
 
   const yRightLabels = [countMin, countMin + countRange / 2, countMax].map((c) => {
     const y = yCountFor(c);
@@ -501,6 +557,7 @@ function drawChart() {
       ${xAxisLabels}
       ${yLeftLabels}
       ${yRightLabels}
+      ${yScaleBadge}
     </svg>
   `;
 
@@ -509,6 +566,8 @@ function drawChart() {
   const markerPrice = svg.querySelector('.chart-marker-price');
   const markerCount = svg.querySelector('.chart-marker-count');
   const hitArea = svg.querySelector('.chart-hit');
+  const yHit = svg.querySelector('.chart-y-hit');
+  if (yHit) yHit.addEventListener('click', cycleYScale);
 
   const updateFromX = (clientX) => {
     const rect = svg.getBoundingClientRect();
