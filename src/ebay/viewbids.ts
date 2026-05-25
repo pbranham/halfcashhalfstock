@@ -19,6 +19,12 @@ export interface ViewbidsParseResult {
   retractedBids: RetractedBid[];
   finalPriceUsd: number;
   bidCount: number;
+  // True when the page explicitly states "Bids: 0" / "Bidders: 0" / "Your
+  // item has no bids" — i.e. the auction currently has zero active bids
+  // (possibly after one or more retractions). Distinct from a parse
+  // failure where we couldn't find bid data we expected to be there.
+  // Allows persistence to safely reconcile down to zero active bids.
+  knownZeroBids?: boolean;
 }
 
 export type ViewbidsFetchOutcome =
@@ -274,7 +280,17 @@ export function parseViewbids(html: string): ViewbidsParseResult {
   }
   flush();
 
-  if (bids.length === 0) {
+  // Distinguish "this auction genuinely has zero active bids right now"
+  // from "the parser failed to find bid data it expected to be there".
+  // eBay's seller view explicitly states "Bids: 0" / "Bidders: 0" /
+  // "Your item has no bids" when the count is truly zero (commonly seen
+  // when every bid that existed got retracted, or when no one's bid yet).
+  // In that case we accept the empty result and let persistence reconcile
+  // the active-bids list down to zero. Without that marker, an empty
+  // tokens array means our parser missed something — keep throwing.
+  const knownZeroBids = /Bids:\s*0\b|Bidders:\s*0\b|item has no bids/i.test(html);
+
+  if (bids.length === 0 && !knownZeroBids) {
     const counts = {
       bidder: tokens.filter((t) => t.kind === 'bidder').length,
       amount: tokens.filter((t) => t.kind === 'amount').length,
@@ -296,10 +312,19 @@ export function parseViewbids(html: string): ViewbidsParseResult {
   }
 
   bids.sort((x, y) => (x.bidTime < y.bidTime ? -1 : x.bidTime > y.bidTime ? 1 : 0));
-  const finalPriceUsd = bids.reduce((max, b) => (b.bidAmount > max ? b.bidAmount : max), 0);
+  // For zero-active-bid auctions, the "current price" the listing should
+  // display is the starting bid (the floor a bidder would have to meet).
+  const startingMatch = !knownZeroBids
+    ? null
+    : html.match(/Starting\s+(?:Bid|Price):[^$]{0,80}\$\s*([\d,]+\.\d{2})/i);
+  const finalPriceUsd = bids.length > 0
+    ? bids.reduce((max, b) => (b.bidAmount > max ? b.bidAmount : max), 0)
+    : startingMatch
+      ? Number(startingMatch[1]!.replace(/,/g, ''))
+      : 0;
 
   const retractedBids = retractionText ? parseRetractedSection(retractionText) : [];
-  return { bids, retractedBids, finalPriceUsd, bidCount: bids.length };
+  return { bids, retractedBids, finalPriceUsd, bidCount: bids.length, knownZeroBids };
 }
 
 // Parses the "Bid retraction and cancellation history" table. Each row on

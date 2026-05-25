@@ -852,7 +852,18 @@ export function createApp(deps: Deps): express.Express {
         }
         try {
           const parsed = parseViewbids(html);
-          const r = await reconcileItemBids(deps.db, itemId, parsed.bids, parsed.retractedBids);
+          // When the page tells us the auction has zero active bids, pass
+          // the starting-bid (carried as finalPriceUsd) so the listing's
+          // current_price drops back to the starting floor.
+          const r = await reconcileItemBids(
+            deps.db,
+            itemId,
+            parsed.bids,
+            parsed.retractedBids,
+            parsed.knownZeroBids
+              ? { knownZeroBids: true, zeroBidsPriceUsd: parsed.finalPriceUsd }
+              : {},
+          );
           res.status(200).json({
             action: 'import_viewbids_html',
             itemId,
@@ -863,6 +874,7 @@ export function createApp(deps: Deps): express.Express {
             finalPriceUsd: r.finalPriceUsd,
             bidCount: r.bidCount,
             retractedCount: parsed.retractedBids.length,
+            knownZeroBids: parsed.knownZeroBids ?? false,
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);

@@ -190,6 +190,22 @@ describe('reconcileItemBids', () => {
     expect(pool.connect).not.toHaveBeenCalled();
   });
 
+  it('accepts zero bids when knownZeroBids is set, using starting bid as price', async () => {
+    const { pool, client } = makeTxPool();
+    const result = await reconcileItemBids(pool as unknown as Pool, 'v1|336|0', [], [], {
+      knownZeroBids: true,
+      zeroBidsPriceUsd: 109.42,
+    });
+    expect(result.bidCount).toBe(0);
+    expect(result.finalPriceUsd).toBe(109.42);
+    expect(result.inserted).toBe(0);
+    // Should only run BEGIN, DELETE, UPDATE listings, COMMIT — no INSERT INTO bids.
+    const sqls = client.query.mock.calls.map(([sql]) => sql as string);
+    expect(sqls.some((s) => /^INSERT INTO bids/.test(s))).toBe(false);
+    expect(sqls.some((s) => /UPDATE listings/.test(s))).toBe(true);
+    expect(sqls[sqls.length - 1]).toBe('COMMIT');
+  });
+
   it('rolls back when a query fails mid-transaction', async () => {
     const { pool, client } = makeTxPool();
     client.query.mockImplementation((sql: string) => {
