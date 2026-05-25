@@ -102,7 +102,7 @@ automatically.
 | `EBAY_DEV_ID`             | no       | —             | Required for Trading API (per-bid timestamps)                      |
 | `EBAY_USER_TOKEN`         | no       | —             | Auth'n'Auth user token; alternative to file                        |
 | `EBAY_USER_TOKEN_FILE`    | no       | `.cache/...`  | Path to JSON file containing the user token                        |
-| `EBAY_SELLER_ID`          | no       | `ryan_5050`   | Seller username to track                                           |
+| `EBAY_SELLER_IDS`         | no       | `boilerpaulie,ryan_5050` | Comma-separated seller usernames to track. Legacy `EBAY_SELLER_ID` (single value) is accepted as a fallback. |
 | `EBAY_MARKETPLACE_ID`     | no       | `EBAY_US`     | eBay marketplace                                                   |
 | `FINNHUB_API_KEY`         | no       | —             | Enables Finnhub primary; Yahoo used otherwise                      |
 | `STOCK_SYMBOL`            | no       | `EBAY`        | Default ticker for the stock half of the math                      |

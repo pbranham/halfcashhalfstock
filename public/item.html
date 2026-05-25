@@ -33,7 +33,12 @@
         <h3>Price &amp; bid count over time</h3>
         <div class="chart-legend">
           <span><span class="swatch line-bid"></span>Current bid (USD)</span>
-          <span><span class="swatch line-count"></span>Bid count</span>
+          <span><span class="swatch dot-active"></span>Active bid</span>
+          <span><span class="swatch dot-proxy"></span>Proxy bid</span>
+          <span><span class="swatch area-count"></span>Bid count</span>
+          <span class="legend-spacer"></span>
+          <button id="y-scale-btn" type="button" class="chart-scale-btn" aria-label="Toggle Y-axis scale">$: <span id="y-scale-mode">linear</span></button>
+          <button id="x-scale-btn" type="button" class="chart-scale-btn" aria-label="Toggle X-axis scale">time: <span id="x-scale-mode">linear</span></button>
         </div>
         <div id="chart-wrap" class="chart-wrap"></div>
         <p class="chart-help" id="chart-help">Hover or tap a point for details.</p>
@@ -61,6 +66,25 @@
           <button id="inspect-btn" type="button" class="admin-btn">Inspect via API</button>
           <button id="rebackfill-btn" type="button" class="admin-btn">Re-backfill this item</button>
         </div>
+
+        <h4 class="admin-subheading">Reconcile from pasted bid history</h4>
+        <p class="admin-help">
+          Open the bid history page for this item on eBay (<code>/bfl/viewbids/&lt;id&gt;?item=&lt;id&gt;&amp;rt=nc</code>),
+          view source, copy the full HTML, and paste it below. Works for live
+          auctions too — useful when the live polling missed a bid or has a
+          stale total. This replaces the saved bid list for this item.
+        </p>
+        <textarea
+          id="import-html"
+          class="admin-textarea"
+          rows="6"
+          placeholder="Paste the full HTML source of eBay's bid history page here…"
+          spellcheck="false"
+        ></textarea>
+        <div class="admin-row">
+          <button id="import-btn" type="button" class="admin-btn">Import bid history</button>
+        </div>
+
         <pre id="admin-output" class="admin-output" hidden></pre>
       </section>
     </main>

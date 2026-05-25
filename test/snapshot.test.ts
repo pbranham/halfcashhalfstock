@@ -14,6 +14,7 @@ const QUOTE: PriceQuote = {
 function listing(overrides: Partial<Listing> = {}): Listing {
   return {
     itemId: 'v1|1',
+    sellerId: 'ryan_5050',
     title: 'Test',
     imageUrl: null,
     itemWebUrl: 'https://example.com',
@@ -65,6 +66,60 @@ describe('composeSnapshot', () => {
     expect(snapshot.items[1]?.split).toBeNull();
     expect(snapshot.totals.pricedCount).toBe(1);
     expect(snapshot.totals.bidUsd).toBe(100);
+  });
+
+  it('excludes no-bid items from dollar totals (starting price does not count)', () => {
+    // Two USD listings: one has bids, one is just sitting at its starting
+    // price. Only the first should roll into bidUsd / split.
+    const snapshot = composeSnapshot(
+      [
+        listing({ itemId: 'v1|1', priceUsd: 100, bidCount: 3 }),
+        listing({ itemId: 'v1|2', priceUsd: 200, bidCount: 0 }),
+      ],
+      QUOTE,
+    );
+    expect(snapshot.totals.listingsCount).toBe(2);
+    expect(snapshot.totals.pricedCount).toBe(1);
+    expect(snapshot.totals.bidUsd).toBe(100);
+    expect(snapshot.totals.split).toEqual({ cashUsd: 50, stockUsd: 50, shares: 1 });
+  });
+
+  it('excludes ended no-bid auctions from ended totals', () => {
+    const snapshot = composeSnapshot(
+      [],
+      QUOTE,
+      [
+        {
+          itemId: 'v1|9',
+          sellerId: 'boilerpaulie',
+          title: 'Sold for $500',
+          imageUrl: null,
+          itemWebUrl: null,
+          isAuction: true,
+          endsAt: null,
+          endedAt: '2026-05-06T01:00:00.000Z',
+          finalPriceUsd: 500,
+          finalBidCount: 4,
+          currency: 'USD',
+        },
+        {
+          itemId: 'v1|10',
+          sellerId: 'boilerpaulie',
+          title: 'Ended with no bids',
+          imageUrl: null,
+          itemWebUrl: null,
+          isAuction: true,
+          endsAt: null,
+          endedAt: '2026-05-06T02:00:00.000Z',
+          finalPriceUsd: 9999, // starting price, but should NOT count
+          finalBidCount: 0,
+          currency: 'USD',
+        },
+      ],
+    );
+    expect(snapshot.endedTotals.listingsCount).toBe(2);
+    expect(snapshot.endedTotals.bidUsd).toBe(500);
+    expect(snapshot.endedTotals.split.cashUsd).toBe(250);
   });
 
   it('produces empty totals for empty listings', () => {
@@ -132,6 +187,7 @@ describe('composeSnapshot', () => {
       [
         {
           itemId: 'v1|9',
+          sellerId: 'ryan_5050',
           title: 'Ended item',
           imageUrl: null,
           itemWebUrl: 'https://example.com',
@@ -150,8 +206,86 @@ describe('composeSnapshot', () => {
     expect(snapshot.endedTotals.listingsCount).toBe(1);
     expect(snapshot.endedTotals.bidsCount).toBe(7);
     expect(snapshot.endedTotals.bidUsd).toBe(500);
+    // No endTimeClose map provided → endTimeSplit is null and the at-end
+    // aggregate is zero/empty.
+    expect(snapshot.endedItems[0]?.endTimePriceUsd).toBeNull();
+    expect(snapshot.endedItems[0]?.endTimeSplit).toBeNull();
+    expect(snapshot.endedTotals.pricedAtEndCount).toBe(0);
+    expect(snapshot.endedTotals.splitAtEnd).toEqual({ cashUsd: 0, stockUsd: 0, shares: 0 });
     // Active totals should remain unaffected by ended items.
     expect(snapshot.totals.listingsCount).toBe(1);
     expect(snapshot.totals.bidUsd).toBe(100);
+  });
+
+  it('uses endTimeClosesByItemId to compute per-item endTimeSplit + splitAtEnd', () => {
+    // Live EBAY price is 50; the auction's end-time close was 25, so the
+    // shares portion of the split should double.
+    const snapshot = composeSnapshot(
+      [],
+      QUOTE,
+      [
+        {
+          itemId: 'v1|9',
+          sellerId: 'boilerpaulie',
+          title: 'Ended item',
+          imageUrl: null,
+          itemWebUrl: 'https://example.com',
+          isAuction: true,
+          endsAt: '2026-05-06T00:00:00.000Z',
+          endedAt: '2026-05-06T01:00:00.000Z',
+          finalPriceUsd: 500,
+          finalBidCount: 4,
+          currency: 'USD',
+        },
+      ],
+      new Map([['v1|9', 25]]),
+    );
+    const item = snapshot.endedItems[0]!;
+    expect(item.endTimePriceUsd).toBe(25);
+    expect(item.endTimeSplit).toEqual({ cashUsd: 250, stockUsd: 250, shares: 10 });
+    // Live split still uses live quote (price 50).
+    expect(item.split).toEqual({ cashUsd: 250, stockUsd: 250, shares: 5 });
+    expect(snapshot.endedTotals.splitAtEnd).toEqual({ cashUsd: 250, stockUsd: 250, shares: 10 });
+    expect(snapshot.endedTotals.pricedAtEndCount).toBe(1);
+  });
+
+  it('drops items from splitAtEnd when their end-time close is missing', () => {
+    const snapshot = composeSnapshot(
+      [],
+      QUOTE,
+      [
+        {
+          itemId: 'v1|9',
+          sellerId: 'boilerpaulie',
+          title: 'Has close',
+          imageUrl: null,
+          itemWebUrl: null,
+          isAuction: true,
+          endsAt: null,
+          endedAt: '2026-05-06T01:00:00.000Z',
+          finalPriceUsd: 100,
+          finalBidCount: 2,
+          currency: 'USD',
+        },
+        {
+          itemId: 'v1|10',
+          sellerId: 'boilerpaulie',
+          title: 'Missing close',
+          imageUrl: null,
+          itemWebUrl: null,
+          isAuction: true,
+          endsAt: null,
+          endedAt: '2026-04-01T01:00:00.000Z',
+          finalPriceUsd: 200,
+          finalBidCount: 1,
+          currency: 'USD',
+        },
+      ],
+      new Map([['v1|9', 50]]),
+    );
+    expect(snapshot.endedItems[1]?.endTimeSplit).toBeNull();
+    expect(snapshot.endedTotals.pricedAtEndCount).toBe(1);
+    // Only the v1|9 item contributes to splitAtEnd (100 / 2 / 50 = 1 share).
+    expect(snapshot.endedTotals.splitAtEnd).toEqual({ cashUsd: 50, stockUsd: 50, shares: 1 });
   });
 });

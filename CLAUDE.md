@@ -6,11 +6,17 @@ without re-discovering everything.
 
 ## What this project is
 
-A Node 20 / TypeScript / Express + Postgres app that monitors **Ryan Cohen's
-eBay seller account (`ryan_5050`)** and converts each live auction bid into a
-"half cash + half EBAY stock" equivalent at the live market price. As of
-May 2026 all 36 monitored auctions have ended; the dashboard now displays
-final ended-state plus an "ended bids reconciliation" admin tool.
+A Node 20 / TypeScript / Express + Postgres app that monitors **multiple eBay
+seller accounts** (`boilerpaulie` + `ryan_5050` by default; configurable via
+`EBAY_SELLER_IDS`) and converts each live auction bid into a "half cash + half
+EBAY stock" equivalent at the live market price. The dashboard has a seller
+filter (`[All] [Mine] [Ryan]`), a per-card seller badge, and a `[Live] [At
+auction end]` toggle on the ended-auctions section that revalues each closed
+auction using the EBAY close at the moment it ended.
+
+Ryan's original 36 auctions all ended in early May 2026 and are still shown
+in the ended-section; my own (boilerpaulie) auctions started rolling in late
+May.
 
 Production: https://halfcashhalfstock.onrender.com — Dev:
 https://halfcashhalfstock-dev.onrender.com (deploys from
@@ -21,7 +27,7 @@ https://halfcashhalfstock-dev.onrender.com (deploys from
 - Node 20, TypeScript strict, ESM (`"type":"module"`, `.js` import specifiers).
 - Express + Helmet (strict CSP, no inline scripts) + express-rate-limit.
 - Postgres via `pg` Pool. Migrations in `migrations/NNN_*.sql` run sequentially
-  on startup by `src/db/migrate.ts`; latest is `012_listing_backfill_tracking`.
+  on startup by `src/db/migrate.ts`; latest is `013_listings_seller_id`.
 - Vanilla static frontend in `public/` — no bundler. CSP-compatible.
 - Vitest for tests. ESLint + Prettier for lint/format.
 - `fast-xml-parser` (Trading API XML); no HTML parser dep (regex in
@@ -101,7 +107,58 @@ migrations/  NNN_*.sql, applied in order, recorded in `_migrations` table
   Our Interruption" challenge page for `/bfl/viewbids/*` from this IP, so
   the reconcile loop falls back to paste mode for nearly every item.
 
-## Ended-auction bid reconciliation (current feature, PR #18)
+## Multi-seller dashboard (PR #19)
+
+The dashboard polls `config.sellerIds` (parsed from `EBAY_SELLER_IDS`, with
+the legacy `EBAY_SELLER_ID` accepted as a fallback). Each fetched listing
+carries a `sellerId` that's persisted on `listings.seller_id` and exposed in
+both the active and ended snapshot views.
+
+Frontend behaviour:
+
+- `[All] [Mine] [Ryan]` pills above the controls bar — filter persisted in
+  `localStorage.hchs.sellerFilter`. The active filter drives the active list,
+  the ended list, both totals cards, and the "most recent bid" widget — all
+  re-aggregated client-side from the filtered subset.
+- Per-card `@sellerId` chip next to the Auction/Ended tag with seller-specific
+  colors (`.seller-badge-mine` / `.seller-badge-ryan`).
+- Sort selection is shared by active and ended lists. For ended, `price-low`
+  / `price-high` use `finalPriceUsd`, `most-bids` uses `finalBidCount`, and
+  `ending-soonest` / `recent-bid-activity` fall back to most-recently-ended.
+
+If you add a third seller later, update both `EBAY_SELLER_IDS` and the
+hard-coded `SELLER_PILL_TO_ID` map at the top of `public/app.js` — and add a
+new `.seller-badge-<id>` color in `style.css`.
+
+## End-time stock-price toggle (PR #19)
+
+Ended-section header has a `[Live] [At auction end]` segmented control.
+Persisted in `localStorage.hchs.endedPriceMode`. When "At auction end" is on:
+
+- Each ended item's split is recomputed using the stock close nearest the
+  item's `endedAt`. Per-card bid-row note shows the close used.
+- The ended totals row sums the per-item end-time splits and surfaces a
+  "Missing end-time price" stat whenever `pricedAtEndCount < listingsCount`.
+
+Data path:
+
+- `getClosingPriceAt(pool, ticker, when)` in `db/persist.ts` picks the row
+  with the largest `period_start <= when`, tie-breaking on interval
+  preference `1m > 15m > 1d`. Returns null when no row covers `when`.
+- The snapshot endpoint calls it for every USD-denominated ended item against
+  the currently-selected ticker, builds a `Map<itemId, close|null>`, and
+  passes it as the optional 4th arg to `composeSnapshot`.
+- The OHLC table's `interval='1d'` rows are exempt from `purgeOldOhlcData`,
+  so daily history accumulates indefinitely. Populate it via the new
+  `backfill_ohlc_history` admin action (defaults: tickers `EBAY,GME`, range
+  `90d`). The action calls `YahooProvider.getHistoricalCandles(ticker, '1d',
+  range)` and bulk-upserts the candles. Re-runnable; idempotent.
+
+For an auction that ended during market hours, finer-grain candles (if still
+within retention) give a more accurate price; for older auctions only the
+daily close at market open exists, which is good enough for the visualization.
+
+## Bid-history reconciliation (PR #18 + #19)
 
 The eBay Trading API's `GetAllBidders` returns empty for non-sellers on
 ended auctions. The Shopping and Finding APIs are decommissioned (Feb 2025).
@@ -122,8 +179,12 @@ Implementation:
     bidder token for the unique trailing phrase `the bidder.` (the end of
     eBay's "...placed by eBay on behalf of the bidder." italic marker).
     A wider window leaks across rows.
-  - **Retraction table** is truncated off the text before tokenizing by
-    cutting at the string "Bid retraction and cancellation history".
+  - **Retraction table** is split off at "Bid retraction and cancellation
+    history" and parsed separately by `parseRetractedSection`. That parser
+    expects TWO dates per row (bid time + retraction time) and auto-swaps
+    when eBay renders the columns in reverse order. Rows without exactly
+    two parseable dates are silently skipped — best-effort until we see
+    real retraction-page HTML to calibrate against.
   - **Row pairing is bidder-delimited and order-agnostic**: each bidder
     starts a fresh row, then collects the next amount + date. Amounts
     appearing before the first bidder (e.g. "Winning bid: $X" header) are
@@ -131,21 +192,31 @@ Implementation:
   - On zero-bid parse, throws `ViewbidsParseError` with rich diagnostics:
     token counts, autoBidsSkipped, dateParseFailures, raw-HTML "$"/challenge
     sniff, and a 400-char text window around the first amount token.
-- `persist.reconcileItemBids(pool, itemId, bids)` — transactional
-  delete-and-replace inside `pool.connect()` BEGIN/COMMIT. Refuses to run
-  on empty bids (a failed parse can never wipe good data).
+- `persist.reconcileItemBids(pool, itemId, bids, retracted?)` —
+  transactional delete-and-replace inside `pool.connect()` BEGIN/COMMIT.
+  Refuses to run on empty bids (a failed parse can never wipe good data).
+  When the optional `retracted` array is non-empty, each retraction is
+  inserted with `removed_at = bid.removedAt` so the item-page bid timeline
+  shows it with strikethrough/retraction-detected styling. Final price and
+  bid count come from active bids only — matching eBay's "Bids" count.
 - Two admin actions: `list_ended_for_reconcile` (fast, no fetching — just
   returns the ended items with current state) and `import_viewbids_html`
-  (`{itemId, html}` paste action). The earlier bulk-fetch action was
-  removed: server-side fetching of `bfl/viewbids/*` from the Render IP
-  always returns eBay's "Pardon Our Interruption" challenge page, so the
-  loop was a 2-minute wait for guaranteed failure on every item. Don't
-  re-add it without first verifying the IP/headers situation has changed.
+  (`{itemId, html}` paste action). **Works for live auctions too** — no
+  ended/active guard. The earlier bulk-fetch action was removed: server-side
+  fetching of `bfl/viewbids/*` from the Render IP always returns eBay's
+  "Pardon Our Interruption" challenge page, so the loop was a 2-minute wait
+  for guaranteed failure on every item. Don't re-add it without first
+  verifying the IP/headers situation has changed.
 - Admin UI: "Reconcile all" button shows the full ended-items table
   immediately, with two real links per row ("Open page ↗" and "View
   source ↗") + a paste textarea + Import button. `view-source:` URLs
   ARE clickable from `<a href>` — don't replace them with copy-button
   workarounds.
+- **Item-page paste box** (`public/item.html` / `item.js`): the same
+  paste-and-import flow lives inside each item's admin-section. Gated by
+  `hasAdminToken()`. Useful for fixing a live auction's bid history without
+  waiting for it to end. After a successful import the page data reloads so
+  the bid table refreshes inline.
 
 If a paste parse-fails, get the diagnostics from the admin UI result — do
 NOT have the user paste the full HTML into Claude chat. The diagnostics
@@ -195,11 +266,12 @@ works for ~90 days after an auction ends.
 - **Before committing**: `npm run build && npm test && npm run lint`
   (typecheck is part of build via `tsc`). All three should finish in ~5s
   combined.
-- **Vitest is fast** (~2s for 99 tests); run early when iterating.
+- **Vitest is fast** (~2s for 115 tests); run early when iterating.
 - **Don't paste large content into chat** — save to a file (e.g. `.tmp/x.html`,
   gitignored) and tell me the path. I'll Read just the lines I need.
-- **PR activity**: PR #18's body should be updated when shipping notable
-  commits. `gh` CLI is not available; use the `mcp__github__*` MCP tools.
+- **PR activity**: the current long-running PR is #19. Update its body
+  when shipping notable commits. `gh` CLI is not available; use the
+  `mcp__github__*` MCP tools.
 - **`/clear` between phases**. The plan→implement→calibrate→ship cycle
   doesn't need the earlier phases' context once you've moved on.
 
@@ -207,6 +279,9 @@ works for ~90 days after an auction ends.
 
 - `EBAY_APP_ID`, `EBAY_CERT_ID` — Browse API (required for live data).
 - `EBAY_DEV_ID`, `EBAY_USER_TOKEN` — Trading API (optional, mostly dead).
+- `EBAY_SELLER_IDS` — comma-separated list of sellers to poll. Defaults to
+  `boilerpaulie,ryan_5050`. Legacy `EBAY_SELLER_ID` (single value) is
+  accepted as a fallback when `EBAY_SELLER_IDS` is unset.
 - `FINNHUB_API_KEY` — stock prices (Yahoo fallback works without).
 - `DATABASE_URL` — Postgres (optional; everything degrades gracefully).
 - `ADMIN_TOKEN` — required to access `/admin` (>= 8 chars).

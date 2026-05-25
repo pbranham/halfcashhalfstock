@@ -133,8 +133,51 @@
   background: #4caf50;
 }
 
-.chart-legend .line-count {
-  background: #ffb74d;
+/* Solid dot swatches use the same shape and size as the chart's bid dots
+ * so the legend reads as a literal sample of the marker. */
+.chart-legend .dot-active,
+.chart-legend .dot-proxy {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.chart-legend .dot-active {
+  background: #4caf50;
+}
+
+.chart-legend .dot-proxy {
+  border: 1.2px solid #4caf50;
+  opacity: 0.6;
+}
+
+.chart-legend .area-count {
+  height: 8px;
+  background: rgba(255, 183, 77, 0.35);
+  border-top: 1.5px solid #ffb74d;
+}
+
+/* Push the scale toggles to the end of the legend row. */
+.chart-legend .legend-spacer {
+  flex: 1;
+}
+
+.chart-legend .chart-scale-btn {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: inherit;
+  font: inherit;
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.chart-legend .chart-scale-btn:hover {
+  opacity: 1;
+  border-color: rgba(255, 255, 255, 0.35);
 }
 
 .chart-help {
@@ -263,4 +306,45 @@
   word-break: break-all;
   max-height: 500px;
   overflow-y: auto;
+}
+
+.admin-subheading {
+  margin-top: 1.25rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.admin-help {
+  margin: 0 0 0.6rem;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.admin-help code {
+  font-size: 0.75rem;
+  padding: 1px 4px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 3px;
+}
+
+.admin-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border, #2d5b3e);
+  border-radius: 6px;
+  color: inherit;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.75rem;
+  resize: vertical;
+  min-height: 110px;
+}
+
+.admin-textarea:focus {
+  outline: none;
+  border-color: #a5e8b6;
 }

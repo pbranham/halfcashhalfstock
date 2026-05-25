@@ -12,11 +12,40 @@ import {
 describe('loadConfig', () => {
   it('applies defaults when only minimal env is provided', () => {
     const cfg = loadConfig({});
-    expect(cfg.EBAY_SELLER_ID).toBe('ryan_5050');
+    expect(cfg.sellerIds).toEqual(['boilerpaulie', 'ryan_5050']);
     expect(cfg.EBAY_MARKETPLACE_ID).toBe('EBAY_US');
     expect(cfg.STOCK_SYMBOL).toBe('EBAY');
     expect(cfg.PORT).toBe(3000);
     expect(cfg.LOG_LEVEL).toBe('info');
+  });
+
+  it('parses EBAY_SELLER_IDS as a comma-separated list with whitespace tolerance', () => {
+    const cfg = loadConfig({ EBAY_SELLER_IDS: 'alice, bob ,carol' });
+    expect(cfg.sellerIds).toEqual(['alice', 'bob', 'carol']);
+  });
+
+  it('de-duplicates seller ids while preserving order', () => {
+    const cfg = loadConfig({ EBAY_SELLER_IDS: 'a,b,a,c,b' });
+    expect(cfg.sellerIds).toEqual(['a', 'b', 'c']);
+  });
+
+  it('falls back to legacy EBAY_SELLER_ID when EBAY_SELLER_IDS is unset', () => {
+    const cfg = loadConfig({ EBAY_SELLER_ID: 'only_old' });
+    expect(cfg.sellerIds).toEqual(['only_old']);
+  });
+
+  it('prefers EBAY_SELLER_IDS over the legacy EBAY_SELLER_ID when both are set', () => {
+    const cfg = loadConfig({ EBAY_SELLER_IDS: 'a,b', EBAY_SELLER_ID: 'legacy' });
+    expect(cfg.sellerIds).toEqual(['a', 'b']);
+  });
+
+  it('rejects invalid seller ids', () => {
+    expect(() => loadConfig({ EBAY_SELLER_IDS: 'ok,not ok' })).toThrow(/Invalid seller id/);
+    expect(() => loadConfig({ EBAY_SELLER_IDS: 'bad;chars' })).toThrow(/Invalid seller id/);
+  });
+
+  it('rejects an empty seller list', () => {
+    expect(() => loadConfig({ EBAY_SELLER_IDS: ', , ' })).toThrow(/empty list/);
   });
 
   it('coerces PORT from string to number', () => {

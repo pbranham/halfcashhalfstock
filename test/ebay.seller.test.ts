@@ -92,12 +92,13 @@ describe('listSellerActiveItems', () => {
     expect(items).toHaveLength(3);
     expect(items[0]).toMatchObject({
       itemId: 'v1|111',
+      sellerId: 'ryan_5050',
       isAuction: true,
       priceUsd: 42.5,
       bidCount: 7,
       endsAt: '2026-05-08T00:00:00Z',
     });
-    expect(items[1]).toMatchObject({ itemId: 'v1|222', isAuction: false, priceUsd: 199.99 });
+    expect(items[1]).toMatchObject({ itemId: 'v1|222', sellerId: 'ryan_5050', isAuction: false, priceUsd: 199.99 });
     expect(items[2]?.priceUsd).toBeNull();
     expect(items[2]?.currency).toBe('EUR');
   });

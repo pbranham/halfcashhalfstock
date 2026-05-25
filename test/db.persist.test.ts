@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
 import {
+  getClosingPriceAt,
   insertBids,
   persistSnapshot,
   readBidsForItem,
@@ -20,6 +21,7 @@ function makePool(): MockPool {
 
 const LISTING: Listing = {
   itemId: 'v1|111|0',
+  sellerId: 'ryan_5050',
   title: 'Cohen Plush',
   imageUrl: 'https://i.ebayimg.com/x.jpg',
   itemWebUrl: 'https://www.ebay.com/itm/111',
@@ -38,9 +40,11 @@ describe('upsertListing', () => {
     expect(pool.query).toHaveBeenCalledOnce();
     const [sql, params] = pool.query.mock.calls[0];
     expect(sql).toMatch(/INSERT INTO listings/);
+    expect(sql).toMatch(/seller_id/);
     expect(sql).toMatch(/ON CONFLICT \(item_id\) DO UPDATE/);
     expect(params).toEqual([
       'v1|111|0',
+      'ryan_5050',
       'Cohen Plush',
       'https://i.ebayimg.com/x.jpg',
       'https://www.ebay.com/itm/111',
@@ -145,7 +149,37 @@ describe('reconcileItemBids', () => {
   it('returns the max bid as finalPriceUsd and the row counts', async () => {
     const { pool } = makeTxPool();
     const result = await reconcileItemBids(pool as unknown as Pool, 'v1|336|0', BIDS);
-    expect(result).toEqual({ deleted: 8, inserted: 12, finalPriceUsd: 5200, bidCount: 3 });
+    expect(result).toEqual({
+      deleted: 8,
+      inserted: 12,
+      retractedInserted: 0,
+      finalPriceUsd: 5200,
+      bidCount: 3,
+    });
+  });
+
+  it('also inserts retracted bids with removed_at populated', async () => {
+    const { pool, client } = makeTxPool();
+    const RETRACTED = [
+      {
+        bidder: 'x***n',
+        bidTime: '2026-05-07T17:17:00.000Z',
+        bidAmount: 1234,
+        removedAt: '2026-05-07T17:25:14.000Z',
+      },
+    ];
+    const result = await reconcileItemBids(pool as unknown as Pool, 'v1|336|0', BIDS, RETRACTED);
+    // Two INSERT INTO bids statements: one for active bids, one for retracted.
+    const insertCalls = client.query.mock.calls.filter(([sql]) =>
+      /^INSERT INTO bids/.test(sql as string),
+    );
+    expect(insertCalls.length).toBe(2);
+    // The retracted INSERT writes the removed_at column.
+    const retractedInsert = insertCalls.find(([sql]) =>
+      /removed_at/.test(sql as string),
+    );
+    expect(retractedInsert).toBeDefined();
+    expect(result.retractedInserted).toBe(12); // mock returns rowCount: 12 for INSERTs
   });
 
   it('refuses to delete when given zero valid bids', async () => {
@@ -256,5 +290,36 @@ describe('readBidsForItem', () => {
     expect(sql).toMatch(/SELECT bidder, bid_time, bid_amount_usd, first_seen_at, removed_at/);
     expect(sql).toMatch(/ORDER BY bid_time ASC/);
     expect(params).toEqual(['v1|111|0']);
+  });
+});
+
+describe('getClosingPriceAt', () => {
+  it('returns the close from the most-recent-at-or-before period for the ticker', async () => {
+    const pool = makePool();
+    pool.query.mockResolvedValueOnce({ rows: [{ close: '57.42' }], rowCount: 1 });
+    const when = new Date('2026-05-13T15:30:00Z');
+    const price = await getClosingPriceAt(pool as unknown as Pool, 'EBAY', when);
+    expect(price).toBe(57.42);
+    const [sql, params] = pool.query.mock.calls[0];
+    expect(sql).toMatch(/FROM ohlc_data/);
+    expect(sql).toMatch(/period_start <= \$2/);
+    expect(sql).toMatch(/ORDER BY period_start DESC/);
+    // Tie-breaker: 1m beats 15m beats 1d.
+    expect(sql).toMatch(/CASE interval WHEN '1m' THEN 1 WHEN '15m' THEN 2 WHEN '1d' THEN 3/);
+    expect(params).toEqual(['EBAY', when]);
+  });
+
+  it('returns null when no row exists at or before `when`', async () => {
+    const pool = makePool();
+    pool.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const price = await getClosingPriceAt(pool as unknown as Pool, 'EBAY', new Date());
+    expect(price).toBeNull();
+  });
+
+  it('returns null when the stored close is non-finite (defensive)', async () => {
+    const pool = makePool();
+    pool.query.mockResolvedValueOnce({ rows: [{ close: 'not-a-number' }], rowCount: 1 });
+    const price = await getClosingPriceAt(pool as unknown as Pool, 'EBAY', new Date());
+    expect(price).toBeNull();
   });
 });

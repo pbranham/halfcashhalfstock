@@ -17,6 +17,7 @@ const QUOTE: PriceQuote = {
 
 const LISTING: Listing = {
   itemId: 'v1|999',
+  sellerId: 'ryan_5050',
   title: 'Cohen Plush',
   imageUrl: 'https://i.ebayimg.com/x.jpg',
   itemWebUrl: 'https://www.ebay.com/itm/999',

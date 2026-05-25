@@ -2,6 +2,7 @@ import type { EbayClient } from './client.js';
 
 export interface Listing {
   itemId: string;
+  sellerId: string;
   title: string;
   imageUrl: string | null;
   itemWebUrl: string;
@@ -75,7 +76,7 @@ export async function listSellerActiveItems(
     });
     const summaries = res.itemSummaries ?? [];
     for (const s of summaries) {
-      const normalized = normalizeListing(s, expectedCurrency);
+      const normalized = normalizeListing(s, sellerId, expectedCurrency);
       if (normalized) listings.push(normalized);
     }
     if (summaries.length < PAGE_LIMIT) break;
@@ -87,6 +88,7 @@ export async function listSellerActiveItems(
 
 function normalizeListing(
   s: BrowseItemSummary,
+  sellerId: string,
   expectedCurrency: string,
 ): Listing | null {
   const itemId = s.itemId ?? s.legacyItemId;
@@ -109,6 +111,7 @@ function normalizeListing(
 
   return {
     itemId,
+    sellerId,
     title,
     imageUrl,
     itemWebUrl,

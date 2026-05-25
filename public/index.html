@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>halfcashhalfstock — Ryan Cohen's eBay auctions, in EBAY shares</title>
+    <title>halfcashhalfstock — eBay auctions, paid in EBAY shares</title>
     <meta
       name="description"
-      content="Live monitor for Ryan Cohen's eBay auctions, expressed as half cash plus half $EBAY stock at the live market price."
+      content="Live monitor for eBay auctions from boilerpaulie and ryan_5050, expressed as half cash plus half $EBAY stock at the live market price."
     />
     <meta name="color-scheme" content="dark light" />
     <meta name="theme-color" content="#2d5b3e" />
@@ -82,15 +82,20 @@
     </section>
     <main>
       <p class="intro">
-        Ryan Cohen has submitted an <a href="https://investor.gamestop.com/eBay/" target="_blank" rel="noopener noreferrer">unsolicited bid to acquire eBay for half cash, half stock</a>. 
-        He is now <a id="seller-link" href="https://www.ebay.com/usr/ryan_5050" target="_blank" rel="noopener noreferrer">selling things on eBay</a> to help him buy eBay. 
+        Ryan Cohen submitted an <a href="https://investor.gamestop.com/eBay/" target="_blank" rel="noopener noreferrer">unsolicited bid to acquire eBay for half cash, half stock</a>, then <a href="https://www.ebay.com/usr/ryan_5050" target="_blank" rel="noopener noreferrer">sold his personal items on eBay</a> to help fund it. Inspired by that, I'm <a href="https://www.ebay.com/usr/boilerpaulie" target="_blank" rel="noopener noreferrer">auctioning my own items on eBay</a> and committing to invest 50% of every dollar in GameStop as eBay's possible future parent company.
       </p>
       <p class="intro">
-        What if <span id="intro-symbol">$EBAY</span> shareholders could checkout with half cash, half stock?
+        What if every eBay shopper could check out with half cash, half stock?
       </p>
       <p class="intro">
-        Each of his active listings is shown below as the equivalent half-cash + half-stock allocation at the live market price for <span id="intro-symbol-2">$EBAY</span>.
+        Each auction below is shown as the equivalent half-cash + half-stock allocation at the live market price for <span id="intro-symbol-2">$EBAY</span>. Use the filter to view my listings, Ryan's, or both.
       </p>
+      <div class="seller-bar" role="group" aria-label="Filter by seller">
+        <span class="sort-label">Show:</span>
+        <button class="seller-btn is-active" data-seller-filter="all">All</button>
+        <button class="seller-btn" data-seller-filter="mine">Mine (@boilerpaulie)</button>
+        <button class="seller-btn" data-seller-filter="ryan">Ryan (@ryan_5050)</button>
+      </div>
       <div class="controls-bar">
         <div class="stock-bar" role="group" aria-label="Choose stock">
           <span class="sort-label">Stock:</span>
@@ -126,11 +131,17 @@
       <section id="ended-section" class="ended-section" hidden>
         <header class="ended-header">
           <h2>Recently ended</h2>
+          <div class="ended-price-mode" role="group" aria-label="Stock price reference">
+            <span class="sort-label">Stock price:</span>
+            <button class="ended-mode-btn is-active" data-ended-mode="live">Live</button>
+            <button class="ended-mode-btn" data-ended-mode="at-end">At auction end</button>
+          </div>
           <button id="ended-toggle" class="ended-toggle" type="button" aria-expanded="true">Hide</button>
         </header>
         <p class="ended-help">
           Auctions that have ended in the last 14 days. Final price reflects the last
-          observed bid before the auction closed.
+          observed bid before the auction closed. "At auction end" values each one
+          using the stock close nearest to that auction's end timestamp.
         </p>
         <section id="ended-totals" class="totals ended-totals-grid" aria-live="polite"></section>
         <section id="ended-items" class="items ended-items" aria-live="polite"></section>

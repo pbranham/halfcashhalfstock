@@ -17,7 +17,9 @@ import { TtlCache, DbBackedCache } from './cache.js';
 import { createPool } from './db/pool.js';
 import { runMigrations } from './db/migrate.js';
 import {
+  bulkInsertOhlcData,
   forceMarkEnded,
+  getClosingPriceAt,
   persistSnapshot,
   readBidsForItem,
   readEndedListings,
@@ -39,6 +41,7 @@ import { YahooProvider } from './prices/yahoo.js';
 import { ChainedPriceProvider } from './prices/provider.js';
 import type { PriceProvider, PriceQuote } from './prices/types.js';
 import { composeSnapshot, type Snapshot } from './snapshot.js';
+import { maskBidder } from './anon.js';
 import { TickerQueue } from './ticker-queue.js';
 import { RequestStatsCollector } from './request-stats.js';
 import { backfillEndedListings } from './ebay/backfill.js';
@@ -130,10 +133,17 @@ function buildDeps(
       tokenProvider,
       marketplaceId: config.EBAY_MARKETPLACE_ID,
     });
-    fetchListings = () =>
-      listingCache.get(config.EBAY_SELLER_ID, LISTINGS_TTL_MS, () =>
-        listSellerActiveItems(client, config.EBAY_SELLER_ID),
+    fetchListings = async () => {
+      // Per-seller cache keys so each seller's poll caches independently.
+      const perSeller = await Promise.all(
+        config.sellerIds.map((sellerId) =>
+          listingCache.get(sellerId, LISTINGS_TTL_MS, () =>
+            listSellerActiveItems(client, sellerId),
+          ),
+        ),
       );
+      return perSeller.flat();
+    };
   } else {
     fetchListings = () => {
       throw new Error('eBay credentials are not configured (set EBAY_APP_ID and EBAY_CERT_ID)');
@@ -216,7 +226,19 @@ export function createApp(deps: Deps): express.Express {
         const [listings, quote] = await Promise.all([deps.fetchListings(), deps.fetchQuote(symbol)]);
         const enriched = await enrichWithBidHistory(deps, listings);
         const ended = deps.db ? await readEndedListings(deps.db) : [];
-        return composeSnapshot(enriched, quote, ended);
+        // For end-time pricing, look up each USD-denominated ended item's
+        // EBAY (or selected ticker) close at the moment it ended. One small
+        // SELECT per item — fine for ~36 items, easy to batch later if it
+        // grows.
+        const endTimeClosesByItemId = new Map<string, number | null>();
+        if (deps.db) {
+          for (const e of ended) {
+            if (e.currency !== 'USD') continue;
+            const close = await getClosingPriceAt(deps.db, quote.symbol, new Date(e.endedAt));
+            endTimeClosesByItemId.set(e.itemId, close);
+          }
+        }
+        return composeSnapshot(enriched, quote, ended, endTimeClosesByItemId);
       });
       res
         .status(200)
@@ -247,10 +269,14 @@ export function createApp(deps: Deps): express.Express {
         res.status(404).json({ error: 'not_found', detail: 'item not seen by this server' });
         return;
       }
+      // Mask bidder usernames at the API boundary. When we're the seller,
+      // Trading API returns full IDs; eBay's own public bid-history page
+      // shows them masked, so the public dashboard does the same.
+      const maskedBids = bids.map((b) => ({ ...b, bidder: maskBidder(b.bidder) }));
       res
         .status(200)
         .set('Cache-Control', 'public, max-age=15')
-        .json({ listing, bids, snapshots, asOf: new Date().toISOString() });
+        .json({ listing, bids: maskedBids, snapshots, asOf: new Date().toISOString() });
     } catch (err) {
       next(err);
     }
@@ -268,7 +294,8 @@ export function createApp(deps: Deps): express.Express {
     }
     try {
       const bids = await readBidsForItem(deps.db, itemId);
-      res.status(200).set('Cache-Control', 'public, max-age=15').json({ itemId, bids });
+      const maskedBids = bids.map((b) => ({ ...b, bidder: maskBidder(b.bidder) }));
+      res.status(200).set('Cache-Control', 'public, max-age=15').json({ itemId, bids: maskedBids });
     } catch (err) {
       next(err);
     }
@@ -480,7 +507,16 @@ export function createApp(deps: Deps): express.Express {
       return;
     }
     try {
-      const body = req.body as { action?: string; environment?: string; from?: string; to?: string; itemId?: string; html?: string } | undefined;
+      const body = req.body as {
+        action?: string;
+        environment?: string;
+        from?: string;
+        to?: string;
+        itemId?: string;
+        html?: string;
+        tickers?: unknown;
+        range?: string;
+      } | undefined;
       const action = body?.action;
 
       if (action === 'delete_environment') {
@@ -765,6 +801,44 @@ export function createApp(deps: Deps): express.Express {
         return;
       }
 
+      if (action === 'backfill_ohlc_history') {
+        // Pulls daily OHLC candles from Yahoo and stores them under
+        // interval='1d', which is exempt from purgeOldOhlcData and therefore
+        // accumulates the long-running history we need to value ended
+        // auctions at the EBAY close on the day they ended.
+        const tickersIn = Array.isArray(body?.tickers) ? body.tickers : ['EBAY', 'GME'];
+        const tickers = tickersIn
+          .filter((t): t is string => typeof t === 'string' && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(t))
+          .slice(0, 10);
+        if (tickers.length === 0) {
+          res.status(400).json({ error: 'bad_request', detail: 'no valid tickers' });
+          return;
+        }
+        const range = typeof body?.range === 'string' && /^\d{1,3}(d|mo|y)$/.test(body.range)
+          ? body.range
+          : '90d';
+        const yahoo = new YahooProvider();
+        const perTicker: Array<{ ticker: string; candles: number; inserted: number; error?: string }> = [];
+        for (const ticker of tickers) {
+          try {
+            const candles = await yahoo.getHistoricalCandles(ticker, '1d', range);
+            const inserted = candles.length === 0
+              ? 0
+              : await bulkInsertOhlcData(deps.db, ticker, candles, 'yahoo', '1d');
+            perTicker.push({ ticker, candles: candles.length, inserted });
+          } catch (err) {
+            perTicker.push({
+              ticker,
+              candles: 0,
+              inserted: 0,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        res.status(200).json({ action: 'backfill_ohlc_history', range, results: perTicker });
+        return;
+      }
+
       if (action === 'import_viewbids_html') {
         const itemId = (body?.itemId ?? '').trim();
         if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
@@ -778,15 +852,17 @@ export function createApp(deps: Deps): express.Express {
         }
         try {
           const parsed = parseViewbids(html);
-          const r = await reconcileItemBids(deps.db, itemId, parsed.bids);
+          const r = await reconcileItemBids(deps.db, itemId, parsed.bids, parsed.retractedBids);
           res.status(200).json({
             action: 'import_viewbids_html',
             itemId,
             status: 'imported',
             deleted: r.deleted,
             inserted: r.inserted,
+            retractedInserted: r.retractedInserted,
             finalPriceUsd: r.finalPriceUsd,
             bidCount: r.bidCount,
+            retractedCount: parsed.retractedBids.length,
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -904,7 +980,7 @@ async function main(): Promise<void> {
   const deps = buildDeps(config, log, db, tickerQueue, requestStats);
   const app = createApp(deps);
   const server = app.listen(config.PORT, () => {
-    log.info('listening', { port: config.PORT, sellerId: config.EBAY_SELLER_ID });
+    log.info('listening', { port: config.PORT, sellerIds: config.sellerIds });
   });
 
   const shutdown = (signal: string): void => {

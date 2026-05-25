@@ -35,6 +35,7 @@ const stuckList = document.getElementById('stuck-list');
 const recoveryResult = document.getElementById('recovery-result');
 const reconcileResult = document.getElementById('reconcile-result');
 const reconcileBidsBtn = document.getElementById('reconcile-bids-btn');
+const backfillOhlcBtn = document.getElementById('backfill-ohlc-btn');
 const confirmModal = document.getElementById('confirm-modal');
 const confirmText = document.getElementById('confirm-text');
 const confirmOk = document.getElementById('confirm-ok');
@@ -608,6 +609,12 @@ async function recoveryFetch(action) {
       recoveryResult.textContent = `Backfill complete. Attempted ${data.attempted}, succeeded ${data.backfilled}, failed ${data.failed}. Inserted ${data.bidsInserted} new bid${data.bidsInserted === 1 ? '' : 's'}, updated ${data.pricesUpdated} final price${data.pricesUpdated === 1 ? '' : 's'}.`;
     } else if (action === 'reset_backfill_attempts') {
       recoveryResult.textContent = `Reset backfill state on ${data.reset} ended listing${data.reset === 1 ? '' : 's'}. They'll be re-attempted on the next backfill cycle.`;
+    } else if (action === 'backfill_ohlc_history') {
+      const lines = (data.results ?? []).map((r) => {
+        if (r.error) return `${r.ticker}: error — ${r.error}`;
+        return `${r.ticker}: ${r.candles} candles fetched, ${r.inserted} inserted`;
+      });
+      recoveryResult.textContent = `Historical OHLC backfill (${data.range}):\n${lines.join('\n')}`;
     }
     recoveryResult.hidden = false;
   } catch (err) {
@@ -636,6 +643,9 @@ if (resetBackfillBtn) {
   resetBackfillBtn.addEventListener('click', () => {
     confirmAction('Reset backfill attempt counters on all ended listings? They will be re-attempted on the next backfill cycle.', () => recoveryFetch('reset_backfill_attempts'));
   });
+}
+if (backfillOhlcBtn) {
+  backfillOhlcBtn.addEventListener('click', () => recoveryFetch('backfill_ohlc_history'));
 }
 if (inspectBtn) {
   inspectBtn.addEventListener('click', async () => {

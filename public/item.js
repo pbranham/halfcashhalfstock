@@ -119,82 +119,314 @@ function renderCurrentState(listing, bids) {
   currentSection.hidden = false;
 }
 
+// eBay's bid-increment table (USD). Returns the increment applied when
+// raising a current bid to outbid a proxy at the given amount.
+// See https://www.ebay.com/help/buying/bidding/automatic-bidding
+const EBAY_BID_INCREMENTS = [
+  [0, 0.05],
+  [0.99, 0.25],
+  [4.99, 0.50],
+  [24.99, 1.00],
+  [99.99, 2.50],
+  [249.99, 5.00],
+  [499.99, 10.00],
+  [999.99, 25.00],
+  [2499.99, 50.00],
+  [4999.99, 100.00],
+];
+function ebayBidIncrement(amount) {
+  let increment = 0.05;
+  for (const [threshold, inc] of EBAY_BID_INCREMENTS) {
+    if (amount > threshold) increment = inc;
+  }
+  return increment;
+}
+
+// Reconstruct the auction's visible current price over time from the active
+// max-bids in the database. The price displayed on eBay's listing page at
+// any moment is determined by the SECOND-highest max bid plus one
+// increment, capped at the highest max — NOT the highest max itself
+// (which is held in reserve by the proxy bidding system).
+//
+// Worked example: leader has hidden max $39. Someone bids $11. Visible
+// jumps to $11.50 ($11 + 50¢ increment), not to $39. eBay's bid-history
+// page emits a "proxy bid" row at that $11.50 amount for the leader; we
+// derive the same number ourselves so we don't need to store those rows.
+//
+// Retracted bids: at the retraction timestamp we remove that bid from the
+// pool and recompute. If the retracted bidder was the leader, the visible
+// price typically drops to the new second-highest + increment.
 function buildChartPointsFromBids(bids, listing) {
-  if (!bids || bids.length === 0) return [];
+  if (!bids || bids.length === 0) return { points: [], maxDots: [], retractionMarkers: [] };
+
   const events = [];
   for (const bid of bids) {
-    events.push({ time: new Date(bid.bidTime).getTime(), type: 'place', bid });
+    events.push({
+      time: new Date(bid.bidTime).getTime(),
+      type: 'place',
+      bidder: bid.bidder,
+      amount: bid.bidAmountUsd,
+      placedAt: bid.bidTime,
+    });
     if (bid.removedAt) {
-      events.push({ time: new Date(bid.removedAt).getTime(), type: 'remove', bid });
+      events.push({
+        time: new Date(bid.removedAt).getTime(),
+        type: 'remove',
+        bidder: bid.bidder,
+        amount: bid.bidAmountUsd,
+        placedAt: bid.bidTime,
+      });
     }
   }
   events.sort((a, b) => a.time - b.time);
 
-  const active = new Map();
+  // Track all currently-active max bids grouped by bidder. A single bidder
+  // can have multiple active bids if they raised their max multiple times;
+  // their "effective max" is the highest active amount among them.
+  const bidderBids = new Map();
   const points = [];
-  for (const event of events) {
-    const key = `${event.bid.bidder}|${event.bid.bidTime}`;
-    if (event.type === 'place') {
-      active.set(key, event.bid.bidAmountUsd);
-    } else {
-      active.delete(key);
-    }
-    const amounts = Array.from(active.values());
-    const price = amounts.length > 0 ? Math.max(...amounts) : 0;
-    points.push({ t: event.time, price, count: active.size });
+  // Max dots: hollow markers stacked at the current leader's placement
+  // timestamp, one per distinct defensive proxy level their max was
+  // forced to. Visualizes "how hard this max defended" — a tall stack
+  // means many escalations against rising competition; a single dot
+  // means immediately outbid. This mirrors what eBay's bid-history page
+  // shows publicly (every proxy row is timestamped at the original
+  // max-placement time). Dots tied to a specifically-retracted placement
+  // get tagged so the renderer can fade them.
+  const maxDots = [];
+  let lastLeader = null;
+  let lastLeaderPlacedAt = null;
+  let lastVisible = NaN;
+
+  // Index of bids that ended up retracted, keyed by "<bidder>|<bidTimeISO>"
+  // so we can tag any defense dot whose owning placement got pulled.
+  const retractedPlacementKeys = new Set();
+  for (const bid of bids) {
+    if (bid.removedAt) retractedPlacementKeys.add(`${bid.bidder}|${bid.bidTime}`);
   }
+
+  for (const event of events) {
+    const list = bidderBids.get(event.bidder) ?? [];
+    if (event.type === 'place') {
+      list.push({ amount: event.amount, placedAt: event.placedAt });
+      bidderBids.set(event.bidder, list);
+    } else {
+      const idx = list.findIndex((b) => b.amount === event.amount && b.placedAt === event.placedAt);
+      if (idx >= 0) list.splice(idx, 1);
+      if (list.length === 0) bidderBids.delete(event.bidder);
+      else bidderBids.set(event.bidder, list);
+    }
+
+    let activeCount = 0;
+    const maxes = [];
+    for (const [bidder, items] of bidderBids) {
+      activeCount += items.length;
+      const top = items.reduce((acc, b) => (b.amount > acc.amount ? b : acc));
+      maxes.push({ bidder, amount: top.amount, placedAt: top.placedAt });
+    }
+    maxes.sort((a, b) => b.amount - a.amount);
+
+    let visiblePrice = 0;
+    let leaderPlacedAt = null;
+    if (maxes.length === 1) {
+      visiblePrice = maxes[0].amount;
+      leaderPlacedAt = maxes[0].placedAt;
+    } else if (maxes.length >= 2) {
+      const [highest, second] = maxes;
+      visiblePrice = Math.min(highest.amount, second.amount + ebayBidIncrement(second.amount));
+      leaderPlacedAt = highest.placedAt;
+    }
+
+    const leader = maxes[0]?.bidder ?? null;
+    if (
+      leader &&
+      leaderPlacedAt &&
+      (leader !== lastLeader ||
+        leaderPlacedAt !== lastLeaderPlacedAt ||
+        visiblePrice !== lastVisible)
+    ) {
+      const retracted = retractedPlacementKeys.has(`${leader}|${leaderPlacedAt}`);
+      maxDots.push({ t: new Date(leaderPlacedAt).getTime(), price: visiblePrice, retracted });
+    }
+    lastLeader = leader;
+    lastLeaderPlacedAt = leaderPlacedAt;
+    lastVisible = visiblePrice;
+
+    points.push({ t: event.time, price: visiblePrice, count: activeCount });
+  }
+
+  // Retraction markers: one per retracted bid. The renderer draws a
+  // dashed line at the bid's max amount from placement to retraction,
+  // a hollow placement circle on the left, and an × on the right.
+  // eBay's retraction table publicly discloses the retracted max
+  // amount, so showing it at this level reveals nothing extra.
+  const retractionMarkers = bids
+    .filter((b) => b.removedAt)
+    .map((b) => ({
+      placedAt: new Date(b.bidTime).getTime(),
+      retractedAt: new Date(b.removedAt).getTime(),
+      maxAmount: b.bidAmountUsd,
+    }));
+
+  // Bridge to live state: if the listing's current price disagrees with our
+  // last reconstructed point (e.g. a fresh bid landed between our last
+  // import and now), append a "now" point so the chart catches up.
   if (listing && points.length > 0) {
     const last = points[points.length - 1];
     if (last.price !== listing.currentPriceUsd || last.count !== listing.currentBidCount) {
       points.push({ t: Date.now(), price: listing.currentPriceUsd, count: listing.currentBidCount });
     }
   }
-  return points;
+  return { points, maxDots, retractionMarkers };
 }
 
 let chartState = null;
 
-function generateTimeLabels(tMin, tMax) {
+// Axis scale state, persisted across page loads. Y has two modes (linear ↔
+// log); X has three (linear datetime → log from first bid → log to latest
+// bid). "Log to latest" stretches the most recent bid events across the
+// right half of the chart, which is the killer mode for auctions ending
+// in a sniping flurry. Note that "latest bid" is the latest bid IN OUR
+// DATA — for a live auction with the scheduled end still in the future,
+// this is not the same as the auction's scheduled end timestamp; we use
+// the data's tMax so the chart doesn't squash all activity to the left
+// edge while waiting out unused future time.
+const Y_SCALES = ['linear', 'log'];
+const X_SCALES = ['linear', 'log-start', 'log-end'];
+const X_SCALE_LABELS = {
+  linear: 'linear',
+  'log-start': 'log from first bid →',
+  'log-end': '← log to latest bid',
+};
+const chartScale = {
+  y: Y_SCALES.includes(localStorage.getItem('hchs.chart.yScale'))
+    ? localStorage.getItem('hchs.chart.yScale')
+    : 'linear',
+  x: X_SCALES.includes(localStorage.getItem('hchs.chart.xScale'))
+    ? localStorage.getItem('hchs.chart.xScale')
+    : 'linear',
+};
+function persistChartScale(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (_e) {
+    /* storage disabled — non-fatal */
+  }
+}
+function updateScaleButtons() {
+  const yMode = document.getElementById('y-scale-mode');
+  if (yMode) yMode.textContent = chartScale.y;
+  const xMode = document.getElementById('x-scale-mode');
+  if (xMode) xMode.textContent = X_SCALE_LABELS[chartScale.x];
+}
+function cycleYScale() {
+  const idx = Y_SCALES.indexOf(chartScale.y);
+  chartScale.y = Y_SCALES[(idx + 1) % Y_SCALES.length];
+  persistChartScale('hchs.chart.yScale', chartScale.y);
+  updateScaleButtons();
+  drawChart();
+}
+function cycleXScale() {
+  const idx = X_SCALES.indexOf(chartScale.x);
+  chartScale.x = X_SCALES[(idx + 1) % X_SCALES.length];
+  persistChartScale('hchs.chart.xScale', chartScale.x);
+  updateScaleButtons();
+  drawChart();
+}
+
+// Picks an x-axis time step from a fixed ladder so labels stay readable
+// regardless of chart width. Targets ~5 labels on narrow screens (mobile),
+// ~7 mid-size, ~9 desktop — chosen so adjacent labels never run into each
+// other when rendered at the chart's font size. Step is the largest ladder
+// value at or below ideal range/targetCount.
+function generateTimeLabels(tMin, tMax, chartWidth = 900) {
   const range = tMax - tMin;
+  const minuteMs = 60_000;
   const hourMs = 3_600_000;
   const dayMs = 86_400_000;
-  const labels = [];
-
-  if (range < hourMs * 12) {
-    const stepMs = range < hourMs * 2 ? hourMs / 2 : hourMs;
-    const start = new Date(tMin);
-    start.setMinutes(0, 0, 0);
-    if (start.getTime() < tMin) start.setTime(start.getTime() + stepMs);
-    for (let t = start.getTime(); t <= tMax; t += stepMs) {
-      const d = new Date(t);
-      labels.push({
-        t,
-        primary: d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }),
-        secondary: null,
-        isDayBoundary: d.getHours() === 0 && d.getMinutes() === 0,
-      });
+  const targetCount = chartWidth < 500 ? 5 : chartWidth < 800 ? 7 : 9;
+  const ladder = [
+    minuteMs, 2 * minuteMs, 5 * minuteMs, 10 * minuteMs, 15 * minuteMs, 30 * minuteMs,
+    hourMs, 2 * hourMs, 3 * hourMs, 6 * hourMs, 12 * hourMs,
+    dayMs, 2 * dayMs, 3 * dayMs, 7 * dayMs, 14 * dayMs, 30 * dayMs,
+  ];
+  // Smallest ladder step that fits within the target count. We iterate from
+  // finest to coarsest and pick the first that keeps the label count under
+  // budget — preferring more detail over less, but never overcrowding.
+  let stepMs = ladder[ladder.length - 1];
+  for (const s of ladder) {
+    if (range / s <= targetCount) {
+      stepMs = s;
+      break;
     }
-  } else {
-    const rangeDays = range / dayMs;
-    const stepDays = Math.max(1, Math.ceil(rangeDays / 8));
-    const start = new Date(tMin);
+  }
+  const useDateFormat = stepMs >= 12 * hourMs;
+
+  const start = new Date(tMin);
+  if (useDateFormat) {
     start.setHours(0, 0, 0, 0);
     if (start.getTime() < tMin) start.setDate(start.getDate() + 1);
-    for (let t = start.getTime(); t <= tMax; t += stepDays * dayMs) {
-      const d = new Date(t);
-      labels.push({
-        t,
-        primary: d.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' }),
-        secondary: null,
-        isDayBoundary: true,
-      });
+  } else {
+    // Round up to next step boundary so labels land on tidy times (e.g.
+    // top of the hour for a 1h step, multiples of 5m for a 5m step).
+    start.setSeconds(0, 0);
+    start.setTime(Math.ceil(start.getTime() / stepMs) * stepMs);
+  }
+
+  const labels = [];
+  for (let t = start.getTime(); t <= tMax; t += stepMs) {
+    const d = new Date(t);
+    labels.push({
+      t,
+      primary: useDateFormat
+        ? d.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })
+        : d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }),
+      secondary: null,
+      isDayBoundary: d.getHours() === 0 && d.getMinutes() === 0,
+    });
+  }
+  return labels;
+}
+
+// Log-scale x-axis labels: pick durations from a human ladder (1m, 10m,
+// 1h, 1d, 1w) that fall inside the chart's time range, plus an explicit
+// "start" / "end" anchor at the appropriate boundary. The same ladder
+// serves both log-start and log-end modes — the duration values are
+// offset from tMin (log-start) or tMax (log-end) when their tick
+// positions get computed by the caller's xFor.
+function generateLogTimeLabels(tMin, tMax, mode) {
+  const range = tMax - tMin;
+  const minuteMs = 60_000;
+  const hourMs = 3_600_000;
+  const dayMs = 86_400_000;
+  const ladder = [
+    { ms: minuteMs, label: '1m' },
+    { ms: 10 * minuteMs, label: '10m' },
+    { ms: hourMs, label: '1h' },
+    { ms: 6 * hourMs, label: '6h' },
+    { ms: dayMs, label: '1d' },
+    { ms: 7 * dayMs, label: '1w' },
+  ];
+  const labels = [];
+  for (const tick of ladder) {
+    if (tick.ms >= range) break;
+    if (mode === 'log-start') {
+      labels.push({ t: tMin + tick.ms, primary: tick.label, isDayBoundary: false });
+    } else {
+      // log-end: time-until-end. Prepend so labels read left-to-right.
+      labels.unshift({ t: tMax - tick.ms, primary: tick.label, isDayBoundary: false });
     }
+  }
+  if (mode === 'log-start') {
+    labels.unshift({ t: tMin, primary: 'start', isDayBoundary: false });
+  } else {
+    labels.push({ t: tMax, primary: 'end', isDayBoundary: false });
   }
   return labels;
 }
 
 function renderChart(snapshots, listing, bids) {
-  let points = buildChartPointsFromBids(bids, listing);
+  let { points, maxDots, retractionMarkers } = buildChartPointsFromBids(bids, listing);
 
   if (points.length < 2 && snapshots && snapshots.length > 0) {
     points = snapshots.map((s) => ({
@@ -206,6 +438,9 @@ function renderChart(snapshots, listing, bids) {
     if (last && (last.price !== listing.currentPriceUsd || last.count !== listing.currentBidCount)) {
       points.push({ t: Date.now(), price: listing.currentPriceUsd, count: listing.currentBidCount });
     }
+    // No bid-level data → no max dots or retraction markers to draw.
+    maxDots = [];
+    retractionMarkers = [];
   }
 
   if (points.length < 2) {
@@ -215,7 +450,7 @@ function renderChart(snapshots, listing, bids) {
     return;
   }
 
-  chartState = { points, listing };
+  chartState = { points, maxDots, retractionMarkers, listing };
   drawChart();
   chartSection.hidden = false;
 }
@@ -227,7 +462,7 @@ function defaultChartHelp(points) {
 
 function drawChart() {
   if (!chartState) return;
-  const { points, listing } = chartState;
+  const { points, maxDots = [], retractionMarkers = [], listing } = chartState;
   const W = chartWrap.clientWidth || 900;
   const H = 280;
   const PAD = { top: 16, right: 56, bottom: 36, left: 68 };
@@ -236,8 +471,15 @@ function drawChart() {
 
   const tMin = points[0].t;
   const tMax = points[points.length - 1].t;
-  const priceMin = Math.min(...points.map((p) => p.price));
-  const priceMax = Math.max(...points.map((p) => p.price));
+  // Include maxDots and retraction maxes in the y-axis range so neither
+  // a tall defense stack nor a parked-then-pulled max is clipped off.
+  const allPrices = [
+    ...points.map((p) => p.price),
+    ...maxDots.map((d) => d.price),
+    ...retractionMarkers.map((r) => r.maxAmount),
+  ];
+  const priceMin = Math.min(...allPrices);
+  const priceMax = Math.max(...allPrices);
   const countMin = Math.min(...points.map((p) => p.count));
   const countMax = Math.max(...points.map((p) => p.count));
 
@@ -245,14 +487,63 @@ function drawChart() {
   const countRange = countMax - countMin || 1;
   const tRange = tMax - tMin || 1;
 
-  const xFor = (t) => PAD.left + ((t - tMin) / tRange) * innerW;
-  const yPriceFor = (p) => PAD.top + innerH - ((p - priceMin) / priceRange) * innerH;
+  // Y price: linear or log10. Clamp inputs to 0.01 to avoid log(0) when
+  // the chart spans values that include or approach zero.
+  const LOG_FLOOR = 0.01;
+  const logMin = Math.log10(Math.max(LOG_FLOOR, priceMin));
+  const logMax = Math.log10(Math.max(LOG_FLOOR, priceMax));
+  const logRange = logMax - logMin || 1;
+
+  // X time: linear, log-time-since-start, or log-time-until-end. The
+  // "+1" inside log10 keeps the function defined at the endpoint where
+  // the elapsed-or-remaining time is zero.
+  const logTRange = Math.log10(Math.max(1, tRange + 1));
+  const xFor = (() => {
+    if (chartScale.x === 'log-start') {
+      return (t) => {
+        const v = Math.log10(Math.max(1, t - tMin + 1));
+        return PAD.left + (v / logTRange) * innerW;
+      };
+    }
+    if (chartScale.x === 'log-end') {
+      return (t) => {
+        const v = Math.log10(Math.max(1, tMax - t + 1));
+        return PAD.left + innerW - (v / logTRange) * innerW;
+      };
+    }
+    return (t) => PAD.left + ((t - tMin) / tRange) * innerW;
+  })();
+  const yPriceFor = chartScale.y === 'log'
+    ? (p) => PAD.top + innerH - ((Math.log10(Math.max(LOG_FLOOR, p)) - logMin) / logRange) * innerH
+    : (p) => PAD.top + innerH - ((p - priceMin) / priceRange) * innerH;
   const yCountFor = (c) => PAD.top + innerH - ((c - countMin) / countRange) * innerH;
 
   const pricePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(p.t).toFixed(1)} ${yPriceFor(p.price).toFixed(1)}`).join(' ');
-  const countPath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(p.t).toFixed(1)} ${yCountFor(p.count).toFixed(1)}`).join(' ');
+  // Bid-count as a step area (cumulative bids only ever go up between
+  // events). Step path holds the count flat between bid events and jumps
+  // at each placement, then closes down to the chart's bottom edge so
+  // the SVG can fill it. Subtler than a dashed line — lives in the
+  // background without competing with the price line.
+  const baselineY = (PAD.top + innerH).toFixed(1);
+  const countLineSegments = [];
+  for (let i = 0; i < points.length; i++) {
+    const x = xFor(points[i].t).toFixed(1);
+    const y = yCountFor(points[i].count).toFixed(1);
+    if (i === 0) {
+      countLineSegments.push(`M ${x} ${y}`);
+    } else {
+      const prevY = yCountFor(points[i - 1].count).toFixed(1);
+      countLineSegments.push(`L ${x} ${prevY}`, `L ${x} ${y}`);
+    }
+  }
+  const countLinePath = countLineSegments.join(' ');
+  const firstX = xFor(points[0].t).toFixed(1);
+  const lastX = xFor(points[points.length - 1].t).toFixed(1);
+  const countAreaPath = `M ${firstX} ${baselineY} ${countLineSegments.join(' ').replace(/^M /, 'L ')} L ${lastX} ${baselineY} Z`;
 
-  const timeLabels = generateTimeLabels(tMin, tMax);
+  const timeLabels = chartScale.x === 'linear'
+    ? generateTimeLabels(tMin, tMax, W)
+    : generateLogTimeLabels(tMin, tMax, chartScale.x);
 
   const gridLines = timeLabels
     .filter((l) => l.t > tMin && l.t < tMax)
@@ -268,10 +559,35 @@ function drawChart() {
     return `<text x="${clampedX.toFixed(1)}" y="${H - 14}" text-anchor="middle" font-size="12" font-weight="500" fill="currentColor" opacity="0.85">${escapeHtml(l.primary)}</text>`;
   }).join('');
 
-  const yLeftLabels = [priceMin, priceMin + priceRange / 2, priceMax].map((p) => {
+  // Linear Y ticks: just min/mid/max. Log Y ticks: powers of 10 within
+  // range plus the actual max so the top of the data is anchored.
+  const yTickValues = (() => {
+    if (chartScale.y !== 'log') {
+      return [priceMin, priceMin + priceRange / 2, priceMax];
+    }
+    const ticks = [];
+    const lo = Math.floor(Math.log10(Math.max(LOG_FLOOR, priceMin)));
+    const hi = Math.ceil(Math.log10(Math.max(LOG_FLOOR, priceMax)));
+    for (let exp = lo; exp <= hi; exp++) {
+      const v = Math.pow(10, exp);
+      if (v >= priceMin * 0.99 && v <= priceMax * 1.01) ticks.push(v);
+    }
+    if (ticks.length === 0 || ticks[ticks.length - 1] < priceMax * 0.95) {
+      ticks.push(priceMax);
+    }
+    return ticks;
+  })();
+  const yLeftLabels = yTickValues.map((p) => {
     const y = yPriceFor(p);
     return `<text x="${PAD.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="12" font-weight="500" fill="#4caf50" opacity="0.95">${fmtUsd(p)}</text>`;
   }).join('');
+
+  // Y-axis click target + mode badge. Transparent rect catches clicks
+  // anywhere in the left label band so any axis label is hittable; the
+  // small "linear"/"log" text at the top signals the current mode and
+  // hints the band is interactive.
+  // Scale mode labels are rendered in the chart legend (above the SVG)
+  // by updateScaleButtons(); nothing to inject into the SVG itself.
 
   const yRightLabels = [countMin, countMin + countRange / 2, countMax].map((c) => {
     const y = yCountFor(c);
@@ -282,12 +598,44 @@ function drawChart() {
     <circle class="chart-dot" data-idx="${i}" cx="${xFor(p.t).toFixed(1)}" cy="${yPriceFor(p.price).toFixed(1)}" r="3.5" fill="#4caf50" />
   `).join('');
 
+  // Hollow circles stacked at the bidder's max-placement timestamp,
+  // one per proxy-defense level their max was forced to. Drawn BEFORE
+  // the solid dots so the solid leader-dot sits on top when they
+  // coincide. Retracted dots use a muted gray + lower opacity so they
+  // recede visually without disappearing entirely.
+  const maxDotMarkers = maxDots.map((d) => {
+    if (d.retracted) {
+      return `<circle class="chart-max-dot is-retracted" cx="${xFor(d.t).toFixed(1)}" cy="${yPriceFor(d.price).toFixed(1)}" r="2.5" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.28" pointer-events="none" />`;
+    }
+    return `<circle class="chart-max-dot" cx="${xFor(d.t).toFixed(1)}" cy="${yPriceFor(d.price).toFixed(1)}" r="2.5" fill="none" stroke="#4caf50" stroke-width="1.2" opacity="0.5" pointer-events="none" />`;
+  }).join('');
+
+  // Retraction markers: a hollow placement circle at (placedAt, max), a
+  // dashed gray line stretching rightward to the retraction timestamp,
+  // and an × at the right endpoint. All in muted "currentColor" so the
+  // annotation reads as separate from the active green palette.
+  const retractionMarkerSvg = retractionMarkers.map((r) => {
+    const x1 = xFor(r.placedAt).toFixed(1);
+    const x2 = xFor(r.retractedAt).toFixed(1);
+    const y = yPriceFor(r.maxAmount).toFixed(1);
+    const xSize = 4; // half-width of the × glyph
+    return `
+      <circle cx="${x1}" cy="${y}" r="3.5" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.55" pointer-events="none" />
+      <line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="currentColor" stroke-width="1.1" stroke-dasharray="4,3" opacity="0.4" pointer-events="none" />
+      <line x1="${Number(x2) - xSize}" y1="${Number(y) - xSize}" x2="${Number(x2) + xSize}" y2="${Number(y) + xSize}" stroke="currentColor" stroke-width="1.6" opacity="0.65" pointer-events="none" />
+      <line x1="${Number(x2) - xSize}" y1="${Number(y) + xSize}" x2="${Number(x2) + xSize}" y2="${Number(y) - xSize}" stroke="currentColor" stroke-width="1.6" opacity="0.65" pointer-events="none" />
+    `;
+  }).join('');
+
   chartWrap.innerHTML = `
     <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
       <rect x="${PAD.left}" y="${PAD.top}" width="${innerW}" height="${innerH}" fill="rgba(255,255,255,0.02)" />
+      <path d="${countAreaPath}" fill="#ffb74d" opacity="0.18" stroke="none" />
+      <path d="${countLinePath}" stroke="#ffb74d" stroke-width="1.2" fill="none" opacity="0.7" />
       ${gridLines}
+      ${maxDotMarkers}
+      ${retractionMarkerSvg}
       <path d="${pricePath}" stroke="#4caf50" stroke-width="2" fill="none" />
-      <path d="${countPath}" stroke="#ffb74d" stroke-width="1.5" fill="none" stroke-dasharray="4,3" />
       ${dots}
       <line class="chart-guide" x1="0" y1="${PAD.top}" x2="0" y2="${PAD.top + innerH}" stroke="#fff" stroke-width="1" stroke-dasharray="3,3" opacity="0" pointer-events="none" />
       <circle class="chart-marker-price" cx="0" cy="0" r="6" fill="#a5e8b6" stroke="#0d1f15" stroke-width="2" opacity="0" pointer-events="none" />
@@ -461,12 +809,12 @@ function hasAdminToken() {
   return !!localStorage.getItem(ADMIN_TOKEN_KEY);
 }
 
-async function adminRequest(action) {
+async function adminRequest(action, extraBody = {}) {
   const token = localStorage.getItem(ADMIN_TOKEN_KEY);
   if (!token) {
     adminOutput.hidden = false;
     adminOutput.textContent = 'No admin token. Log in at /admin first.';
-    return;
+    return null;
   }
   adminOutput.hidden = false;
   adminOutput.textContent = `Running ${action}...`;
@@ -474,17 +822,39 @@ async function adminRequest(action) {
     const response = await fetch('/api/admin/cleanup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ action, itemId }),
+      body: JSON.stringify({ action, itemId, ...extraBody }),
     });
     const data = await response.json();
     adminOutput.textContent = JSON.stringify(data, null, 2);
+    return data;
   } catch (err) {
     adminOutput.textContent = `Error: ${err.message}`;
+    return null;
   }
 }
 
 if (inspectBtn) inspectBtn.addEventListener('click', () => adminRequest('inspect_bid_history'));
 if (rebackfillBtn) rebackfillBtn.addEventListener('click', () => adminRequest('rebackfill_one'));
+
+const importBtn = document.getElementById('import-btn');
+const importHtml = document.getElementById('import-html');
+if (importBtn && importHtml) {
+  importBtn.addEventListener('click', async () => {
+    const html = importHtml.value;
+    if (!html || html.trim().length === 0) {
+      adminOutput.hidden = false;
+      adminOutput.textContent = 'Paste the bid-history HTML before clicking Import.';
+      return;
+    }
+    const result = await adminRequest('import_viewbids_html', { html });
+    // On a successful import, refresh the page data so the bid table reflects
+    // the newly reconciled rows without a full reload.
+    if (result && result.status === 'imported') {
+      importHtml.value = '';
+      load();
+    }
+  });
+}
 
 function maybeShowAdminSection() {
   if (adminSection && hasAdminToken()) adminSection.hidden = false;
@@ -538,5 +908,11 @@ window.addEventListener('resize', () => {
     if (chartState) drawChart();
   }, 150);
 });
+
+const yScaleBtn = document.getElementById('y-scale-btn');
+if (yScaleBtn) yScaleBtn.addEventListener('click', cycleYScale);
+const xScaleBtn = document.getElementById('x-scale-btn');
+if (xScaleBtn) xScaleBtn.addEventListener('click', cycleXScale);
+updateScaleButtons();
 
 load();

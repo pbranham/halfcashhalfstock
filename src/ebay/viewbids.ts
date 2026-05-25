@@ -7,8 +7,16 @@ import type { BidRecord } from './trading.js';
 // an auction ends. Because the monitored auctions have all ended, the data is
 // permanently static — this is a repair, not an ongoing data source.
 
+export interface RetractedBid extends BidRecord {
+  // ISO timestamp of when the bid was retracted (per eBay's "Bid retraction
+  // and cancellation history" table). bidTime on the parent is when the bid
+  // was originally placed.
+  removedAt: string;
+}
+
 export interface ViewbidsParseResult {
   bids: BidRecord[];
+  retractedBids: RetractedBid[];
   finalPriceUsd: number;
   bidCount: number;
 }
@@ -141,17 +149,44 @@ interface Token {
 // count, and rows preceded by eBay's "automatic bid (proxy bid)" marker are
 // filtered out so the row count matches eBay's reported "Bids" total.
 export function parseViewbids(html: string): ViewbidsParseResult {
-  const fullText = html
+  // Seller-view pre-processing: when the user is logged in as the auction's
+  // seller, eBay renders each bidder as a full username inside a profile
+  // link (e.g. <a href=https://www.ebay.com/usr/someuser?_trksid=…>
+  // <span>someuser</span></a>) instead of the masked "5***t" form shown to
+  // anonymous viewers. The flatten step below would strip the <a> tag and
+  // lose the username, so we first inject a synthetic "__BIDDER_<name>__"
+  // marker around every /usr/<name> link. Two structural quirks in the
+  // real markup that the regex must tolerate:
+  //   - Attribute values are often UNQUOTED in the minified HTML eBay
+  //     ships (href=https://… not href="https://…").
+  //   - The link's inner content has nested <span> tags AND HTML comments
+  //     like <!--F#5-->, so we match it with [\s\S]*?.
+  // The bidder regex below also matches the synthetic marker.
+  //
+  // Proxy/auto-bid rows render the username as PLAIN TEXT inside an italic
+  // span (no anchor), so they produce no marker and are naturally
+  // excluded — matching the "Bids" count eBay reports.
+  //
+  // Raw usernames are masked at the API boundary (maskBidder) before any
+  // public response, so storing them here is OK.
+  const sellerViewHtml = html.replace(
+    /<a\s[^>]*\/usr\/([A-Za-z0-9._-]+)[^>]*>[\s\S]*?<\/a>/gi,
+    '\n__BIDDER_$1__\n',
+  );
+
+  const fullText = sellerViewHtml
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
     .replace(/<[^>]+>/g, '\n')
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&');
 
-  // Stop before the "Bid retraction and cancellation history" section so the
-  // retracted-bid row doesn't form a phantom 44th row.
+  // Split before the "Bid retraction and cancellation history" section. The
+  // top half holds active bids; the bottom half (if present) holds retracted
+  // bids and gets parsed separately by parseRetractedSection.
   const retractIdx = fullText.indexOf('Bid retraction and cancellation history');
   const text = retractIdx > 0 ? fullText.slice(0, retractIdx) : fullText;
+  const retractionText = retractIdx > 0 ? fullText.slice(retractIdx) : '';
 
   const tokens: Token[] = [];
 
@@ -164,10 +199,18 @@ export function parseViewbids(html: string): ViewbidsParseResult {
     tokens.push({ index: m.index, kind: 'amount', value: m[1]!.replace(/,/g, '') });
   }
 
-  // Anonymized bidder, e.g. "5***t" / "a***b" / "1***2".
-  const bidderRe = /([0-9A-Za-z])\*{2,4}([0-9A-Za-z])/g;
+  // Bidder tokens: either the anonymized "5***t" form (anonymous view) or
+  // the synthetic "__BIDDER_<name>__" marker we injected for /usr/ profile
+  // links (seller-logged-in view). The trailing char of the masked form
+  // includes `_`, `-`, and `.` because eBay usernames can end with any of
+  // those (the mask preserves the original last character — e.g. a
+  // bidder named "alice_2025_" appears as "a***_" on the public view).
+  const bidderRe = /([0-9A-Za-z])\*{2,4}([0-9A-Za-z_.-])|__BIDDER_([A-Za-z0-9._-]+)__/g;
   for (let m = bidderRe.exec(text); m; m = bidderRe.exec(text)) {
-    tokens.push({ index: m.index, kind: 'bidder', value: m[0] });
+    // Marker capture group is m[3]; mask group is m[0]. Prefer the captured
+    // full username when present so the stored bidder reflects identity.
+    const value = m[3] ?? m[0];
+    tokens.push({ index: m.index, kind: 'bidder', value });
   }
 
   const dateRe = new RegExp(
@@ -245,15 +288,91 @@ export function parseViewbids(html: string): ViewbidsParseResult {
       : '';
     const rawHasDollar = /\$\s*[\d,]+\.\d{2}/.test(html);
     const rawHasChallenge = /Pardon Our Interruption|captcha|unusual traffic/i.test(html);
+    const sellerView = /Status for seller/i.test(html) || /__BIDDER_/.test(text);
     throw new ViewbidsParseError(
       'no bids found on viewbids page',
-      `tokens=${JSON.stringify(counts)} rawHasDollar=${rawHasDollar} rawHasChallenge=${rawHasChallenge} aroundFirstAmount="${around}"`,
+      `tokens=${JSON.stringify(counts)} sellerView=${sellerView} rawHasDollar=${rawHasDollar} rawHasChallenge=${rawHasChallenge} aroundFirstAmount="${around}"`,
     );
   }
 
   bids.sort((x, y) => (x.bidTime < y.bidTime ? -1 : x.bidTime > y.bidTime ? 1 : 0));
   const finalPriceUsd = bids.reduce((max, b) => (b.bidAmount > max ? b.bidAmount : max), 0);
-  return { bids, finalPriceUsd, bidCount: bids.length };
+
+  const retractedBids = retractionText ? parseRetractedSection(retractionText) : [];
+  return { bids, retractedBids, finalPriceUsd, bidCount: bids.length };
+}
+
+// Parses the "Bid retraction and cancellation history" table. Each row on
+// eBay's page lists a bidder, the bid amount, two timestamps (bid placed at,
+// retracted at), and a short explanation. We tokenize the same way as the
+// active section and walk in bidder-delimited groups, collecting the first
+// amount + first TWO dates per row. Best-effort: if a row has fewer than two
+// dates, it's skipped. The slice we receive is purely the retraction section,
+// so misclassifying active bids isn't possible.
+export function parseRetractedSection(retractionText: string): RetractedBid[] {
+  const tokens: Token[] = [];
+
+  const amountRe = /\$\s*([\d,]+\.\d{2})/g;
+  for (let m = amountRe.exec(retractionText); m; m = amountRe.exec(retractionText)) {
+    tokens.push({ index: m.index, kind: 'amount', value: m[1]!.replace(/,/g, '') });
+  }
+  // Same expanded trailing-char class as parseViewbids: the masked form
+  // can end in `_`, `-`, or `.` when the original username does.
+  const bidderRe = /([0-9A-Za-z])\*{2,4}([0-9A-Za-z_.-])|__BIDDER_([A-Za-z0-9._-]+)__/g;
+  for (let m = bidderRe.exec(retractionText); m; m = bidderRe.exec(retractionText)) {
+    const value = m[3] ?? m[0];
+    tokens.push({ index: m.index, kind: 'bidder', value });
+  }
+  const dateRe = new RegExp(
+    '(?:[A-Za-z]{3}-\\d{1,2}-\\d{2,4}\\s+\\d{1,2}:\\d{2}:\\d{2}\\s+[A-Za-z]{2,4})' +
+    '|(?:[A-Za-z]{3,9}\\s+\\d{1,2},?\\s+\\d{2,4}\\s+(?:at\\s+)?\\d{1,2}:\\d{2}:\\d{2}\\s*[AaPp][Mm]\\s+[A-Za-z]{2,4})' +
+    '|(?:\\d{1,2}\\s+[A-Za-z]{3,9}\\s+\\d{2,4}\\s+(?:at\\s+)?\\d{1,2}:\\d{2}:\\d{2}\\s*[AaPp][Mm]\\s+[A-Za-z]{2,4})',
+    'g',
+  );
+  for (let m = dateRe.exec(retractionText); m; m = dateRe.exec(retractionText)) {
+    tokens.push({ index: m.index, kind: 'date', value: m[0] });
+  }
+  tokens.sort((x, y) => x.index - y.index);
+
+  const out: RetractedBid[] = [];
+  const seen = new Set<string>();
+  let cur: { bidder: string; amount: number | null; dates: string[] } | null = null;
+
+  const flush = (): void => {
+    if (!cur || cur.amount === null || cur.dates.length < 2) return;
+    let bidTime: string;
+    let removedAt: string;
+    try {
+      bidTime = parseEbayDate(cur.dates[0]!);
+      removedAt = parseEbayDate(cur.dates[1]!);
+    } catch {
+      return;
+    }
+    // If the two parsed timestamps are out of chronological order (retraction
+    // earlier than the bid), eBay rendered the columns in (retraction, bid)
+    // order — swap.
+    if (Date.parse(removedAt) < Date.parse(bidTime)) {
+      const tmp = bidTime;
+      bidTime = removedAt;
+      removedAt = tmp;
+    }
+    const key = `${cur.bidder}|${bidTime}|${cur.amount}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ bidder: cur.bidder, bidTime, bidAmount: cur.amount, removedAt });
+  };
+
+  for (const token of tokens) {
+    if (token.kind === 'bidder') {
+      flush();
+      cur = { bidder: token.value, amount: null, dates: [] };
+    } else if (cur) {
+      if (token.kind === 'amount' && cur.amount === null) cur.amount = Number(token.value);
+      else if (token.kind === 'date' && cur.dates.length < 2) cur.dates.push(token.value);
+    }
+  }
+  flush();
+  return out;
 }
 
 const BROWSER_HEADERS: Record<string, string> = {

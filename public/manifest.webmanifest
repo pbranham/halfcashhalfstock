@@ -1,7 +1,7 @@
 {
   "name": "halfcashhalfstock",
   "short_name": "hchs",
-  "description": "Live monitor for Ryan Cohen's eBay auctions, expressed as half cash plus half stock at the live market price.",
+  "description": "Live monitor for eBay auctions (boilerpaulie + ryan_5050), expressed as half cash plus half stock at the live market price.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

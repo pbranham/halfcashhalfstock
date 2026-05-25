@@ -13,6 +13,56 @@ let currentSort = 'ending-soonest';
 let lastSnapshot = null;
 let prevBidCounts = new Map(); // itemId → bidCount from last successful render
 
+// --- Seller filter state ---
+// Pill id → matching sellerId (or null for "all"). The mapping is hard-coded
+// because the dashboard knows about exactly two sellers today; adding a third
+// means adding a pill + entry here.
+const SELLER_PILL_TO_ID = {
+  all: null,
+  mine: 'boilerpaulie',
+  ryan: 'ryan_5050',
+};
+// Each filter has a thematic stock pairing: Ryan wants to buy eBay, I want
+// to buy GameStop. Picking a filter swaps the ticker to match. The user can
+// still manually pick a different ticker afterward — the auto-swap only
+// fires on filter changes.
+const SELLER_FILTER_DEFAULT_TICKER = {
+  all: 'EBAY',
+  mine: 'GME',
+  ryan: 'EBAY',
+};
+function loadSellerFilterFromStorage() {
+  const stored = localStorage.getItem('hchs.sellerFilter');
+  return stored && stored in SELLER_PILL_TO_ID ? stored : 'all';
+}
+function saveSellerFilterToStorage(value) {
+  if (value in SELLER_PILL_TO_ID) localStorage.setItem('hchs.sellerFilter', value);
+}
+let currentSellerFilter = loadSellerFilterFromStorage();
+
+function filterBySeller(items) {
+  const wanted = SELLER_PILL_TO_ID[currentSellerFilter];
+  if (!wanted) return items;
+  return items.filter((i) => i.sellerId === wanted);
+}
+
+function sellerBadgeClass(sellerId) {
+  if (sellerId === 'boilerpaulie') return 'seller-badge seller-badge-mine';
+  if (sellerId === 'ryan_5050') return 'seller-badge seller-badge-ryan';
+  return 'seller-badge';
+}
+
+// --- Ended-section "Live vs At end" stock-price mode ---
+const ENDED_MODES = ['live', 'at-end'];
+function loadEndedPriceMode() {
+  const stored = localStorage.getItem('hchs.endedPriceMode');
+  return ENDED_MODES.includes(stored) ? stored : 'live';
+}
+function saveEndedPriceMode(value) {
+  if (ENDED_MODES.includes(value)) localStorage.setItem('hchs.endedPriceMode', value);
+}
+let currentEndedPriceMode = loadEndedPriceMode();
+
 // --- Ticker state ---
 function loadTickerFromStorage() {
   const stored = localStorage.getItem('ticker');
@@ -90,6 +140,85 @@ function sortItems(items, sort) {
     default:
       return sorted;
   }
+}
+
+// Apply the same sort selection to ended items. There's no "ending soon" for
+// auctions that have already ended, so ending-soonest and recent-bid-activity
+// both fall back to "most recently ended first" — the closest semantic match.
+function sortEndedItems(items, sort) {
+  const sorted = [...items];
+  switch (sort) {
+    case 'price-low':
+      return sorted.sort((a, b) => (a.finalPriceUsd ?? Infinity) - (b.finalPriceUsd ?? Infinity));
+    case 'price-high':
+      return sorted.sort((a, b) => (b.finalPriceUsd ?? -Infinity) - (a.finalPriceUsd ?? -Infinity));
+    case 'most-bids':
+      return sorted.sort((a, b) => (b.finalBidCount ?? 0) - (a.finalBidCount ?? 0));
+    case 'ending-soonest':
+    case 'recent-bid-activity':
+    default:
+      return sorted.sort((a, b) => (a.endedAt < b.endedAt ? 1 : -1));
+  }
+}
+
+// Recompute totals from a filtered subset so the on-page numbers reflect the
+// active seller filter. Mirrors the server-side composeSnapshot math:
+// no-bid items are excluded from the dollar totals (their priceUsd is just
+// the starting price, which shouldn't count until someone bids).
+function aggregateActiveTotals(items, stockPrice) {
+  const priced = items.filter(
+    (i) =>
+      i.priceUsd !== null && i.priceUsd !== undefined && (i.bidCount ?? 0) > 0,
+  );
+  const bidUsd = priced.reduce((sum, i) => sum + i.priceUsd, 0);
+  const cashUsd = bidUsd / 2;
+  const stockUsd = bidUsd / 2;
+  const shares = stockPrice > 0 ? stockUsd / stockPrice : 0;
+  return {
+    listingsCount: items.length,
+    pricedCount: priced.length,
+    bidsCount: items.reduce((sum, i) => sum + (i.bidCount ?? 0), 0),
+    bidUsd,
+    split: { cashUsd, stockUsd, shares },
+  };
+}
+
+function aggregateEndedTotals(items, stockPrice) {
+  // No-bid auctions (finalBidCount === 0) didn't actually clear at any real
+  // price, so they shouldn't roll into the ended totals.
+  const hasBid = (i) => (i.finalBidCount ?? 0) > 0;
+
+  // Live split: every USD-priced item with at least one bid contributes at
+  // the current stock price.
+  const priced = items.filter((i) => i.split !== null && i.split !== undefined && hasBid(i));
+  const bidUsd = priced.reduce((sum, i) => sum + i.finalPriceUsd, 0);
+  const cashUsd = bidUsd / 2;
+  const stockUsd = bidUsd / 2;
+  const shares = stockPrice > 0 ? stockUsd / stockPrice : 0;
+
+  // End-time split: sum each item's pre-computed endTimeSplit. Items where
+  // OHLC history is missing OR that never received a bid drop out of this
+  // aggregate.
+  const pricedAtEnd = items.filter(
+    (i) => i.endTimeSplit !== null && i.endTimeSplit !== undefined && hasBid(i),
+  );
+  const splitAtEnd = pricedAtEnd.reduce(
+    (acc, i) => ({
+      cashUsd: acc.cashUsd + i.endTimeSplit.cashUsd,
+      stockUsd: acc.stockUsd + i.endTimeSplit.stockUsd,
+      shares: acc.shares + i.endTimeSplit.shares,
+    }),
+    { cashUsd: 0, stockUsd: 0, shares: 0 },
+  );
+
+  return {
+    listingsCount: items.length,
+    bidsCount: items.reduce((sum, i) => sum + (i.finalBidCount ?? 0), 0),
+    bidUsd,
+    split: { cashUsd, stockUsd, shares },
+    splitAtEnd,
+    pricedAtEndCount: pricedAtEnd.length,
+  };
 }
 
 function setText(el, text) {
@@ -173,12 +302,12 @@ function renderPriceSource(snapshot) {
   setText(el, source === 'finnhub' ? 'Finnhub' : source === 'yahoo' ? 'Yahoo Finance' : 'Finnhub or Yahoo Finance');
 }
 
-function renderTotals(snapshot) {
+function renderTotals(snapshot, totals) {
   const root = document.getElementById('totals');
   if (!root) return;
   root.replaceChildren();
-  if (!snapshot) return;
-  const { listingsCount, pricedCount, bidsCount, bidUsd, split } = snapshot.totals;
+  if (!snapshot || !totals) return;
+  const { listingsCount, bidsCount, bidUsd, split } = totals;
   const symbol = snapshot.stock?.symbol ?? activeSymbol;
   const items = [
     { label: 'Active listings', value: integer.format(listingsCount) },
@@ -192,14 +321,6 @@ function renderTotals(snapshot) {
       el('div', { class: 'stat' }, [
         el('div', { class: 'stat-label', textContent: stat.label }),
         el('div', { class: 'stat-value', textContent: stat.value }),
-      ]),
-    );
-  }
-  if (pricedCount < listingsCount) {
-    root.appendChild(
-      el('div', { class: 'stat' }, [
-        el('div', { class: 'stat-label', textContent: 'Excluded (currency)' }),
-        el('div', { class: 'stat-value', textContent: integer.format(listingsCount - pricedCount) }),
       ]),
     );
   }
@@ -237,6 +358,9 @@ function renderItem(item, symbol) {
   );
   const meta = el('div', { class: 'item-meta' });
   meta.appendChild(el('span', { class: item.isAuction ? 'tag tag-auction' : 'tag', textContent: item.isAuction ? 'Auction' : 'Buy it now' }));
+  if (item.sellerId) {
+    meta.appendChild(el('span', { class: sellerBadgeClass(item.sellerId), textContent: `@${item.sellerId}` }));
+  }
   if (item.bidCount !== null && item.bidCount !== undefined) {
     meta.appendChild(el('span', { textContent: `${item.bidCount} bid${item.bidCount === 1 ? '' : 's'}` }));
   }
@@ -279,29 +403,31 @@ function renderItem(item, symbol) {
   return card;
 }
 
-function renderEndedSection(snapshot) {
+function renderEndedSection(snapshot, endedItems, totals) {
   const section = document.getElementById('ended-section');
   const root = document.getElementById('ended-items');
   const totalsRoot = document.getElementById('ended-totals');
   if (!section || !root || !totalsRoot) return;
 
-  const endedItems = snapshot?.endedItems ?? [];
-  if (endedItems.length === 0) {
+  if (!endedItems || endedItems.length === 0) {
     section.hidden = true;
     return;
   }
   section.hidden = false;
 
+  const atEnd = currentEndedPriceMode === 'at-end';
+
   totalsRoot.replaceChildren();
-  const totals = snapshot.endedTotals;
   if (totals) {
     const symbol = snapshot.stock?.symbol ?? activeSymbol;
+    const displaySplit = atEnd ? totals.splitAtEnd : totals.split;
+    const sharesSuffix = atEnd ? '(at end)' : '(live)';
     const stats = [
       { label: 'Ended listings', value: integer.format(totals.listingsCount) },
       { label: 'Total bids on ended', value: integer.format(totals.bidsCount) },
       { label: 'Sum of final bids', value: usd.format(totals.bidUsd) },
-      { label: 'Cash half (final)', value: usd.format(totals.split.cashUsd) },
-      { label: `${symbol} shares (final)`, value: shares.format(totals.split.shares) },
+      { label: 'Cash half', value: usd.format(displaySplit.cashUsd) },
+      { label: `${symbol} shares ${sharesSuffix}`, value: shares.format(displaySplit.shares) },
     ];
     for (const stat of stats) {
       totalsRoot.appendChild(
@@ -311,11 +437,22 @@ function renderEndedSection(snapshot) {
         ]),
       );
     }
+    // When some ended items lack OHLC history, flag the gap so users know
+    // the at-end aggregate is a subset.
+    if (atEnd && totals.pricedAtEndCount < totals.listingsCount) {
+      const missing = totals.listingsCount - totals.pricedAtEndCount;
+      totalsRoot.appendChild(
+        el('div', { class: 'stat' }, [
+          el('div', { class: 'stat-label', textContent: 'Missing end-time price' }),
+          el('div', { class: 'stat-value', textContent: integer.format(missing) }),
+        ]),
+      );
+    }
   }
 
   root.replaceChildren();
   const symbol = snapshot.stock?.symbol ?? activeSymbol;
-  const sorted = [...endedItems].sort((a, b) => (a.endedAt < b.endedAt ? 1 : -1));
+  const sorted = sortEndedItems(endedItems, currentSort);
   for (const item of sorted) {
     root.appendChild(renderEndedItem(item, symbol));
   }
@@ -335,6 +472,9 @@ function renderEndedItem(item, symbol) {
   );
   const meta = el('div', { class: 'item-meta' });
   meta.appendChild(el('span', { class: 'tag tag-ended', textContent: 'Ended' }));
+  if (item.sellerId) {
+    meta.appendChild(el('span', { class: sellerBadgeClass(item.sellerId), textContent: `@${item.sellerId}` }));
+  }
   if (item.finalBidCount !== null && item.finalBidCount !== undefined) {
     meta.appendChild(el('span', { textContent: `${item.finalBidCount} bid${item.finalBidCount === 1 ? '' : 's'}` }));
   }
@@ -350,26 +490,36 @@ function renderEndedItem(item, symbol) {
   );
   body.appendChild(meta);
 
+  const atEnd = currentEndedPriceMode === 'at-end';
+  const displaySplit = atEnd ? item.endTimeSplit : item.split;
+
   const bidRow = el('div', { class: 'item-bid-row' });
   bidRow.appendChild(
     el('div', { class: 'item-bid', textContent: usd.format(item.finalPriceUsd) }),
   );
-  bidRow.appendChild(el('span', { class: 'item-bid-time', textContent: 'final' }));
+  // In at-end mode, show the stock price we used so it's obvious why the
+  // shares column is different from the live view.
+  const bidNote = atEnd
+    ? item.endTimePriceUsd !== null
+      ? `final · $${symbol} ${usd.format(item.endTimePriceUsd)} at end`
+      : 'final · no end-time price'
+    : 'final';
+  bidRow.appendChild(el('span', { class: 'item-bid-time', textContent: bidNote }));
   body.appendChild(bidRow);
 
-  if (item.split) {
+  if (displaySplit) {
     const split = el('div', { class: 'item-split' });
     split.appendChild(el('div', { class: 'label', textContent: 'Cash half' }));
     split.appendChild(el('div', { class: 'label', textContent: `${symbol} shares` }));
-    split.appendChild(el('div', { class: 'value', textContent: usd.format(item.split.cashUsd) }));
-    split.appendChild(el('div', { class: 'value', textContent: shares.format(item.split.shares) }));
+    split.appendChild(el('div', { class: 'value', textContent: usd.format(displaySplit.cashUsd) }));
+    split.appendChild(el('div', { class: 'value', textContent: shares.format(displaySplit.shares) }));
     body.appendChild(split);
   }
   card.appendChild(body);
   return card;
 }
 
-function renderItems(snapshot, bidDiff) {
+function renderItems(snapshot, items, bidDiff) {
   const root = document.getElementById('items');
   if (!root) return;
 
@@ -381,9 +531,8 @@ function renderItems(snapshot, bidDiff) {
 
   root.replaceChildren();
 
-  const items = snapshot?.items ?? [];
-  if (items.length === 0) {
-    root.appendChild(el('div', { class: 'empty', textContent: 'No active listings right now.' }));
+  if (!items || items.length === 0) {
+    root.appendChild(el('div', { class: 'empty', textContent: 'No active listings to show for this filter.' }));
     return;
   }
 
@@ -432,20 +581,39 @@ function renderItems(snapshot, bidDiff) {
   }
 }
 
-function renderMostRecentBid(snapshot) {
+// Compute "most recent bid" from a (possibly filtered) item list so the card
+// respects the active seller filter. Mirrors the server-side last-bid logic
+// in composeSnapshot.
+function deriveLastBid(items) {
+  let best = null;
+  for (const item of items) {
+    if (!item.lastBidTime || item.priceUsd === null || item.priceUsd === undefined) continue;
+    const ts = parseTimestamp(item.lastBidTime);
+    if (ts === null) continue;
+    if (best === null || ts > best.ts) {
+      best = { ts, itemId: item.itemId, title: item.title, bidTime: item.lastBidTime, bidAmount: item.priceUsd };
+    }
+  }
+  if (!best) return null;
+  const { ts: _ts, ...rest } = best;
+  return rest;
+}
+
+function renderMostRecentBid(snapshot, items) {
   const container = document.getElementById('most-recent-bid');
   if (!container) return;
   container.replaceChildren();
 
-  if (!snapshot?.lastBid) {
+  const lastBid = deriveLastBid(items ?? snapshot?.items ?? []);
+  if (!lastBid) {
     container.appendChild(
       el('div', { class: 'most-recent-bid-empty', textContent: 'No bids yet.' }),
     );
     return;
   }
 
-  const bid = snapshot.lastBid;
-  const bidItem = (snapshot.items ?? []).find((item) => item.itemId === bid.itemId) ?? null;
+  const bid = lastBid;
+  const bidItem = (items ?? snapshot?.items ?? []).find((item) => item.itemId === bid.itemId) ?? null;
   const timeAgo = formatRelativeBidAge(bid.bidTime) ?? 'unknown';
 
   const content = el('div', { class: 'most-recent-bid-content' });
@@ -508,9 +676,23 @@ function renderError(message) {
   root.replaceChildren(el('div', { class: 'error', textContent: message }));
 }
 
+// Single entry point for everything that depends on the current seller filter
+// or sort: filters items, recomputes totals from the filtered set, then
+// renders both active and ended sections. Called on snapshot refresh and on
+// filter/sort changes.
+function renderFilteredView(snapshot, bidDiff) {
+  if (!snapshot) return;
+  const stockPrice = snapshot.stock?.price ?? 0;
+  const filteredActive = filterBySeller(snapshot.items ?? []);
+  const filteredEnded = filterBySeller(snapshot.endedItems ?? []);
+  renderTotals(snapshot, aggregateActiveTotals(filteredActive, stockPrice));
+  renderMostRecentBid(snapshot, filteredActive);
+  renderItems(snapshot, filteredActive, bidDiff);
+  renderEndedSection(snapshot, filteredEnded, aggregateEndedTotals(filteredEnded, stockPrice));
+}
+
 function updateIntroSymbol(symbol) {
   const display = `$${symbol}`;
-  setText(document.getElementById('intro-symbol'), display);
   setText(document.getElementById('intro-symbol-2'), display);
 }
 
@@ -559,10 +741,7 @@ async function refresh() {
     updateIntroSymbol(snapshot.stock?.symbol ?? activeSymbol);
     renderLastUpdated(snapshot);
     renderPriceSource(snapshot);
-    renderTotals(snapshot);
-    renderMostRecentBid(snapshot);
-    renderItems(snapshot, prevBidCounts);
-    renderEndedSection(snapshot);
+    renderFilteredView(snapshot, prevBidCounts);
     lastSnapshot = snapshot;
     prevBidCounts = new Map(
       (snapshot.items ?? []).map((item) => [item.itemId, item.bidCount ?? 0]),
@@ -586,8 +765,11 @@ function stop() {
   }
 }
 
-// Stock toggle wiring
+// Stock toggle wiring — sync the active pill to the persisted activeSymbol
+// on first paint (the HTML hard-codes EBAY as active so the load/refresh
+// would otherwise mismatch when GME or a custom ticker is persisted).
 document.querySelectorAll('.stock-btn').forEach((btn) => {
+  btn.classList.toggle('is-active', btn.dataset.symbol === activeSymbol);
   btn.addEventListener('click', () => {
     const newSymbol = btn.dataset.symbol;
     if (newSymbol === activeSymbol) return;
@@ -641,7 +823,57 @@ document.querySelectorAll('.sort-btn').forEach((btn) => {
     if (btn.dataset.sort === currentSort) return;
     currentSort = btn.dataset.sort;
     document.querySelectorAll('.sort-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
-    if (lastSnapshot) renderItems(lastSnapshot, new Map()); // re-sort; no bid flash
+    if (lastSnapshot) renderFilteredView(lastSnapshot, new Map()); // re-sort active + ended; no bid flash
+  });
+});
+
+// Seller filter wiring
+document.querySelectorAll('.seller-btn').forEach((btn) => {
+  // Reflect the persisted choice on initial paint.
+  btn.classList.toggle('is-active', btn.dataset.sellerFilter === currentSellerFilter);
+  btn.addEventListener('click', () => {
+    if (btn.dataset.sellerFilter === currentSellerFilter) return;
+    currentSellerFilter = btn.dataset.sellerFilter;
+    saveSellerFilterToStorage(currentSellerFilter);
+    document.querySelectorAll('.seller-btn').forEach((b) =>
+      b.classList.toggle('is-active', b === btn),
+    );
+
+    // Thematic ticker swap: Mine→$GME, Ryan→$EBAY, All→$EBAY. Re-fetch the
+    // snapshot for the new symbol if it changed; otherwise just re-filter
+    // the cached snapshot in place.
+    const preferredTicker = SELLER_FILTER_DEFAULT_TICKER[currentSellerFilter];
+    if (preferredTicker && preferredTicker !== activeSymbol) {
+      activeSymbol = preferredTicker;
+      saveTickerToStorage(activeSymbol);
+      document.querySelectorAll('.stock-btn').forEach((b) =>
+        b.classList.toggle('is-active', b.dataset.symbol === activeSymbol),
+      );
+      const tickerInput = document.getElementById('ticker-input');
+      if (tickerInput) tickerInput.value = '';
+      updateIntroSymbol(activeSymbol);
+      // Re-render the filtered view immediately with the cached snapshot so
+      // the filter change feels instant, then refresh against the new
+      // ticker in the background.
+      if (lastSnapshot) renderFilteredView(lastSnapshot, new Map());
+      refresh();
+    } else if (lastSnapshot) {
+      renderFilteredView(lastSnapshot, new Map()); // re-filter; no bid flash
+    }
+  });
+});
+
+// Ended-section "Live vs At end" stock price toggle
+document.querySelectorAll('.ended-mode-btn').forEach((btn) => {
+  btn.classList.toggle('is-active', btn.dataset.endedMode === currentEndedPriceMode);
+  btn.addEventListener('click', () => {
+    if (btn.dataset.endedMode === currentEndedPriceMode) return;
+    currentEndedPriceMode = btn.dataset.endedMode;
+    saveEndedPriceMode(currentEndedPriceMode);
+    document.querySelectorAll('.ended-mode-btn').forEach((b) =>
+      b.classList.toggle('is-active', b === btn),
+    );
+    if (lastSnapshot) renderFilteredView(lastSnapshot, new Map()); // re-render ended section
   });
 });
 
