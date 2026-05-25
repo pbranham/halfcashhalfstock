@@ -41,6 +41,7 @@ import { YahooProvider } from './prices/yahoo.js';
 import { ChainedPriceProvider } from './prices/provider.js';
 import type { PriceProvider, PriceQuote } from './prices/types.js';
 import { composeSnapshot, type Snapshot } from './snapshot.js';
+import { maskBidder } from './anon.js';
 import { TickerQueue } from './ticker-queue.js';
 import { RequestStatsCollector } from './request-stats.js';
 import { backfillEndedListings } from './ebay/backfill.js';
@@ -268,10 +269,14 @@ export function createApp(deps: Deps): express.Express {
         res.status(404).json({ error: 'not_found', detail: 'item not seen by this server' });
         return;
       }
+      // Mask bidder usernames at the API boundary. When we're the seller,
+      // Trading API returns full IDs; eBay's own public bid-history page
+      // shows them masked, so the public dashboard does the same.
+      const maskedBids = bids.map((b) => ({ ...b, bidder: maskBidder(b.bidder) }));
       res
         .status(200)
         .set('Cache-Control', 'public, max-age=15')
-        .json({ listing, bids, snapshots, asOf: new Date().toISOString() });
+        .json({ listing, bids: maskedBids, snapshots, asOf: new Date().toISOString() });
     } catch (err) {
       next(err);
     }
@@ -289,7 +294,8 @@ export function createApp(deps: Deps): express.Express {
     }
     try {
       const bids = await readBidsForItem(deps.db, itemId);
-      res.status(200).set('Cache-Control', 'public, max-age=15').json({ itemId, bids });
+      const maskedBids = bids.map((b) => ({ ...b, bidder: maskBidder(b.bidder) }));
+      res.status(200).set('Cache-Control', 'public, max-age=15').json({ itemId, bids: maskedBids });
     } catch (err) {
       next(err);
     }
