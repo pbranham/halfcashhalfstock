@@ -283,22 +283,37 @@ function buildChartPointsFromBids(bids, listing) {
 let chartState = null;
 
 // Axis scale state, persisted across page loads. Click the axis label band
-// to cycle. Y has two modes: linear ↔ log. (X-axis gets its three-state
-// toggle in a follow-up commit.)
+// to cycle. Y has two modes (linear ↔ log); X has three (linear datetime
+// → log time-since-start → log time-until-end). Log-end is the killer
+// mode for auctions ending in a sniping flurry — it stretches the final
+// seconds across half the chart so the late action is finally readable.
 const Y_SCALES = ['linear', 'log'];
+const X_SCALES = ['linear', 'log-start', 'log-end'];
 const chartScale = {
   y: Y_SCALES.includes(localStorage.getItem('hchs.chart.yScale'))
     ? localStorage.getItem('hchs.chart.yScale')
     : 'linear',
+  x: X_SCALES.includes(localStorage.getItem('hchs.chart.xScale'))
+    ? localStorage.getItem('hchs.chart.xScale')
+    : 'linear',
 };
-function cycleYScale() {
-  const idx = Y_SCALES.indexOf(chartScale.y);
-  chartScale.y = Y_SCALES[(idx + 1) % Y_SCALES.length];
+function persistChartScale(key, value) {
   try {
-    localStorage.setItem('hchs.chart.yScale', chartScale.y);
+    localStorage.setItem(key, value);
   } catch (_e) {
     /* storage disabled — non-fatal */
   }
+}
+function cycleYScale() {
+  const idx = Y_SCALES.indexOf(chartScale.y);
+  chartScale.y = Y_SCALES[(idx + 1) % Y_SCALES.length];
+  persistChartScale('hchs.chart.yScale', chartScale.y);
+  drawChart();
+}
+function cycleXScale() {
+  const idx = X_SCALES.indexOf(chartScale.x);
+  chartScale.x = X_SCALES[(idx + 1) % X_SCALES.length];
+  persistChartScale('hchs.chart.xScale', chartScale.x);
   drawChart();
 }
 
@@ -352,6 +367,43 @@ function generateTimeLabels(tMin, tMax, chartWidth = 900) {
       secondary: null,
       isDayBoundary: d.getHours() === 0 && d.getMinutes() === 0,
     });
+  }
+  return labels;
+}
+
+// Log-scale x-axis labels: pick durations from a human ladder (1m, 10m,
+// 1h, 1d, 1w) that fall inside the chart's time range, plus an explicit
+// "start" / "end" anchor at the appropriate boundary. The same ladder
+// serves both log-start and log-end modes — the duration values are
+// offset from tMin (log-start) or tMax (log-end) when their tick
+// positions get computed by the caller's xFor.
+function generateLogTimeLabels(tMin, tMax, mode) {
+  const range = tMax - tMin;
+  const minuteMs = 60_000;
+  const hourMs = 3_600_000;
+  const dayMs = 86_400_000;
+  const ladder = [
+    { ms: minuteMs, label: '1m' },
+    { ms: 10 * minuteMs, label: '10m' },
+    { ms: hourMs, label: '1h' },
+    { ms: 6 * hourMs, label: '6h' },
+    { ms: dayMs, label: '1d' },
+    { ms: 7 * dayMs, label: '1w' },
+  ];
+  const labels = [];
+  for (const tick of ladder) {
+    if (tick.ms >= range) break;
+    if (mode === 'log-start') {
+      labels.push({ t: tMin + tick.ms, primary: tick.label, isDayBoundary: false });
+    } else {
+      // log-end: time-until-end. Prepend so labels read left-to-right.
+      labels.unshift({ t: tMax - tick.ms, primary: tick.label, isDayBoundary: false });
+    }
+  }
+  if (mode === 'log-start') {
+    labels.unshift({ t: tMin, primary: 'start', isDayBoundary: false });
+  } else {
+    labels.push({ t: tMax, primary: 'end', isDayBoundary: false });
   }
   return labels;
 }
@@ -425,7 +477,25 @@ function drawChart() {
   const logMax = Math.log10(Math.max(LOG_FLOOR, priceMax));
   const logRange = logMax - logMin || 1;
 
-  const xFor = (t) => PAD.left + ((t - tMin) / tRange) * innerW;
+  // X time: linear, log-time-since-start, or log-time-until-end. The
+  // "+1" inside log10 keeps the function defined at the endpoint where
+  // the elapsed-or-remaining time is zero.
+  const logTRange = Math.log10(Math.max(1, tRange + 1));
+  const xFor = (() => {
+    if (chartScale.x === 'log-start') {
+      return (t) => {
+        const v = Math.log10(Math.max(1, t - tMin + 1));
+        return PAD.left + (v / logTRange) * innerW;
+      };
+    }
+    if (chartScale.x === 'log-end') {
+      return (t) => {
+        const v = Math.log10(Math.max(1, tMax - t + 1));
+        return PAD.left + innerW - (v / logTRange) * innerW;
+      };
+    }
+    return (t) => PAD.left + ((t - tMin) / tRange) * innerW;
+  })();
   const yPriceFor = chartScale.y === 'log'
     ? (p) => PAD.top + innerH - ((Math.log10(Math.max(LOG_FLOOR, p)) - logMin) / logRange) * innerH
     : (p) => PAD.top + innerH - ((p - priceMin) / priceRange) * innerH;
@@ -454,7 +524,9 @@ function drawChart() {
   const lastX = xFor(points[points.length - 1].t).toFixed(1);
   const countAreaPath = `M ${firstX} ${baselineY} ${countLineSegments.join(' ').replace(/^M /, 'L ')} L ${lastX} ${baselineY} Z`;
 
-  const timeLabels = generateTimeLabels(tMin, tMax, W);
+  const timeLabels = chartScale.x === 'linear'
+    ? generateTimeLabels(tMin, tMax, W)
+    : generateLogTimeLabels(tMin, tMax, chartScale.x);
 
   const gridLines = timeLabels
     .filter((l) => l.t > tMin && l.t < tMax)
@@ -467,7 +539,7 @@ function drawChart() {
   const xAxisLabels = timeLabels.map((l) => {
     const x = xFor(l.t);
     const clampedX = Math.max(PAD.left + 4, Math.min(W - PAD.right - 4, x));
-    return `<text x="${clampedX.toFixed(1)}" y="${H - 14}" text-anchor="middle" font-size="12" font-weight="500" fill="currentColor" opacity="0.85">${escapeHtml(l.primary)}</text>`;
+    return `<text x="${clampedX.toFixed(1)}" y="${H - 22}" text-anchor="middle" font-size="12" font-weight="500" fill="currentColor" opacity="0.85">${escapeHtml(l.primary)}</text>`;
   }).join('');
 
   // Linear Y ticks: just min/mid/max. Log Y ticks: powers of 10 within
@@ -500,6 +572,18 @@ function drawChart() {
   const yScaleBadge = `
     <rect class="chart-y-hit" x="0" y="${PAD.top}" width="${PAD.left}" height="${innerH}" fill="transparent" style="cursor: pointer;" />
     <text class="chart-y-mode" x="${PAD.left - 8}" y="${(PAD.top - 4).toFixed(1)}" text-anchor="end" font-size="10" fill="currentColor" opacity="0.55" style="pointer-events: none;">$ ${chartScale.y}</text>
+  `;
+  // X-axis click target + mode badge. Covers the bottom label strip so any
+  // tick label hits. The "from start" / "to end" suffix on the log labels
+  // disambiguates which decade arrow the chart is biased toward.
+  const xModeLabel = chartScale.x === 'log-start'
+    ? 'log from start →'
+    : chartScale.x === 'log-end'
+      ? '← log to end'
+      : 'linear';
+  const xScaleBadge = `
+    <rect class="chart-x-hit" x="${PAD.left}" y="${PAD.top + innerH}" width="${innerW}" height="${PAD.bottom}" fill="transparent" style="cursor: pointer;" />
+    <text class="chart-x-mode" x="${(PAD.left + innerW / 2).toFixed(1)}" y="${(H - 6).toFixed(1)}" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.55" style="pointer-events: none;">time: ${xModeLabel}</text>
   `;
 
   const yRightLabels = [countMin, countMin + countRange / 2, countMax].map((c) => {
@@ -558,6 +642,7 @@ function drawChart() {
       ${yLeftLabels}
       ${yRightLabels}
       ${yScaleBadge}
+      ${xScaleBadge}
     </svg>
   `;
 
@@ -568,6 +653,8 @@ function drawChart() {
   const hitArea = svg.querySelector('.chart-hit');
   const yHit = svg.querySelector('.chart-y-hit');
   if (yHit) yHit.addEventListener('click', cycleYScale);
+  const xHit = svg.querySelector('.chart-x-hit');
+  if (xHit) xHit.addEventListener('click', cycleXScale);
 
   const updateFromX = (clientX) => {
     const rect = svg.getBoundingClientRect();
