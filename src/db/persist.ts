@@ -557,7 +557,7 @@ export async function storeOhlcData(
   await pool.query(
     `INSERT INTO ohlc_data (ticker, period_start, open, high, low, close, source, interval)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     ON CONFLICT (ticker, period_start) DO UPDATE SET
+     ON CONFLICT (ticker, period_start, interval) DO UPDATE SET
        open = COALESCE(EXCLUDED.open, ohlc_data.open),
        high = GREATEST(COALESCE(EXCLUDED.high, 0), COALESCE(ohlc_data.high, 0)),
        low = LEAST(COALESCE(EXCLUDED.low, 999999), COALESCE(ohlc_data.low, 999999)),
