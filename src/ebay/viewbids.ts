@@ -201,8 +201,11 @@ export function parseViewbids(html: string): ViewbidsParseResult {
 
   // Bidder tokens: either the anonymized "5***t" form (anonymous view) or
   // the synthetic "__BIDDER_<name>__" marker we injected for /usr/ profile
-  // links (seller-logged-in view).
-  const bidderRe = /([0-9A-Za-z])\*{2,4}([0-9A-Za-z])|__BIDDER_([A-Za-z0-9._-]+)__/g;
+  // links (seller-logged-in view). The trailing char of the masked form
+  // includes `_`, `-`, and `.` because eBay usernames can end with any of
+  // those (the mask preserves the original last character — e.g. a
+  // bidder named "alice_2025_" appears as "a***_" on the public view).
+  const bidderRe = /([0-9A-Za-z])\*{2,4}([0-9A-Za-z_.-])|__BIDDER_([A-Za-z0-9._-]+)__/g;
   for (let m = bidderRe.exec(text); m; m = bidderRe.exec(text)) {
     // Marker capture group is m[3]; mask group is m[0]. Prefer the captured
     // full username when present so the stored bidder reflects identity.
@@ -313,7 +316,9 @@ export function parseRetractedSection(retractionText: string): RetractedBid[] {
   for (let m = amountRe.exec(retractionText); m; m = amountRe.exec(retractionText)) {
     tokens.push({ index: m.index, kind: 'amount', value: m[1]!.replace(/,/g, '') });
   }
-  const bidderRe = /([0-9A-Za-z])\*{2,4}([0-9A-Za-z])|__BIDDER_([A-Za-z0-9._-]+)__/g;
+  // Same expanded trailing-char class as parseViewbids: the masked form
+  // can end in `_`, `-`, or `.` when the original username does.
+  const bidderRe = /([0-9A-Za-z])\*{2,4}([0-9A-Za-z_.-])|__BIDDER_([A-Za-z0-9._-]+)__/g;
   for (let m = bidderRe.exec(retractionText); m; m = bidderRe.exec(retractionText)) {
     const value = m[3] ?? m[0];
     tokens.push({ index: m.index, kind: 'bidder', value });

@@ -190,6 +190,43 @@ describe('parseViewbids', () => {
     expect(parseViewbids(RETRACTION_FIXTURE).finalPriceUsd).toBe(100);
   });
 
+  // Mirror of the real retraction row from Ryan's GameStop sign auction:
+  // bidder is masked but ends in "_" (eBay's mask preserves the original
+  // last character), the amount sits in the "Action" column prefixed with
+  // "Retracted:", and BOTH the bid time and retraction time appear in the
+  // same date cell labeled "Bid:" and "Retracted:" respectively.
+  const SELLER_VIEW_RETRACTION_FIXTURE = `
+    <html><body>
+    <table class="app-bid-history__table">
+      <tr><td><a href="https://www.ebay.com/usr/somebidder"><span>somebidder</span></a></td><td>$50.00</td><td>5 May 2026 at 10:00:00am PDT</td></tr>
+    </table>
+    <h2>Bid retraction and cancellation history</h2>
+    <table class="retraction-table">
+      <tr class="retraction-row">
+        <td><span>7***_</span><span class="clipped">Feedback Score</span> (0)</td>
+        <td><span class="cc-text-spans--BOLD">Retracted:</span><span>$21,000.00</span></td>
+        <td>
+          <span class="cc-text-spans--BOLD">Bid:</span><span>6 May 2026 at 1:47:52pm PDT</span>
+          <span class="cc-text-spans--BOLD">Retracted:</span><span>11 May 2026 at 8:03:48am PDT</span>
+        </td>
+      </tr>
+    </table>
+    </body></html>`;
+
+  it('parses retractions whose masked bidder ends in an underscore', () => {
+    const result = parseViewbids(SELLER_VIEW_RETRACTION_FIXTURE);
+    expect(result.retractedBids).toHaveLength(1);
+    expect(result.retractedBids[0]).toEqual({
+      bidder: '7***_',
+      bidAmount: 21000,
+      bidTime: '2026-05-06T20:47:52.000Z',
+      removedAt: '2026-05-11T15:03:48.000Z',
+    });
+    // Retraction must not pollute the active bid list or final price.
+    expect(result.bids.map((b) => b.bidder)).not.toContain('7***_');
+    expect(result.finalPriceUsd).toBe(50);
+  });
+
   // Fixture mirroring the seller's logged-in view of bid history. Three
   // structural quirks that broke the first version of the seller-view
   // parser:
