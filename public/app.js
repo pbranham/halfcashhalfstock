@@ -307,7 +307,7 @@ function renderTotals(snapshot, totals) {
   if (!root) return;
   root.replaceChildren();
   if (!snapshot || !totals) return;
-  const { listingsCount, pricedCount, bidsCount, bidUsd, split } = totals;
+  const { listingsCount, bidsCount, bidUsd, split } = totals;
   const symbol = snapshot.stock?.symbol ?? activeSymbol;
   const items = [
     { label: 'Active listings', value: integer.format(listingsCount) },
@@ -321,19 +321,6 @@ function renderTotals(snapshot, totals) {
       el('div', { class: 'stat' }, [
         el('div', { class: 'stat-label', textContent: stat.label }),
         el('div', { class: 'stat-value', textContent: stat.value }),
-      ]),
-    );
-  }
-  if (pricedCount < listingsCount) {
-    // "Excluded" covers both reasons: non-USD currency or no bids yet.
-    root.appendChild(
-      el('div', { class: 'stat' }, [
-        el('div', { class: 'stat-label', textContent: 'Excluded from totals' }),
-        el('div', {
-          class: 'stat-value',
-          textContent: integer.format(listingsCount - pricedCount),
-          title: 'Listings not contributing to the half/half totals — either non-USD currency or no bids placed yet.',
-        }),
       ]),
     );
   }
@@ -778,8 +765,11 @@ function stop() {
   }
 }
 
-// Stock toggle wiring
+// Stock toggle wiring — sync the active pill to the persisted activeSymbol
+// on first paint (the HTML hard-codes EBAY as active so the load/refresh
+// would otherwise mismatch when GME or a custom ticker is persisted).
 document.querySelectorAll('.stock-btn').forEach((btn) => {
+  btn.classList.toggle('is-active', btn.dataset.symbol === activeSymbol);
   btn.addEventListener('click', () => {
     const newSymbol = btn.dataset.symbol;
     if (newSymbol === activeSymbol) return;
