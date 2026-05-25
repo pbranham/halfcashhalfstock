@@ -131,11 +131,17 @@
       <section id="ended-section" class="ended-section" hidden>
         <header class="ended-header">
           <h2>Recently ended</h2>
+          <div class="ended-price-mode" role="group" aria-label="Stock price reference">
+            <span class="sort-label">Stock price:</span>
+            <button class="ended-mode-btn is-active" data-ended-mode="live">Live</button>
+            <button class="ended-mode-btn" data-ended-mode="at-end">At auction end</button>
+          </div>
           <button id="ended-toggle" class="ended-toggle" type="button" aria-expanded="true">Hide</button>
         </header>
         <p class="ended-help">
           Auctions that have ended in the last 14 days. Final price reflects the last
-          observed bid before the auction closed.
+          observed bid before the auction closed. "At auction end" values each one
+          using the stock close nearest to that auction's end timestamp.
         </p>
         <section id="ended-totals" class="totals ended-totals-grid" aria-live="polite"></section>
         <section id="ended-items" class="items ended-items" aria-live="polite"></section>

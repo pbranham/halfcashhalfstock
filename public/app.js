@@ -43,6 +43,17 @@ function sellerBadgeClass(sellerId) {
   return 'seller-badge';
 }
 
+// --- Ended-section "Live vs At end" stock-price mode ---
+const ENDED_MODES = ['live', 'at-end'];
+function loadEndedPriceMode() {
+  const stored = localStorage.getItem('hchs.endedPriceMode');
+  return ENDED_MODES.includes(stored) ? stored : 'live';
+}
+function saveEndedPriceMode(value) {
+  if (ENDED_MODES.includes(value)) localStorage.setItem('hchs.endedPriceMode', value);
+}
+let currentEndedPriceMode = loadEndedPriceMode();
+
 // --- Ticker state ---
 function loadTickerFromStorage() {
   const stored = localStorage.getItem('ticker');
@@ -159,17 +170,32 @@ function aggregateActiveTotals(items, stockPrice) {
 }
 
 function aggregateEndedTotals(items, stockPrice) {
-  // Only items with a split (i.e. USD currency) contribute to bidUsd/split.
+  // Live split: every USD-priced item contributes at the current stock price.
   const priced = items.filter((i) => i.split !== null && i.split !== undefined);
   const bidUsd = priced.reduce((sum, i) => sum + i.finalPriceUsd, 0);
   const cashUsd = bidUsd / 2;
   const stockUsd = bidUsd / 2;
   const shares = stockPrice > 0 ? stockUsd / stockPrice : 0;
+
+  // End-time split: sum each item's pre-computed endTimeSplit. Items where
+  // OHLC history is missing simply drop out of this aggregate.
+  const pricedAtEnd = items.filter((i) => i.endTimeSplit !== null && i.endTimeSplit !== undefined);
+  const splitAtEnd = pricedAtEnd.reduce(
+    (acc, i) => ({
+      cashUsd: acc.cashUsd + i.endTimeSplit.cashUsd,
+      stockUsd: acc.stockUsd + i.endTimeSplit.stockUsd,
+      shares: acc.shares + i.endTimeSplit.shares,
+    }),
+    { cashUsd: 0, stockUsd: 0, shares: 0 },
+  );
+
   return {
     listingsCount: items.length,
     bidsCount: items.reduce((sum, i) => sum + (i.finalBidCount ?? 0), 0),
     bidUsd,
     split: { cashUsd, stockUsd, shares },
+    splitAtEnd,
+    pricedAtEndCount: pricedAtEnd.length,
   };
 }
 
@@ -375,21 +401,36 @@ function renderEndedSection(snapshot, endedItems, totals) {
   }
   section.hidden = false;
 
+  const atEnd = currentEndedPriceMode === 'at-end';
+
   totalsRoot.replaceChildren();
   if (totals) {
     const symbol = snapshot.stock?.symbol ?? activeSymbol;
+    const displaySplit = atEnd ? totals.splitAtEnd : totals.split;
+    const splitLabelSuffix = atEnd ? '(at end)' : '(live)';
     const stats = [
       { label: 'Ended listings', value: integer.format(totals.listingsCount) },
       { label: 'Total bids on ended', value: integer.format(totals.bidsCount) },
       { label: 'Sum of final bids', value: usd.format(totals.bidUsd) },
-      { label: 'Cash half (final)', value: usd.format(totals.split.cashUsd) },
-      { label: `${symbol} shares (final)`, value: shares.format(totals.split.shares) },
+      { label: `Cash half ${splitLabelSuffix}`, value: usd.format(displaySplit.cashUsd) },
+      { label: `${symbol} shares ${splitLabelSuffix}`, value: shares.format(displaySplit.shares) },
     ];
     for (const stat of stats) {
       totalsRoot.appendChild(
         el('div', { class: 'stat' }, [
           el('div', { class: 'stat-label', textContent: stat.label }),
           el('div', { class: 'stat-value', textContent: stat.value }),
+        ]),
+      );
+    }
+    // When some ended items lack OHLC history, flag the gap so users know
+    // the at-end aggregate is a subset.
+    if (atEnd && totals.pricedAtEndCount < totals.listingsCount) {
+      const missing = totals.listingsCount - totals.pricedAtEndCount;
+      totalsRoot.appendChild(
+        el('div', { class: 'stat' }, [
+          el('div', { class: 'stat-label', textContent: 'Missing end-time price' }),
+          el('div', { class: 'stat-value', textContent: integer.format(missing) }),
         ]),
       );
     }
@@ -435,19 +476,29 @@ function renderEndedItem(item, symbol) {
   );
   body.appendChild(meta);
 
+  const atEnd = currentEndedPriceMode === 'at-end';
+  const displaySplit = atEnd ? item.endTimeSplit : item.split;
+
   const bidRow = el('div', { class: 'item-bid-row' });
   bidRow.appendChild(
     el('div', { class: 'item-bid', textContent: usd.format(item.finalPriceUsd) }),
   );
-  bidRow.appendChild(el('span', { class: 'item-bid-time', textContent: 'final' }));
+  // In at-end mode, show the stock price we used so it's obvious why the
+  // shares column is different from the live view.
+  const bidNote = atEnd
+    ? item.endTimePriceUsd !== null
+      ? `final · $${symbol} ${usd.format(item.endTimePriceUsd)} at end`
+      : 'final · no end-time price'
+    : 'final';
+  bidRow.appendChild(el('span', { class: 'item-bid-time', textContent: bidNote }));
   body.appendChild(bidRow);
 
-  if (item.split) {
+  if (displaySplit) {
     const split = el('div', { class: 'item-split' });
     split.appendChild(el('div', { class: 'label', textContent: 'Cash half' }));
     split.appendChild(el('div', { class: 'label', textContent: `${symbol} shares` }));
-    split.appendChild(el('div', { class: 'value', textContent: usd.format(item.split.cashUsd) }));
-    split.appendChild(el('div', { class: 'value', textContent: shares.format(item.split.shares) }));
+    split.appendChild(el('div', { class: 'value', textContent: usd.format(displaySplit.cashUsd) }));
+    split.appendChild(el('div', { class: 'value', textContent: shares.format(displaySplit.shares) }));
     body.appendChild(split);
   }
   card.appendChild(body);
@@ -771,6 +822,20 @@ document.querySelectorAll('.seller-btn').forEach((btn) => {
       b.classList.toggle('is-active', b === btn),
     );
     if (lastSnapshot) renderFilteredView(lastSnapshot, new Map()); // re-filter; no bid flash
+  });
+});
+
+// Ended-section "Live vs At end" stock price toggle
+document.querySelectorAll('.ended-mode-btn').forEach((btn) => {
+  btn.classList.toggle('is-active', btn.dataset.endedMode === currentEndedPriceMode);
+  btn.addEventListener('click', () => {
+    if (btn.dataset.endedMode === currentEndedPriceMode) return;
+    currentEndedPriceMode = btn.dataset.endedMode;
+    saveEndedPriceMode(currentEndedPriceMode);
+    document.querySelectorAll('.ended-mode-btn').forEach((b) =>
+      b.classList.toggle('is-active', b === btn),
+    );
+    if (lastSnapshot) renderFilteredView(lastSnapshot, new Map()); // re-render ended section
   });
 });
 

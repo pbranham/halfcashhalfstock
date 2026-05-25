@@ -19,6 +19,7 @@ import { runMigrations } from './db/migrate.js';
 import {
   bulkInsertOhlcData,
   forceMarkEnded,
+  getClosingPriceAt,
   persistSnapshot,
   readBidsForItem,
   readEndedListings,
@@ -224,7 +225,19 @@ export function createApp(deps: Deps): express.Express {
         const [listings, quote] = await Promise.all([deps.fetchListings(), deps.fetchQuote(symbol)]);
         const enriched = await enrichWithBidHistory(deps, listings);
         const ended = deps.db ? await readEndedListings(deps.db) : [];
-        return composeSnapshot(enriched, quote, ended);
+        // For end-time pricing, look up each USD-denominated ended item's
+        // EBAY (or selected ticker) close at the moment it ended. One small
+        // SELECT per item — fine for ~36 items, easy to batch later if it
+        // grows.
+        const endTimeClosesByItemId = new Map<string, number | null>();
+        if (deps.db) {
+          for (const e of ended) {
+            if (e.currency !== 'USD') continue;
+            const close = await getClosingPriceAt(deps.db, quote.symbol, new Date(e.endedAt));
+            endTimeClosesByItemId.set(e.itemId, close);
+          }
+        }
+        return composeSnapshot(enriched, quote, ended, endTimeClosesByItemId);
       });
       res
         .status(200)
