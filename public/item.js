@@ -157,7 +157,7 @@ function ebayBidIncrement(amount) {
 // pool and recompute. If the retracted bidder was the leader, the visible
 // price typically drops to the new second-highest + increment.
 function buildChartPointsFromBids(bids, listing) {
-  if (!bids || bids.length === 0) return [];
+  if (!bids || bids.length === 0) return { points: [], maxDots: [] };
 
   const events = [];
   for (const bid of bids) {
@@ -185,6 +185,16 @@ function buildChartPointsFromBids(bids, listing) {
   // their "effective max" is the highest active amount among them.
   const bidderBids = new Map();
   const points = [];
+  // Max dots: hollow markers stacked at the current leader's placement
+  // timestamp, one per distinct defensive proxy level their max was
+  // forced to. Visualizes "how hard this max defended" — a tall stack
+  // means many escalations against rising competition; a single dot
+  // means immediately outbid. This mirrors what eBay's bid-history page
+  // shows publicly (every proxy row is timestamped at the original
+  // max-placement time).
+  const maxDots = [];
+  let lastLeader = null;
+  let lastVisible = NaN;
 
   for (const event of events) {
     const list = bidderBids.get(event.bidder) ?? [];
@@ -198,25 +208,32 @@ function buildChartPointsFromBids(bids, listing) {
       else bidderBids.set(event.bidder, list);
     }
 
-    // Effective max per bidder; active bid count; visible price.
     let activeCount = 0;
     const maxes = [];
     for (const [bidder, items] of bidderBids) {
       activeCount += items.length;
-      maxes.push({ bidder, amount: Math.max(...items.map((b) => b.amount)) });
+      const top = items.reduce((acc, b) => (b.amount > acc.amount ? b : acc));
+      maxes.push({ bidder, amount: top.amount, placedAt: top.placedAt });
     }
     maxes.sort((a, b) => b.amount - a.amount);
 
     let visiblePrice = 0;
+    let leaderPlacedAt = null;
     if (maxes.length === 1) {
-      // Single bidder: we don't know the auction's starting price, so this
-      // is the best approximation — slightly overstates until a second
-      // bidder enters, but that's typically seconds-to-minutes.
       visiblePrice = maxes[0].amount;
+      leaderPlacedAt = maxes[0].placedAt;
     } else if (maxes.length >= 2) {
       const [highest, second] = maxes;
       visiblePrice = Math.min(highest.amount, second.amount + ebayBidIncrement(second.amount));
+      leaderPlacedAt = highest.placedAt;
     }
+
+    const leader = maxes[0]?.bidder ?? null;
+    if (leader && leaderPlacedAt && (leader !== lastLeader || visiblePrice !== lastVisible)) {
+      maxDots.push({ t: new Date(leaderPlacedAt).getTime(), price: visiblePrice });
+    }
+    lastLeader = leader;
+    lastVisible = visiblePrice;
 
     points.push({ t: event.time, price: visiblePrice, count: activeCount });
   }
@@ -230,7 +247,7 @@ function buildChartPointsFromBids(bids, listing) {
       points.push({ t: Date.now(), price: listing.currentPriceUsd, count: listing.currentBidCount });
     }
   }
-  return points;
+  return { points, maxDots };
 }
 
 let chartState = null;
@@ -275,7 +292,7 @@ function generateTimeLabels(tMin, tMax) {
 }
 
 function renderChart(snapshots, listing, bids) {
-  let points = buildChartPointsFromBids(bids, listing);
+  let { points, maxDots } = buildChartPointsFromBids(bids, listing);
 
   if (points.length < 2 && snapshots && snapshots.length > 0) {
     points = snapshots.map((s) => ({
@@ -287,6 +304,8 @@ function renderChart(snapshots, listing, bids) {
     if (last && (last.price !== listing.currentPriceUsd || last.count !== listing.currentBidCount)) {
       points.push({ t: Date.now(), price: listing.currentPriceUsd, count: listing.currentBidCount });
     }
+    // No bid-level data → no max dots to draw.
+    maxDots = [];
   }
 
   if (points.length < 2) {
@@ -296,7 +315,7 @@ function renderChart(snapshots, listing, bids) {
     return;
   }
 
-  chartState = { points, listing };
+  chartState = { points, maxDots, listing };
   drawChart();
   chartSection.hidden = false;
 }
@@ -308,7 +327,7 @@ function defaultChartHelp(points) {
 
 function drawChart() {
   if (!chartState) return;
-  const { points, listing } = chartState;
+  const { points, maxDots = [], listing } = chartState;
   const W = chartWrap.clientWidth || 900;
   const H = 280;
   const PAD = { top: 16, right: 56, bottom: 36, left: 68 };
@@ -317,8 +336,11 @@ function drawChart() {
 
   const tMin = points[0].t;
   const tMax = points[points.length - 1].t;
-  const priceMin = Math.min(...points.map((p) => p.price));
-  const priceMax = Math.max(...points.map((p) => p.price));
+  // Include maxDots in the y-axis range so a tall defense stack isn't
+  // clipped off the top of the chart.
+  const allPrices = [...points.map((p) => p.price), ...maxDots.map((d) => d.price)];
+  const priceMin = Math.min(...allPrices);
+  const priceMax = Math.max(...allPrices);
   const countMin = Math.min(...points.map((p) => p.count));
   const countMax = Math.max(...points.map((p) => p.count));
 
@@ -363,10 +385,19 @@ function drawChart() {
     <circle class="chart-dot" data-idx="${i}" cx="${xFor(p.t).toFixed(1)}" cy="${yPriceFor(p.price).toFixed(1)}" r="3.5" fill="#4caf50" />
   `).join('');
 
+  // Hollow circles stacked at the bidder's max-placement timestamp,
+  // one per proxy-defense level their max was forced to. Drawn BEFORE
+  // the solid dots so the solid leader-dot sits on top when they
+  // coincide.
+  const maxDotMarkers = maxDots.map((d) => `
+    <circle class="chart-max-dot" cx="${xFor(d.t).toFixed(1)}" cy="${yPriceFor(d.price).toFixed(1)}" r="2.5" fill="none" stroke="#4caf50" stroke-width="1.2" opacity="0.5" pointer-events="none" />
+  `).join('');
+
   chartWrap.innerHTML = `
     <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
       <rect x="${PAD.left}" y="${PAD.top}" width="${innerW}" height="${innerH}" fill="rgba(255,255,255,0.02)" />
       ${gridLines}
+      ${maxDotMarkers}
       <path d="${pricePath}" stroke="#4caf50" stroke-width="2" fill="none" />
       <path d="${countPath}" stroke="#ffb74d" stroke-width="1.5" fill="none" stroke-dasharray="4,3" />
       ${dots}
