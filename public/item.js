@@ -479,7 +479,18 @@ function renderChart(snapshots, listing, bids) {
     return;
   }
 
-  chartState = { points, maxDots, retractionMarkers, listing };
+  chartState = {
+    points,
+    maxDots,
+    retractionMarkers,
+    listing,
+    // Bid PLACEMENT timestamps (no retractions) for the volume-bar
+    // histogram. Stored as a precomputed array so drawChart can re-bucket
+    // on scale toggles / resizes without re-walking the bids array.
+    placements: (bids ?? [])
+      .map((b) => new Date(b.bidTime).getTime())
+      .filter((t) => Number.isFinite(t)),
+  };
   // Reveal the chart section BEFORE measuring the wrap's width — otherwise
   // chartWrap.clientWidth is 0 (because the parent is hidden) and drawChart
   // falls back to its 900px default, leaving a phantom right margin once
@@ -497,7 +508,7 @@ function defaultChartHelp(points) {
 
 function drawChart() {
   if (!chartState) return;
-  const { points, maxDots = [], retractionMarkers = [], listing } = chartState;
+  const { points, maxDots = [], retractionMarkers = [], placements: rawPlacements = [], listing } = chartState;
   const W = chartWrap.clientWidth || 900;
   // Bump H + PAD.bottom from the original 280/36 to make room below the
   // x-axis tick labels for the time-mode label without clipping.
@@ -574,7 +585,7 @@ function drawChart() {
   const VOLUME_AXIS_FRACTION = 0.25;
   const volumeAxisH = innerH * VOLUME_AXIS_FRACTION;
   const chartBottomY = PAD.top + innerH;
-  const placements = bids.map((b) => new Date(b.bidTime).getTime()).filter((t) => t >= tMin && t <= tMax);
+  const placements = rawPlacements.filter((t) => t >= tMin && t <= tMax);
   const { bucketMs, buckets } = computeVolumeBuckets(placements, tMin, tMax, innerW);
   const volumeMaxCount = buckets.length === 0 ? 1 : Math.max(1, ...buckets.map((b) => b.count));
   const yVolumeFor = (count) => chartBottomY - (count / volumeMaxCount) * volumeAxisH;
