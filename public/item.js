@@ -382,6 +382,41 @@ function generateTimeLabels(tMin, tMax, chartWidth = 900) {
   return labels;
 }
 
+// Bin bid-placement timestamps into time buckets sized to the chart's
+// pixel width. Targets ~30 bars across the chart (one bar per ~30px),
+// snapping the bucket width to a human-readable ladder (5s, 30s, 1m,
+// 5m, …) so a bar always represents a sensible chunk of time. Returns
+// the chosen bucket width and a sparse list of {t, count} entries for
+// non-empty buckets — empty buckets are simply skipped (no bar drawn).
+function computeVolumeBuckets(placementTimestamps, tMin, tMax, chartWidth) {
+  const range = tMax - tMin;
+  if (range <= 0 || placementTimestamps.length === 0) return { bucketMs: 1, buckets: [] };
+  const targetBarCount = Math.max(8, Math.min(50, Math.floor(chartWidth / 30)));
+  const idealBucketMs = range / targetBarCount;
+  const ladder = [
+    1000, 5000, 10_000, 30_000,
+    60_000, 5 * 60_000, 10 * 60_000, 15 * 60_000, 30 * 60_000,
+    60 * 60_000, 2 * 60 * 60_000, 4 * 60 * 60_000, 12 * 60 * 60_000,
+    24 * 60 * 60_000, 2 * 24 * 60 * 60_000, 7 * 24 * 60 * 60_000,
+  ];
+  let bucketMs = ladder[ladder.length - 1];
+  for (const s of ladder) {
+    if (s >= idealBucketMs) {
+      bucketMs = s;
+      break;
+    }
+  }
+  const counts = new Map();
+  for (const t of placementTimestamps) {
+    const bucketStart = Math.floor((t - tMin) / bucketMs) * bucketMs + tMin;
+    counts.set(bucketStart, (counts.get(bucketStart) || 0) + 1);
+  }
+  const buckets = Array.from(counts.entries())
+    .map(([t, count]) => ({ t, count }))
+    .sort((a, b) => a.t - b.t);
+  return { bucketMs, buckets };
+}
+
 // Log-scale x-axis labels: pick durations from a human ladder (1m, 10m,
 // 1h, 1d, 1w) that fall inside the chart's time range, plus an explicit
 // "start" / "end" anchor at the appropriate boundary. The same ladder
@@ -528,12 +563,31 @@ function drawChart() {
   const yCountFor = (c) => PAD.top + innerH - ((c - countMin) / countRange) * countAxisH;
 
   const pricePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(p.t).toFixed(1)} ${yPriceFor(p.price).toFixed(1)}`).join(' ');
-  // Bid-count as a step area (cumulative bids only ever go up between
-  // events). Step path holds the count flat between bid events and jumps
-  // at each placement, then closes down to the chart's bottom edge so
-  // the SVG can fill it. Subtler than a dashed line — lives in the
-  // background without competing with the price line.
-  const baselineY = (PAD.top + innerH).toFixed(1);
+
+  // Volume histogram + cumulative line, stock-chart style. Volume bars
+  // bin actual bid PLACEMENT events (retractions don't count as new
+  // activity) into time buckets sized for the current chart width. Bar
+  // heights are scaled within their own bottom-25%-of-chart strip
+  // (relative volume comparison only; the right-side count axis labels
+  // the cumulative line). Cumulative bid count is rendered as a thin
+  // line on top — same step-path shape as before, no area fill.
+  const VOLUME_AXIS_FRACTION = 0.25;
+  const volumeAxisH = innerH * VOLUME_AXIS_FRACTION;
+  const chartBottomY = PAD.top + innerH;
+  const placements = bids.map((b) => new Date(b.bidTime).getTime()).filter((t) => t >= tMin && t <= tMax);
+  const { bucketMs, buckets } = computeVolumeBuckets(placements, tMin, tMax, innerW);
+  const volumeMaxCount = buckets.length === 0 ? 1 : Math.max(1, ...buckets.map((b) => b.count));
+  const yVolumeFor = (count) => chartBottomY - (count / volumeMaxCount) * volumeAxisH;
+  const volumeBars = buckets.map((b) => {
+    const x1 = xFor(b.t);
+    const x2 = xFor(b.t + bucketMs);
+    const width = Math.max(1, x2 - x1 - 1);
+    const y = yVolumeFor(b.count);
+    const height = chartBottomY - y;
+    return `<rect x="${x1.toFixed(1)}" y="${y.toFixed(1)}" width="${width.toFixed(1)}" height="${height.toFixed(1)}" fill="#ffb74d" opacity="0.42" />`;
+  }).join('');
+
+  // Cumulative count: step path (no area fill).
   const countLineSegments = [];
   for (let i = 0; i < points.length; i++) {
     const x = xFor(points[i].t).toFixed(1);
@@ -546,9 +600,6 @@ function drawChart() {
     }
   }
   const countLinePath = countLineSegments.join(' ');
-  const firstX = xFor(points[0].t).toFixed(1);
-  const lastX = xFor(points[points.length - 1].t).toFixed(1);
-  const countAreaPath = `M ${firstX} ${baselineY} ${countLineSegments.join(' ').replace(/^M /, 'L ')} L ${lastX} ${baselineY} Z`;
 
   const timeLabels = chartScale.x === 'linear'
     ? generateTimeLabels(tMin, tMax, W)
@@ -659,8 +710,8 @@ function drawChart() {
   chartWrap.innerHTML = `
     <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
       <rect x="${PAD.left}" y="${PAD.top}" width="${innerW}" height="${innerH}" fill="rgba(255,255,255,0.02)" />
-      <path d="${countAreaPath}" fill="#ffb74d" opacity="0.18" stroke="none" />
-      <path d="${countLinePath}" stroke="#ffb74d" stroke-width="1.2" fill="none" opacity="0.7" />
+      ${volumeBars}
+      <path d="${countLinePath}" stroke="#ffd54f" stroke-width="1" fill="none" opacity="0.55" />
       ${gridLines}
       ${maxDotMarkers}
       ${retractionMarkerSvg}
