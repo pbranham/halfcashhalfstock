@@ -184,6 +184,38 @@ describe('parseViewbids', () => {
     expect(bidders).not.toContain('x***n');
   });
 
+  // When every bid has been retracted (or none placed yet), eBay's
+  // seller-view explicitly says "Bids: 0 Bidders: 0" — distinct from
+  // a parse failure where we can't find bid data we expected. Used by
+  // persistence to safely reconcile down to zero active bids.
+  const ZERO_BIDS_FIXTURE = `
+    <html><body>
+    <h1>Status for seller: Your item has no bids.</h1>
+    <p>Time Magazine December 25, 2006 / January 1, 2007 Person of the Year Mirror Cover</p>
+    <p>Starting Bid: <span>$109.42</span></p>
+    <p>Shipping: $6.48 Standard Shipping</p>
+    <p>Item number: 206296817337</p>
+    <p>Bids: 0 Bidders: 0 Retractions: 1</p>
+    </body></html>`;
+
+  it('accepts "Bids: 0" pages as a successful empty parse instead of throwing', () => {
+    const r = parseViewbids(ZERO_BIDS_FIXTURE);
+    expect(r.bids).toEqual([]);
+    expect(r.bidCount).toBe(0);
+    expect(r.knownZeroBids).toBe(true);
+  });
+
+  it('extracts the starting bid as finalPriceUsd when the auction is at zero bids', () => {
+    const r = parseViewbids(ZERO_BIDS_FIXTURE);
+    expect(r.finalPriceUsd).toBe(109.42);
+  });
+
+  it('still throws when bids are missing and there is no zero-bid marker', () => {
+    expect(() => parseViewbids('<html><body><p>Some unrelated page.</p></body></html>')).toThrow(
+      /no bids found/,
+    );
+  });
+
   it('does not affect final price when only retracted bids exceed it', () => {
     // The retraction row's $1,234.00 must not leak into finalPriceUsd —
     // the active section's only valid bidder is 3***2 at $100.00.

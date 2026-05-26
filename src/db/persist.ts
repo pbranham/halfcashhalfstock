@@ -177,11 +177,23 @@ export interface RetractedBidInput {
 // behind. Retracted bids are inserted with `removed_at` populated so they show
 // up in the item-page bid timeline as retracted but don't count toward the
 // listing's bidCount or finalPrice.
+export interface ReconcileOptions {
+  // Caller has positive evidence that the auction currently has zero active
+  // bids (e.g. eBay's page explicitly said "Bids: 0"). Without this signal,
+  // an empty bids array is treated as a failed parse and refused.
+  knownZeroBids?: boolean;
+  // When reconciling down to zero active bids, set listings.current_price_usd
+  // to this value (typically the starting bid). If omitted, the column is
+  // left at whatever's already there.
+  zeroBidsPriceUsd?: number;
+}
+
 export async function reconcileItemBids(
   pool: Pool,
   itemId: string,
   bids: readonly BidRecord[],
   retracted: readonly RetractedBidInput[] = [],
+  options: ReconcileOptions = {},
 ): Promise<{
   deleted: number;
   inserted: number;
@@ -192,8 +204,9 @@ export async function reconcileItemBids(
   const valid = bids.filter(
     (b) => b.bidTime && Number.isFinite(b.bidAmount) && b.bidAmount >= 0,
   );
-  // Guard: never let an empty/failed parse wipe good data.
-  if (valid.length === 0) {
+  // Guard: never let an empty/failed parse wipe good data UNLESS the caller
+  // has positive evidence that the auction is truly at zero active bids.
+  if (valid.length === 0 && !options.knownZeroBids) {
     throw new Error('reconcileItemBids: refusing to replace bids with zero valid rows');
   }
   const validRetracted = retracted.filter(
@@ -203,7 +216,9 @@ export async function reconcileItemBids(
       Number.isFinite(b.bidAmount) &&
       b.bidAmount >= 0,
   );
-  const finalPriceUsd = valid.reduce((max, b) => (b.bidAmount > max ? b.bidAmount : max), 0);
+  const finalPriceUsd = valid.length > 0
+    ? valid.reduce((max, b) => (b.bidAmount > max ? b.bidAmount : max), 0)
+    : (options.zeroBidsPriceUsd ?? 0);
   const bidCount = valid.length;
 
   const client = await pool.connect();
@@ -211,20 +226,23 @@ export async function reconcileItemBids(
     await client.query('BEGIN');
     const del = await client.query('DELETE FROM bids WHERE item_id = $1', [itemId]);
 
-    const values: unknown[] = [];
-    const placeholders = valid
-      .map((bid, i) => {
-        const base = i * 4;
-        values.push(itemId, bid.bidder || 'unknown', bid.bidTime, bid.bidAmount);
-        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`;
-      })
-      .join(', ');
-    const ins = await client.query(
-      `INSERT INTO bids (item_id, bidder, bid_time, bid_amount_usd)
-       VALUES ${placeholders}
-       ON CONFLICT (item_id, bid_time, bidder) DO NOTHING`,
-      values,
-    );
+    let ins = { rowCount: 0 as number | null };
+    if (valid.length > 0) {
+      const values: unknown[] = [];
+      const placeholders = valid
+        .map((bid, i) => {
+          const base = i * 4;
+          values.push(itemId, bid.bidder || 'unknown', bid.bidTime, bid.bidAmount);
+          return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`;
+        })
+        .join(', ');
+      ins = await client.query(
+        `INSERT INTO bids (item_id, bidder, bid_time, bid_amount_usd)
+         VALUES ${placeholders}
+         ON CONFLICT (item_id, bid_time, bidder) DO NOTHING`,
+        values,
+      );
+    }
 
     let retractedInserted = 0;
     if (validRetracted.length > 0) {
