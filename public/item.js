@@ -518,7 +518,14 @@ function drawChart() {
   const yPriceFor = chartScale.y === 'log'
     ? (p) => PAD.top + innerH - ((Math.log10(Math.max(LOG_FLOOR, p)) - logMin) / logRange) * innerH
     : (p) => PAD.top + innerH - ((p - priceMin) / priceRange) * innerH;
-  const yCountFor = (c) => PAD.top + innerH - ((c - countMin) / countRange) * innerH;
+  // Bid count occupies only the bottom slice of the chart height so the
+  // secondary axis doesn't visually compete with the price line. Without
+  // this cap, both series converged in the top-right corner — busy and
+  // misleading. 40% leaves the count area as a "shadow" at the bottom
+  // while preserving the rising-step signal.
+  const COUNT_AXIS_FRACTION = 0.4;
+  const countAxisH = innerH * COUNT_AXIS_FRACTION;
+  const yCountFor = (c) => PAD.top + innerH - ((c - countMin) / countRange) * countAxisH;
 
   const pricePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(p.t).toFixed(1)} ${yPriceFor(p.price).toFixed(1)}`).join(' ');
   // Bid-count as a step area (cumulative bids only ever go up between
