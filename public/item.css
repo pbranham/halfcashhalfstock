@@ -155,15 +155,15 @@
 .chart-legend .volume-bars {
   width: 10px;
   height: 8px;
-  background: rgba(255, 183, 77, 0.42);
+  background: rgba(255, 183, 77, 0.28);
   border-radius: 0;
 }
 
 .chart-legend .cumulative-line {
   width: 14px;
   height: 2px;
-  background: #ffd54f;
-  opacity: 0.7;
+  background: #fff176;
+  opacity: 0.85;
 }
 
 .chart-help {

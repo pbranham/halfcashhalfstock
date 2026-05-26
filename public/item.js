@@ -595,7 +595,7 @@ function drawChart() {
     const width = Math.max(1, x2 - x1 - 1);
     const y = yVolumeFor(b.count);
     const height = chartBottomY - y;
-    return `<rect x="${x1.toFixed(1)}" y="${y.toFixed(1)}" width="${width.toFixed(1)}" height="${height.toFixed(1)}" fill="#ffb74d" opacity="0.42" />`;
+    return `<rect x="${x1.toFixed(1)}" y="${y.toFixed(1)}" width="${width.toFixed(1)}" height="${height.toFixed(1)}" fill="#ffb74d" opacity="0.28" />`;
   }).join('');
 
   // Cumulative count: step path (no area fill).
@@ -722,7 +722,7 @@ function drawChart() {
     <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
       <rect x="${PAD.left}" y="${PAD.top}" width="${innerW}" height="${innerH}" fill="rgba(255,255,255,0.02)" />
       ${volumeBars}
-      <path d="${countLinePath}" stroke="#ffd54f" stroke-width="1" fill="none" opacity="0.55" />
+      <path d="${countLinePath}" stroke="#fff176" stroke-width="1.3" fill="none" opacity="0.85" />
       ${gridLines}
       ${maxDotMarkers}
       ${retractionMarkerSvg}
