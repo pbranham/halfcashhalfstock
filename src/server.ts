@@ -204,10 +204,29 @@ export function createApp(deps: Deps): express.Express {
 
   const snapshotCache = new TtlCache<Snapshot>();
 
+  // Cache for end-time stock closes: the OHLC close for a fixed (item,
+  // ticker) pair never changes — the past doesn't change — so look it up
+  // once and reuse forever. Lost on process restart, which is fine; the
+  // cache repopulates on the next snapshot. Nulls are cached too: "no
+  // OHLC row at this timestamp" is also immutable. If the admin backfills
+  // OHLC history later, restart the server to pick up new values.
+  // Key: `${itemId}:${ticker}`.
+  const endClosesCache = new Map<string, number | null>();
+
   app.get('/api/snapshot', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const rawSymbol = typeof req.query.symbol === 'string' ? req.query.symbol.trim().toUpperCase() : '';
       const symbol = rawSymbol && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(rawSymbol) ? rawSymbol : deps.config.STOCK_SYMBOL;
+
+      // Window of ended listings to include. Defaults to 14 days (the
+      // "Recently ended" view); the dashboard's "All time" toggle passes a
+      // much larger value. Cap to ~100 years to keep the range sane.
+      const rawEndedDays = typeof req.query.endedDays === 'string'
+        ? Number.parseInt(req.query.endedDays, 10)
+        : 14;
+      const endedDays = Number.isFinite(rawEndedDays) && rawEndedDays > 0 && rawEndedDays <= 36500
+        ? rawEndedDays
+        : 14;
 
       if (deps.tickerQueue && !deps.tickerQueue.isKnown(symbol)) {
         if (deps.tickerQueue.isBlacklisted(symbol)) {
@@ -222,20 +241,37 @@ export function createApp(deps: Deps): express.Express {
         }
       }
 
-      const snapshot = await snapshotCache.get(`snapshot:${symbol}`, SNAPSHOT_TTL_MS, async () => {
+      const snapshot = await snapshotCache.get(`snapshot:${symbol}:ed${endedDays}`, SNAPSHOT_TTL_MS, async () => {
         const [listings, quote] = await Promise.all([deps.fetchListings(), deps.fetchQuote(symbol)]);
         const enriched = await enrichWithBidHistory(deps, listings);
-        const ended = deps.db ? await readEndedListings(deps.db) : [];
-        // For end-time pricing, look up each USD-denominated ended item's
-        // EBAY (or selected ticker) close at the moment it ended. One small
-        // SELECT per item — fine for ~36 items, easy to batch later if it
-        // grows.
+        const ended = deps.db ? await readEndedListings(deps.db, endedDays) : [];
+        // For each USD-denominated ended item, find the OHLC close at the
+        // moment it ended. The result is fixed forever for any given
+        // (itemId, ticker) pair, so consult the process-level cache first
+        // and only DB-query the misses. Misses are queried in parallel so
+        // a cold start doesn't serialize round-trips.
         const endTimeClosesByItemId = new Map<string, number | null>();
         if (deps.db) {
-          for (const e of ended) {
-            if (e.currency !== 'USD') continue;
-            const close = await getClosingPriceAt(deps.db, quote.symbol, new Date(e.endedAt));
-            endTimeClosesByItemId.set(e.itemId, close);
+          const db = deps.db;
+          const usdEnded = ended.filter((e) => e.currency === 'USD');
+          const misses: Array<{ itemId: string; endedAt: string }> = [];
+          for (const e of usdEnded) {
+            const key = `${e.itemId}:${quote.symbol}`;
+            if (endClosesCache.has(key)) {
+              endTimeClosesByItemId.set(e.itemId, endClosesCache.get(key) ?? null);
+            } else {
+              misses.push({ itemId: e.itemId, endedAt: e.endedAt });
+            }
+          }
+          if (misses.length > 0) {
+            const fetched = await Promise.all(
+              misses.map((m) => getClosingPriceAt(db, quote.symbol, new Date(m.endedAt))),
+            );
+            misses.forEach((m, i) => {
+              const close = fetched[i] ?? null;
+              endClosesCache.set(`${m.itemId}:${quote.symbol}`, close);
+              endTimeClosesByItemId.set(m.itemId, close);
+            });
           }
         }
         return composeSnapshot(enriched, quote, ended, endTimeClosesByItemId);
