@@ -204,6 +204,15 @@ export function createApp(deps: Deps): express.Express {
 
   const snapshotCache = new TtlCache<Snapshot>();
 
+  // Cache for end-time stock closes: the OHLC close for a fixed (item,
+  // ticker) pair never changes — the past doesn't change — so look it up
+  // once and reuse forever. Lost on process restart, which is fine; the
+  // cache repopulates on the next snapshot. Nulls are cached too: "no
+  // OHLC row at this timestamp" is also immutable. If the admin backfills
+  // OHLC history later, restart the server to pick up new values.
+  // Key: `${itemId}:${ticker}`.
+  const endClosesCache = new Map<string, number | null>();
+
   app.get('/api/snapshot', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const rawSymbol = typeof req.query.symbol === 'string' ? req.query.symbol.trim().toUpperCase() : '';
@@ -236,23 +245,34 @@ export function createApp(deps: Deps): express.Express {
         const [listings, quote] = await Promise.all([deps.fetchListings(), deps.fetchQuote(symbol)]);
         const enriched = await enrichWithBidHistory(deps, listings);
         const ended = deps.db ? await readEndedListings(deps.db, endedDays) : [];
-        // For end-time pricing, look up each USD-denominated ended item's
-        // EBAY (or selected ticker) close at the moment it ended. Issue
-        // the queries in parallel via Promise.all so a wide "All time"
-        // window doesn't serialize ~50+ round-trips and hold the pg pool
-        // long enough to stall concurrent snapshot requests. Each query
-        // is itself a primary-key range scan, so they all return quickly
-        // — the bottleneck was the sequential await chain.
+        // For each USD-denominated ended item, find the OHLC close at the
+        // moment it ended. The result is fixed forever for any given
+        // (itemId, ticker) pair, so consult the process-level cache first
+        // and only DB-query the misses. Misses are queried in parallel so
+        // a cold start doesn't serialize round-trips.
         const endTimeClosesByItemId = new Map<string, number | null>();
         if (deps.db) {
           const db = deps.db;
           const usdEnded = ended.filter((e) => e.currency === 'USD');
-          const closes = await Promise.all(
-            usdEnded.map((e) => getClosingPriceAt(db, quote.symbol, new Date(e.endedAt))),
-          );
-          usdEnded.forEach((e, i) => {
-            endTimeClosesByItemId.set(e.itemId, closes[i] ?? null);
-          });
+          const misses: Array<{ itemId: string; endedAt: string }> = [];
+          for (const e of usdEnded) {
+            const key = `${e.itemId}:${quote.symbol}`;
+            if (endClosesCache.has(key)) {
+              endTimeClosesByItemId.set(e.itemId, endClosesCache.get(key) ?? null);
+            } else {
+              misses.push({ itemId: e.itemId, endedAt: e.endedAt });
+            }
+          }
+          if (misses.length > 0) {
+            const fetched = await Promise.all(
+              misses.map((m) => getClosingPriceAt(db, quote.symbol, new Date(m.endedAt))),
+            );
+            misses.forEach((m, i) => {
+              const close = fetched[i] ?? null;
+              endClosesCache.set(`${m.itemId}:${quote.symbol}`, close);
+              endTimeClosesByItemId.set(m.itemId, close);
+            });
+          }
         }
         return composeSnapshot(enriched, quote, ended, endTimeClosesByItemId);
       });
