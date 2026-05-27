@@ -425,11 +425,21 @@ function renderEndedSection(snapshot, endedItems, totals) {
   const totalsRoot = document.getElementById('ended-totals');
   if (!section || !root || !totalsRoot) return;
 
+  // Always show the section once a snapshot has loaded — the time-window
+  // toggle in the header needs to be reachable even when the current
+  // window happens to be empty (e.g. nothing ended in the last 14 days
+  // but the user wants to see older items via "All time"). Empty-state
+  // message replaces the cards while keeping the controls accessible.
+  section.hidden = false;
+
   if (!endedItems || endedItems.length === 0) {
-    section.hidden = true;
+    totalsRoot.replaceChildren();
+    const message = currentEndedWindow === 'all'
+      ? 'No ended auctions in your history yet.'
+      : 'No auctions ended in the last 14 days. Try "All time" to see older items.';
+    root.replaceChildren(el('div', { class: 'empty', textContent: message }));
     return;
   }
-  section.hidden = false;
 
   const atEnd = currentEndedPriceMode === 'at-end';
 

@@ -237,16 +237,22 @@ export function createApp(deps: Deps): express.Express {
         const enriched = await enrichWithBidHistory(deps, listings);
         const ended = deps.db ? await readEndedListings(deps.db, endedDays) : [];
         // For end-time pricing, look up each USD-denominated ended item's
-        // EBAY (or selected ticker) close at the moment it ended. One small
-        // SELECT per item — fine for ~36 items, easy to batch later if it
-        // grows.
+        // EBAY (or selected ticker) close at the moment it ended. Issue
+        // the queries in parallel via Promise.all so a wide "All time"
+        // window doesn't serialize ~50+ round-trips and hold the pg pool
+        // long enough to stall concurrent snapshot requests. Each query
+        // is itself a primary-key range scan, so they all return quickly
+        // — the bottleneck was the sequential await chain.
         const endTimeClosesByItemId = new Map<string, number | null>();
         if (deps.db) {
-          for (const e of ended) {
-            if (e.currency !== 'USD') continue;
-            const close = await getClosingPriceAt(deps.db, quote.symbol, new Date(e.endedAt));
-            endTimeClosesByItemId.set(e.itemId, close);
-          }
+          const db = deps.db;
+          const usdEnded = ended.filter((e) => e.currency === 'USD');
+          const closes = await Promise.all(
+            usdEnded.map((e) => getClosingPriceAt(db, quote.symbol, new Date(e.endedAt))),
+          );
+          usdEnded.forEach((e, i) => {
+            endTimeClosesByItemId.set(e.itemId, closes[i] ?? null);
+          });
         }
         return composeSnapshot(enriched, quote, ended, endTimeClosesByItemId);
       });
