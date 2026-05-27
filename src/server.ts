@@ -209,6 +209,16 @@ export function createApp(deps: Deps): express.Express {
       const rawSymbol = typeof req.query.symbol === 'string' ? req.query.symbol.trim().toUpperCase() : '';
       const symbol = rawSymbol && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(rawSymbol) ? rawSymbol : deps.config.STOCK_SYMBOL;
 
+      // Window of ended listings to include. Defaults to 14 days (the
+      // "Recently ended" view); the dashboard's "All time" toggle passes a
+      // much larger value. Cap to ~100 years to keep the range sane.
+      const rawEndedDays = typeof req.query.endedDays === 'string'
+        ? Number.parseInt(req.query.endedDays, 10)
+        : 14;
+      const endedDays = Number.isFinite(rawEndedDays) && rawEndedDays > 0 && rawEndedDays <= 36500
+        ? rawEndedDays
+        : 14;
+
       if (deps.tickerQueue && !deps.tickerQueue.isKnown(symbol)) {
         if (deps.tickerQueue.isBlacklisted(symbol)) {
           res.status(400).json({ error: 'invalid_ticker', symbol });
@@ -222,10 +232,10 @@ export function createApp(deps: Deps): express.Express {
         }
       }
 
-      const snapshot = await snapshotCache.get(`snapshot:${symbol}`, SNAPSHOT_TTL_MS, async () => {
+      const snapshot = await snapshotCache.get(`snapshot:${symbol}:ed${endedDays}`, SNAPSHOT_TTL_MS, async () => {
         const [listings, quote] = await Promise.all([deps.fetchListings(), deps.fetchQuote(symbol)]);
         const enriched = await enrichWithBidHistory(deps, listings);
-        const ended = deps.db ? await readEndedListings(deps.db) : [];
+        const ended = deps.db ? await readEndedListings(deps.db, endedDays) : [];
         // For end-time pricing, look up each USD-denominated ended item's
         // EBAY (or selected ticker) close at the moment it ended. One small
         // SELECT per item — fine for ~36 items, easy to batch later if it

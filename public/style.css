@@ -715,14 +715,16 @@ footer .disclaimer {
   color: #c4956b;
 }
 
-.ended-price-mode {
+.ended-price-mode,
+.ended-window {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
 
-.ended-mode-btn {
+.ended-mode-btn,
+.ended-window-btn {
   background: none;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -734,12 +736,14 @@ footer .disclaimer {
   transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
 
-.ended-mode-btn:hover {
+.ended-mode-btn:hover,
+.ended-window-btn:hover {
   border-color: var(--fg-muted);
   color: var(--fg);
 }
 
-.ended-mode-btn.is-active {
+.ended-mode-btn.is-active,
+.ended-window-btn.is-active {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-soft);

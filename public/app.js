@@ -63,6 +63,22 @@ function saveEndedPriceMode(value) {
 }
 let currentEndedPriceMode = loadEndedPriceMode();
 
+// --- Ended-section time window ("Recently ended" vs "All time") ---
+// The "all" value caps at the server's 36500-day max (~100 years) so we
+// effectively fetch everything ever ended. The DB never deletes ended
+// listings — they accumulate indefinitely under the listings table — so
+// this is the right way to expose the full history.
+const ENDED_WINDOWS = ['recent', 'all'];
+const ENDED_WINDOW_DAYS = { recent: 14, all: 36500 };
+function loadEndedWindow() {
+  const stored = localStorage.getItem('hchs.endedWindow');
+  return ENDED_WINDOWS.includes(stored) ? stored : 'recent';
+}
+function saveEndedWindow(value) {
+  if (ENDED_WINDOWS.includes(value)) localStorage.setItem('hchs.endedWindow', value);
+}
+let currentEndedWindow = loadEndedWindow();
+
 // --- Ticker state ---
 function loadTickerFromStorage() {
   const stored = localStorage.getItem('ticker');
@@ -700,7 +716,8 @@ let lastKnownGoodSymbol = activeSymbol;
 
 async function refresh() {
   try {
-    const res = await fetch(`/api/snapshot?symbol=${encodeURIComponent(activeSymbol)}`, { headers: { Accept: 'application/json' } });
+    const endedDays = ENDED_WINDOW_DAYS[currentEndedWindow];
+    const res = await fetch(`/api/snapshot?symbol=${encodeURIComponent(activeSymbol)}&endedDays=${endedDays}`, { headers: { Accept: 'application/json' } });
     if (!res.ok) {
       let body = null;
       try {
@@ -874,6 +891,41 @@ document.querySelectorAll('.ended-mode-btn').forEach((btn) => {
       b.classList.toggle('is-active', b === btn),
     );
     if (lastSnapshot) renderFilteredView(lastSnapshot, new Map()); // re-render ended section
+  });
+});
+
+// Reflect the "Recently ended" vs "Ended (all time)" heading + help text
+// to match whichever window is currently selected.
+function updateEndedHeading() {
+  const heading = document.getElementById('ended-heading');
+  if (heading) {
+    heading.textContent = currentEndedWindow === 'all' ? 'Ended' : 'Recently ended';
+  }
+  const help = document.getElementById('ended-help');
+  if (help) {
+    help.firstChild.nodeValue = currentEndedWindow === 'all'
+      ? '\n          Every auction ever ended in our records. Final price reflects the last\n          observed bid before the auction closed. "At auction end" values each one'
+      : '\n          Auctions that have ended in the last 14 days. Final price reflects the last\n          observed bid before the auction closed. "At auction end" values each one';
+  }
+}
+updateEndedHeading();
+
+// Ended-section time-window toggle ("Recently ended" / "All time").
+// Unlike the stock-price toggle this REFETCHES the snapshot because the
+// server controls which ended rows are returned — passing endedDays on
+// the query string. The cache key includes endedDays so each window
+// gets its own cached snapshot.
+document.querySelectorAll('.ended-window-btn').forEach((btn) => {
+  btn.classList.toggle('is-active', btn.dataset.endedWindow === currentEndedWindow);
+  btn.addEventListener('click', () => {
+    if (btn.dataset.endedWindow === currentEndedWindow) return;
+    currentEndedWindow = btn.dataset.endedWindow;
+    saveEndedWindow(currentEndedWindow);
+    document.querySelectorAll('.ended-window-btn').forEach((b) =>
+      b.classList.toggle('is-active', b === btn),
+    );
+    updateEndedHeading();
+    refresh();
   });
 });
 
