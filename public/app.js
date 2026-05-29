@@ -433,25 +433,53 @@ function historyLink(itemId) {
 let currentTickerLogoUrl = null;
 let currentTickerSymbol = '';
 
+// The ticker logo <img>, or null when no logo is configured. Callers decide
+// the fallback: the inline "shares" unit (sharesUnit) or simply nothing (the
+// split's "Half Stock" label, which already names the asset).
+function tickerLogoImg() {
+  if (!currentTickerLogoUrl) return null;
+  return el('img', {
+    class: 'ticker-logo',
+    src: currentTickerLogoUrl,
+    alt: currentTickerSymbol,
+    title: currentTickerSymbol,
+    loading: 'lazy',
+  });
+}
+
 // The "unit" trailing the shares value — the ticker logo when available
 // (mirrors a currency glyph), otherwise the spelled-out word "shares". The
 // img onerror handler downgrades to the text unit if the logo fails to
 // load (network error, unknown ticker, etc.) without leaving a broken icon.
 function sharesUnit() {
-  if (currentTickerLogoUrl) {
-    const img = el('img', {
-      class: 'ticker-logo',
-      src: currentTickerLogoUrl,
-      alt: currentTickerSymbol,
-      title: currentTickerSymbol,
-      loading: 'lazy',
-    });
+  const img = tickerLogoImg();
+  if (img) {
     img.addEventListener('error', () => {
       img.replaceWith(el('span', { class: 'unit', textContent: 'shares' }));
     });
     return img;
   }
   return el('span', { class: 'unit', textContent: 'shares' });
+}
+
+// The half-cash / half-stock split box shared by active and ended cards. Two
+// label/value pillars; the ticker logo rides in the "Half Stock" label (a
+// constant-width spot on every tile) so the value column stays a pure number
+// that can't bleed the icon outside the tile. On logo load failure the chip
+// just disappears — the label text still conveys which asset it is.
+function splitBox(cashUsd, sharesAmount) {
+  const split = el('div', { class: 'item-split' });
+  split.appendChild(el('div', { class: 'label', textContent: 'Half Cash' }));
+  const stockLabel = el('div', { class: 'label label-stock', textContent: 'Half Stock' });
+  const logo = tickerLogoImg();
+  if (logo) {
+    logo.addEventListener('error', () => logo.remove());
+    stockLabel.appendChild(logo);
+  }
+  split.appendChild(stockLabel);
+  split.appendChild(el('div', { class: 'value', textContent: usd.format(cashUsd) }));
+  split.appendChild(el('div', { class: 'value', textContent: sharesCompact.format(sharesAmount) }));
+  return split;
 }
 
 // Format a shares amount as "{N} <unit>" where the unit is the ticker logo
@@ -519,12 +547,7 @@ function renderItem(item, symbol) {
   bidRow.appendChild(historyLink(item.itemId));
   body.appendChild(bidRow);
   if (item.split) {
-    const split = el('div', { class: 'item-split' });
-    split.appendChild(el('div', { class: 'label', textContent: 'Half Cash' }));
-    split.appendChild(el('div', { class: 'label', textContent: 'Half Stock' }));
-    split.appendChild(el('div', { class: 'value', textContent: usd.format(item.split.cashUsd) }));
-    split.appendChild(el('div', { class: 'value' }, [sharesValue(item.split.shares, { compact: true })]));
-    body.appendChild(split);
+    body.appendChild(splitBox(item.split.cashUsd, item.split.shares));
   }
   card.appendChild(body);
   return card;
@@ -640,12 +663,7 @@ function renderEndedItem(item) {
   body.appendChild(bidRow);
 
   if (displaySplit) {
-    const split = el('div', { class: 'item-split' });
-    split.appendChild(el('div', { class: 'label', textContent: 'Half Cash' }));
-    split.appendChild(el('div', { class: 'label', textContent: 'Half Stock' }));
-    split.appendChild(el('div', { class: 'value', textContent: usd.format(displaySplit.cashUsd) }));
-    split.appendChild(el('div', { class: 'value' }, [sharesValue(displaySplit.shares, { compact: true })]));
-    body.appendChild(split);
+    body.appendChild(splitBox(displaySplit.cashUsd, displaySplit.shares));
   }
   card.appendChild(body);
   return card;

@@ -593,12 +593,30 @@ main {
   letter-spacing: 0.06em;
 }
 
+/* The "Half Stock" label carries the ticker logo as a small brand chip in a
+   constant spot on every tile — keeping it out of the (variable-width) value
+   so the icon can never bleed past the tile edge. */
+.item-split .label-stock {
+  display: flex;
+  align-items: center;
+  gap: 0.35em;
+}
+
+.item-split .label-stock .ticker-logo {
+  margin-left: 0;
+  width: 1.25em;
+  height: 1.25em;
+}
+
 .item-split .value {
   font-size: 15px;
   font-weight: 600;
   /* Keep the value on a single line. Per-tile splits use the compact
-     4-sig-fig form (sharesCompact) so typical numbers fit without wrap. */
+     4-sig-fig form (sharesCompact) so typical numbers fit without wrap.
+     min-width:0 lets the two 1fr columns stay an even 50/50 split rather
+     than letting a wide value steal width and wrap the labels unevenly. */
   white-space: nowrap;
+  min-width: 0;
 }
 
 /* Spelled-out "shares" unit — used only when no ticker logo is configured
