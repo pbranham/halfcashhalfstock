@@ -60,10 +60,19 @@ export class TtlCache<T> {
 export class DbBackedCache<T> {
   readonly #memory: TtlCache<T>;
   readonly #pool: Pool;
+  // True when the most recent load fell back to a past-TTL row because the
+  // live fetch failed. Lets callers surface a "live updates are delayed"
+  // signal without ever hiding the (stale) data. Self-heals: the next
+  // fresh DB hit or successful live fetch clears it.
+  #degraded = false;
 
   constructor(pool: Pool, options: TtlCacheOptions = {}) {
     this.#pool = pool;
     this.#memory = new TtlCache(options);
+  }
+
+  get degraded(): boolean {
+    return this.#degraded;
   }
 
   async get(key: string, ttlMs: number, loader: () => Promise<T>): Promise<T> {
@@ -72,11 +81,13 @@ export class DbBackedCache<T> {
 
     const dbCached = await this.checkDb(key);
     if (dbCached !== undefined) {
+      this.#degraded = false;
       return dbCached;
     }
 
     try {
       const value = await this.#memory.get(key, ttlMs, loader);
+      this.#degraded = false;
       await this.storeDb(key, value, ttlMs).catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`Failed to cache ${key} to DB:`, message);
@@ -90,7 +101,10 @@ export class DbBackedCache<T> {
       // and this masks cold-start races where the fresh row just expired.
       // Only propagate the error when there's no cached value at all.
       const stale = await this.checkDbStale(key);
-      if (stale !== undefined) return stale;
+      if (stale !== undefined) {
+        this.#degraded = true;
+        return stale;
+      }
       throw err;
     }
   }

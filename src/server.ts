@@ -67,6 +67,10 @@ interface Deps {
   log: Logger;
   fetchListings: () => Promise<Listing[]>;
   fetchQuote: (symbol: string) => Promise<PriceQuote>;
+  // True when the listings/quote caches last served past-TTL data because
+  // the live upstream fetch failed — i.e. data is being shown but live
+  // updates are currently failing. Surfaced to the client as snapshot.degraded.
+  dataDegraded?: () => boolean;
   db?: Pool | null;
   tickerQueue?: TickerQueue | null;
   requestStats?: RequestStatsCollector | null;
@@ -150,7 +154,11 @@ function buildDeps(
     };
   }
 
-  return { config, log, fetchListings, fetchQuote, db, tickerQueue, requestStats };
+  const dataDegraded = (): boolean =>
+    (priceCache instanceof DbBackedCache && priceCache.degraded) ||
+    (listingCache instanceof DbBackedCache && listingCache.degraded);
+
+  return { config, log, fetchListings, fetchQuote, dataDegraded, db, tickerQueue, requestStats };
 }
 
 export function createApp(deps: Deps): express.Express {
@@ -276,10 +284,14 @@ export function createApp(deps: Deps): express.Express {
         }
         return composeSnapshot(enriched, quote, ended, endTimeClosesByItemId);
       });
+      // Computed per-request (not baked into the cached snapshot) so the
+      // "live updates delayed" signal reflects current cache health rather
+      // than whatever it was when the snapshot was last composed.
+      const degraded = deps.dataDegraded?.() ?? false;
       res
         .status(200)
         .set('Cache-Control', 'public, max-age=15')
-        .json(snapshot);
+        .json({ ...snapshot, degraded });
     } catch (err) {
       next(err);
     }

@@ -336,6 +336,15 @@ function renderLastUpdated(snapshot) {
   setText(el, `Updated ${generated.toLocaleTimeString()}`);
 }
 
+function renderDegradedBanner(snapshot) {
+  const banner = document.getElementById('degraded-banner');
+  if (!banner) return;
+  // snapshot.degraded is set by the server when the listings/quote caches
+  // are serving past-TTL data because live fetches are failing. We still
+  // render all the (stale) data — this just flags that it's not live.
+  banner.hidden = !snapshot?.degraded;
+}
+
 function renderPriceSource(snapshot) {
   const el = document.getElementById('price-source');
   if (!el) return;
@@ -836,6 +845,7 @@ async function refresh() {
     const snapshot = await res.json();
     lastKnownGoodSymbol = activeSymbol;
     saveTickerToStorage(activeSymbol);
+    renderDegradedBanner(snapshot);
     renderTicker(snapshot);
     updateIntroSymbol(snapshot.stock?.symbol ?? activeSymbol);
     renderLastUpdated(snapshot);

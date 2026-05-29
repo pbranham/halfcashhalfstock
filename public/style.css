@@ -182,6 +182,17 @@ main {
   padding: 24px 20px 40px;
 }
 
+.degraded-banner {
+  margin: 0 0 16px;
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--warn, #d9a441);
+  background: rgba(217, 164, 65, 0.12);
+  color: var(--warn, #d9a441);
+  font-size: 13px;
+  font-weight: 500;
+}
+
 .intro {
   color: var(--fg-muted);
   margin: 0 0 20px;
