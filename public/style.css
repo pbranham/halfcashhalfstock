@@ -586,14 +586,16 @@ main {
   margin-top: auto;
 }
 
-/* One full-width row per half: label left, value right. space-between keeps
-   them apart; the value never shrinks so it can't be crowded, and the label
-   wraps before the two ever collide. */
-.item-split .split-row {
+/* One half per line: label + value. flex-wrap lets the (atomic, nowrap)
+   value drop to its own line beneath the label on narrow tiles instead of
+   colliding with anything. margin-left:auto right-aligns the value so the
+   numbers form a clean column whether they sit beside the label or wrap. */
+.item-split .split-half {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
+  column-gap: 8px;
+  row-gap: 1px;
 }
 
 .item-split .label {
@@ -601,17 +603,17 @@ main {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  white-space: nowrap;
 }
 
 .item-split .value {
   font-size: 15px;
   font-weight: 600;
-  /* Value stays whole on one line, right-aligned; the row's label yields
-     space (wraps) when the value is wide, so big-ticket dollar amounts never
-     overflow into the label or push the ticker logo past the tile edge. */
+  /* Atomic unit: the number (and its ticker logo) never split. It wraps as a
+     whole to its own line when it can't fit beside the label — never
+     overflowing into the other value or past the tile edge. */
   white-space: nowrap;
-  flex-shrink: 0;
-  text-align: right;
+  margin-left: auto;
 }
 
 /* Spelled-out "shares" unit — used only when no ticker logo is configured

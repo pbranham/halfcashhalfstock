@@ -463,21 +463,24 @@ function sharesUnit() {
 }
 
 // The half-cash / half-stock split box shared by active and ended cards.
-// Two full-width rows (label left, value right) rather than side-by-side
-// pillars: a 50%-of-tile column can't hold four-digit ended-auction dollar
-// amounts, so they'd overflow and collide. Full-width rows give each value
-// room, and right-aligning the (non-shrinking) value keeps it from ever
-// overlapping the label or bleeding the ticker logo past the tile edge.
+//
+// Each half is a flex-wrap line holding a label + an atomic (nowrap) value.
+// On a wide tile the value sits to the right of its label (a tidy receipt);
+// on a narrow tile — where a four-digit dollar amount can't fit beside the
+// label — the whole value wraps to its own line beneath the label instead of
+// overflowing into the neighbouring value or off the tile edge. One value
+// per atomic unit, free to reflow, is the only layout that holds at every
+// tile width (the values themselves are intrinsically wide).
 function splitBox(cashUsd, sharesAmount) {
   const split = el('div', { class: 'item-split' });
   split.appendChild(
-    el('div', { class: 'split-row' }, [
+    el('div', { class: 'split-half' }, [
       el('span', { class: 'label', textContent: 'Half Cash' }),
       el('span', { class: 'value', textContent: usd.format(cashUsd) }),
     ]),
   );
   split.appendChild(
-    el('div', { class: 'split-row' }, [
+    el('div', { class: 'split-half' }, [
       el('span', { class: 'label', textContent: 'Half Stock' }),
       el('span', { class: 'value' }, [sharesValue(sharesAmount, { compact: true })]),
     ]),
