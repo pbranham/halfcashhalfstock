@@ -454,13 +454,30 @@ main {
   align-self: start;
 }
 
-/* Price block sits top-right; price + history icon on row 1, stats on
-   row 2, right-aligned so the column edge stays clean. */
+/* Price block sits top-right. In list mode there's enough horizontal room
+   to collapse the bid-row back onto one line: big price + stats inline +
+   chart icon at the far right. display:contents on .item-bid-price flattens
+   the price wrapper so price and icon become direct flex children of the
+   row, letting us reorder via `order` (price → stats → icon). */
 .items.view-list .item-bid-row {
   grid-area: price;
   justify-self: end;
-  align-self: end;
-  align-items: flex-end;
+  align-self: center;
+  flex-direction: row;
+  align-items: baseline;
+  column-gap: 12px;
+}
+
+.items.view-list .item-bid-price {
+  display: contents;
+}
+
+.items.view-list .item-bid-stats {
+  order: 1;
+}
+
+.items.view-list .item-bid-row .item-audit-link {
+  order: 2;
 }
 
 /* Cash/stock split sits at the right of the list row, stacked label→value
@@ -600,6 +617,21 @@ main {
      the split box aligns across every card in a row even when titles or
      bid-rows above differ in content. */
   margin-top: auto;
+}
+
+/* On the largest grid tile (≥300px) and in list mode there's enough room
+   to put the two halves side by side as a compact "receipt" strip. Each
+   half still reflows label→value internally if it ever gets pinched. */
+.items.view-grid-lg .item-split,
+.items.view-list .item-split {
+  flex-direction: row;
+  column-gap: 16px;
+}
+
+.items.view-grid-lg .item-split .split-half,
+.items.view-list .item-split .split-half {
+  flex: 1;
+  min-width: 0;
 }
 
 /* One half per line: label + value. flex-wrap lets the (atomic, nowrap)
