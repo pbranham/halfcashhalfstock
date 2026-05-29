@@ -14,7 +14,16 @@ const sharesCompact = new Intl.NumberFormat('en-US', { maximumSignificantDigits:
 const integer = new Intl.NumberFormat('en-US');
 
 // --- Sort & animation state ---
-let currentSort = 'ending-soonest';
+// Sort mode — must match data-sort values on .sort-btn elements in index.html.
+const SORT_MODES = ['ending-soonest', 'recent-bid-activity', 'price-low', 'price-high', 'most-bids'];
+function loadSort() {
+  const stored = localStorage.getItem('hchs.sort');
+  return SORT_MODES.includes(stored) ? stored : 'ending-soonest';
+}
+function saveSort(value) {
+  if (SORT_MODES.includes(value)) localStorage.setItem('hchs.sort', value);
+}
+let currentSort = loadSort();
 let lastSnapshot = null;
 let prevBidCounts = new Map(); // itemId → bidCount from last successful render
 
@@ -433,25 +442,59 @@ function historyLink(itemId) {
 let currentTickerLogoUrl = null;
 let currentTickerSymbol = '';
 
+// The ticker logo <img>, or null when no logo is configured. Callers decide
+// the fallback: the inline "shares" unit (sharesUnit) or simply nothing (the
+// split's "Half Stock" label, which already names the asset).
+function tickerLogoImg() {
+  if (!currentTickerLogoUrl) return null;
+  return el('img', {
+    class: 'ticker-logo',
+    src: currentTickerLogoUrl,
+    alt: currentTickerSymbol,
+    title: currentTickerSymbol,
+    loading: 'lazy',
+  });
+}
+
 // The "unit" trailing the shares value — the ticker logo when available
 // (mirrors a currency glyph), otherwise the spelled-out word "shares". The
 // img onerror handler downgrades to the text unit if the logo fails to
 // load (network error, unknown ticker, etc.) without leaving a broken icon.
 function sharesUnit() {
-  if (currentTickerLogoUrl) {
-    const img = el('img', {
-      class: 'ticker-logo',
-      src: currentTickerLogoUrl,
-      alt: currentTickerSymbol,
-      title: currentTickerSymbol,
-      loading: 'lazy',
-    });
+  const img = tickerLogoImg();
+  if (img) {
     img.addEventListener('error', () => {
       img.replaceWith(el('span', { class: 'unit', textContent: 'shares' }));
     });
     return img;
   }
   return el('span', { class: 'unit', textContent: 'shares' });
+}
+
+// The half-cash / half-stock split box shared by active and ended cards.
+//
+// Each half is a flex-wrap line holding a label + an atomic (nowrap) value.
+// On a wide tile the value sits to the right of its label (a tidy receipt);
+// on a narrow tile — where a four-digit dollar amount can't fit beside the
+// label — the whole value wraps to its own line beneath the label instead of
+// overflowing into the neighbouring value or off the tile edge. One value
+// per atomic unit, free to reflow, is the only layout that holds at every
+// tile width (the values themselves are intrinsically wide).
+function splitBox(cashUsd, sharesAmount) {
+  const split = el('div', { class: 'item-split' });
+  split.appendChild(
+    el('div', { class: 'split-half' }, [
+      el('span', { class: 'label', textContent: 'Half Cash' }),
+      el('span', { class: 'value', textContent: usd.format(cashUsd) }),
+    ]),
+  );
+  split.appendChild(
+    el('div', { class: 'split-half' }, [
+      el('span', { class: 'label', textContent: 'Half Stock' }),
+      el('span', { class: 'value' }, [sharesValue(sharesAmount, { compact: true })]),
+    ]),
+  );
+  return split;
 }
 
 // Format a shares amount as "{N} <unit>" where the unit is the ticker logo
@@ -506,25 +549,21 @@ function renderItem(item, symbol) {
   // font), and the history icon pinned to the far right. Consolidating these
   // here reclaims the line the meta row used to spend on bids/time.
   const bidRow = el('div', { class: 'item-bid-row' });
-  bidRow.appendChild(
+  const priceLine = el('div', { class: 'item-bid-price' }, [
     el('div', { class: 'item-bid', textContent: item.priceUsd != null ? usd.format(item.priceUsd) : '—' }),
-  );
+    historyLink(item.itemId),
+  ]);
+  bidRow.appendChild(priceLine);
   const stats = el('div', { class: 'item-bid-stats' });
   if (item.bidCount !== null && item.bidCount !== undefined) {
-    stats.appendChild(el('span', { textContent: `${item.bidCount} bid${item.bidCount === 1 ? '' : 's'}` }));
+    stats.appendChild(el('span', { class: 'item-bid-stat', textContent: `${item.bidCount} bid${item.bidCount === 1 ? '' : 's'}` }));
   }
   const remaining = timeRemaining(item.endsAt);
-  if (remaining) stats.appendChild(el('span', { textContent: remaining }));
-  bidRow.appendChild(stats);
-  bidRow.appendChild(historyLink(item.itemId));
+  if (remaining) stats.appendChild(el('span', { class: 'item-bid-stat', textContent: remaining }));
+  if (stats.children.length) bidRow.appendChild(stats);
   body.appendChild(bidRow);
   if (item.split) {
-    const split = el('div', { class: 'item-split' });
-    split.appendChild(el('div', { class: 'label', textContent: 'Half Cash' }));
-    split.appendChild(el('div', { class: 'label', textContent: 'Half Stock' }));
-    split.appendChild(el('div', { class: 'value', textContent: usd.format(item.split.cashUsd) }));
-    split.appendChild(el('div', { class: 'value' }, [sharesValue(item.split.shares, { compact: true })]));
-    body.appendChild(split);
+    body.appendChild(splitBox(item.split.cashUsd, item.split.shares));
   }
   card.appendChild(body);
   return card;
@@ -619,33 +658,30 @@ function renderEndedItem(item) {
   const atEnd = currentEndedPriceMode === 'at-end';
   const displaySplit = atEnd ? item.endTimeSplit : item.split;
 
-  // Price line: final price + (bid count / ended date) stacked beside it +
-  // history icon, mirroring the active card.
+  // Price line: final price + history icon on row 1, bid count + ended date
+  // as atomic chunks on row 2, mirroring the active card.
   const bidRow = el('div', { class: 'item-bid-row' });
-  bidRow.appendChild(
+  const priceLine = el('div', { class: 'item-bid-price' }, [
     el('div', { class: 'item-bid', textContent: usd.format(item.finalPriceUsd) }),
-  );
+    historyLink(item.itemId),
+  ]);
+  bidRow.appendChild(priceLine);
   const stats = el('div', { class: 'item-bid-stats' });
   if (item.finalBidCount !== null && item.finalBidCount !== undefined) {
-    stats.appendChild(el('span', { textContent: `${item.finalBidCount} bid${item.finalBidCount === 1 ? '' : 's'}` }));
+    stats.appendChild(el('span', { class: 'item-bid-stat', textContent: `${item.finalBidCount} bid${item.finalBidCount === 1 ? '' : 's'}` }));
   }
   const endedDate = item.endedAt ? new Date(item.endedAt) : null;
   if (endedDate) {
     stats.appendChild(el('span', {
+      class: 'item-bid-stat',
       textContent: `Ended ${endedDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`,
     }));
   }
-  bidRow.appendChild(stats);
-  bidRow.appendChild(historyLink(item.itemId));
+  if (stats.children.length) bidRow.appendChild(stats);
   body.appendChild(bidRow);
 
   if (displaySplit) {
-    const split = el('div', { class: 'item-split' });
-    split.appendChild(el('div', { class: 'label', textContent: 'Half Cash' }));
-    split.appendChild(el('div', { class: 'label', textContent: 'Half Stock' }));
-    split.appendChild(el('div', { class: 'value', textContent: usd.format(displaySplit.cashUsd) }));
-    split.appendChild(el('div', { class: 'value' }, [sharesValue(displaySplit.shares, { compact: true })]));
-    body.appendChild(split);
+    body.appendChild(splitBox(displaySplit.cashUsd, displaySplit.shares));
   }
   card.appendChild(body);
   return card;
@@ -979,11 +1015,15 @@ if (tickerInput) {
   });
 }
 
-// Sort button wiring
+// Sort button wiring — restore the persisted active button on load, then
+// listen for clicks. The is-active class on the default button in HTML
+// (ending-soonest) is overwritten here on every load.
 document.querySelectorAll('.sort-btn').forEach((btn) => {
+  btn.classList.toggle('is-active', btn.dataset.sort === currentSort);
   btn.addEventListener('click', () => {
     if (btn.dataset.sort === currentSort) return;
     currentSort = btn.dataset.sort;
+    saveSort(currentSort);
     document.querySelectorAll('.sort-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
     if (lastSnapshot) renderFilteredView(lastSnapshot, new Map()); // re-sort active + ended; no bid flash
   });

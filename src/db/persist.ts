@@ -292,6 +292,11 @@ export async function persistSnapshot(
   let listingsTouched = 0;
   let bidsInserted = 0;
   for (const { listing, bids } of inputs) {
+    // Defensive: item_id is the PK and NOT NULL. Skip rather than throw if
+    // a malformed listing slipped through (e.g. a cached payload from an
+    // older code version with renamed fields); the snapshot composer
+    // already tolerates the missing record.
+    if (!listing.itemId || typeof listing.itemId !== 'string') continue;
     await upsertListing(pool, listing);
     await insertListingSnapshotIfChanged(pool, listing);
     listingsTouched += 1;

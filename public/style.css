@@ -454,16 +454,42 @@ main {
   align-self: start;
 }
 
-/* Price line sits top-right; the history icon stays grouped with it. */
+/* Price block sits top-right. In list mode there's enough horizontal room
+   to collapse the bid-row back onto one line: big price + stats inline +
+   chart icon at the far right. display:contents on .item-bid-price flattens
+   the price wrapper so price and icon become direct flex children of the
+   row, letting us reorder via `order` (price → stats → icon). */
 .items.view-list .item-bid-row {
   grid-area: price;
   justify-self: end;
-  align-self: end;
-  gap: 12px;
+  align-self: center;
+  flex-direction: row;
+  align-items: baseline;
+  column-gap: 12px;
 }
 
-/* Cash/stock split sits bottom-right, keeping its 2x2 (label-over-value)
-   layout so the columns read Cash half | GME shares correctly. */
+.items.view-list .item-bid-price {
+  display: contents;
+}
+
+/* Visual order in list-mode is [stats · price · chart], not the source order
+   (price · audit · stats — price first because .item-bid-price wraps it, audit
+   second because it lives inside that wrapper, stats third). Stats sits to the
+   left of the price so the eye reads price→split as one column on the right. */
+.items.view-list .item-bid-row .item-bid-stats {
+  order: 0;
+}
+
+.items.view-list .item-bid-row .item-bid {
+  order: 1;
+}
+
+.items.view-list .item-bid-row .item-audit-link {
+  order: 2;
+}
+
+/* Cash/stock split sits at the right of the list row, stacked label→value
+   per half (same markup as grid mode). */
 .items.view-list .item-split {
   grid-area: split;
   justify-self: end;
@@ -545,45 +571,87 @@ main {
   font-variant-numeric: tabular-nums;
 }
 
+/* Vertical stack: price-line (price + history icon) on row 1, stats on
+   row 2. Each row holds at most one large atomic unit (the price) or a
+   collection of small ones (the stat chunks), so no row depends on
+   shoehorning multiple competing widths onto a single line — the
+   geometric failure mode of the previous one-row layout at narrow widths. */
 .item-bid-row {
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Price + history icon. The icon is tiny (~20px) so it shares this line
+   comfortably even on the narrowest tile; margin-left:auto pins it right. */
+.item-bid-price {
+  display: flex;
   align-items: center;
-  flex-wrap: nowrap;
   gap: 8px;
 }
 
-/* Bid count + time remaining (active) or final bids + ended date (ended),
-   stacked beside the large price. Two lines of small text occupy the
-   vertical space next to the taller price font. min-width:0 lets the
-   column shrink under pressure so the history icon stays on the same line. */
+.item-bid-price .item-audit-link {
+  margin-left: auto;
+}
+
+/* Bid count + (time remaining | ended date) as atomic flex items. Each
+   chunk is white-space:nowrap, so "1d 20h left" stays one piece — it
+   either fits beside "5 bids" with a column-gap or wraps as a whole to
+   its own line. Never breaks mid-phrase. */
 .item-bid-stats {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+  flex-wrap: wrap;
+  column-gap: 10px;
+  row-gap: 2px;
   font-size: 12px;
   line-height: 1.2;
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
 }
 
-/* History icon sits at the far right of the price line. */
-.item-bid-row .item-audit-link {
-  margin-left: auto;
+.item-bid-stat {
+  white-space: nowrap;
 }
 
 .item-split {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   background: var(--accent-soft);
   border-radius: 8px;
   padding: 10px 12px;
   font-variant-numeric: tabular-nums;
   /* Pin to card bottom — combined with grid's align-items:stretch on .items,
-     the split row aligns across every card in a row even when titles or
+     the split box aligns across every card in a row even when titles or
      bid-rows above differ in content. */
   margin-top: auto;
+}
+
+/* On the largest grid tile (≥300px) and in list mode there's enough room
+   to put the two halves side by side as a compact "receipt" strip. Each
+   half still reflows label→value internally if it ever gets pinched. */
+.items.view-grid-lg .item-split,
+.items.view-list .item-split {
+  flex-direction: row;
+  column-gap: 16px;
+}
+
+.items.view-grid-lg .item-split .split-half,
+.items.view-list .item-split .split-half {
+  flex: 1;
+  min-width: 0;
+}
+
+/* One half per line: label + value. flex-wrap lets the (atomic, nowrap)
+   value drop to its own line beneath the label on narrow tiles instead of
+   colliding with anything. margin-left:auto right-aligns the value so the
+   numbers form a clean column whether they sit beside the label or wrap. */
+.item-split .split-half {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 1px;
 }
 
 .item-split .label {
@@ -591,14 +659,17 @@ main {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  white-space: nowrap;
 }
 
 .item-split .value {
   font-size: 15px;
   font-weight: 600;
-  /* Keep the value on a single line. Per-tile splits use the compact
-     4-sig-fig form (sharesCompact) so typical numbers fit without wrap. */
+  /* Atomic unit: the number (and its ticker logo) never split. It wraps as a
+     whole to its own line when it can't fit beside the label — never
+     overflowing into the other value or past the tile edge. */
   white-space: nowrap;
+  margin-left: auto;
 }
 
 /* Spelled-out "shares" unit — used only when no ticker logo is configured

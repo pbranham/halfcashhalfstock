@@ -94,7 +94,25 @@ function normalizeListing(
   const itemId = s.itemId ?? s.legacyItemId;
   const title = s.title;
   const itemWebUrl = s.itemWebUrl;
-  if (!itemId || !title || !itemWebUrl) return null;
+  if (!itemId || !title || !itemWebUrl) {
+    // Surface the actual Browse API shape so we can see why a listing was
+    // dropped (e.g. quirky 0-bid auction returning unexpected fields). One
+    // warn per skipped summary; small diagnostic, big payoff next time the
+    // schema surprises us.
+    console.warn(
+      `[seller:${sellerId}] skipping listing with missing required fields:`,
+      JSON.stringify({
+        itemId: s.itemId,
+        legacyItemId: s.legacyItemId,
+        title: s.title,
+        itemWebUrl: s.itemWebUrl,
+        buyingOptions: s.buyingOptions,
+        hasPrice: s.price !== undefined,
+        hasCurrentBidPrice: s.currentBidPrice !== undefined,
+      }),
+    );
+    return null;
+  }
 
   const buyingOptions = s.buyingOptions ?? [];
   const isAuction = buyingOptions.includes('AUCTION');

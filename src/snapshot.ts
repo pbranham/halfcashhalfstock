@@ -75,6 +75,15 @@ export interface Snapshot {
   lastBid: LastBidSummary | null;
 }
 
+// A price is splittable when it's a finite non-negative number. The math
+// fn itself rejects anything else, so all call sites guard with this — a
+// non-finite price slipping in (e.g. a cached payload from an older code
+// version where the field was missing, or an unexpected Browse API shape
+// on a 0-bid auction) becomes a quiet null split rather than a 503.
+function isSplittablePrice(n: number | null | undefined): n is number {
+  return typeof n === 'number' && Number.isFinite(n) && n >= 0;
+}
+
 export function composeSnapshot(
   listings: readonly Listing[],
   stock: PriceQuote,
@@ -91,11 +100,11 @@ export function composeSnapshot(
     imageUrl: l.imageUrl,
     itemWebUrl: l.itemWebUrl,
     currency: l.currency,
-    priceUsd: l.priceUsd,
+    priceUsd: isSplittablePrice(l.priceUsd) ? l.priceUsd : null,
     bidCount: l.bidCount,
     endsAt: l.endsAt,
     isAuction: l.isAuction,
-    split: l.priceUsd !== null ? splitHalfCashHalfStock(l.priceUsd, stock.price) : null,
+    split: isSplittablePrice(l.priceUsd) ? splitHalfCashHalfStock(l.priceUsd, stock.price) : null,
     lastBidTime: l.lastBidTime ?? null,
   }));
 
@@ -138,10 +147,10 @@ export function composeSnapshot(
       finalPriceUsd: e.finalPriceUsd,
       finalBidCount: e.finalBidCount,
       currency: e.currency,
-      split: isUsd ? splitHalfCashHalfStock(e.finalPriceUsd, stock.price) : null,
+      split: isUsd && isSplittablePrice(e.finalPriceUsd) ? splitHalfCashHalfStock(e.finalPriceUsd, stock.price) : null,
       endTimePriceUsd: endTimeClose,
       endTimeSplit:
-        isUsd && endTimeClose !== null && endTimeClose > 0
+        isUsd && isSplittablePrice(e.finalPriceUsd) && endTimeClose !== null && endTimeClose > 0
           ? splitHalfCashHalfStock(e.finalPriceUsd, endTimeClose)
           : null,
     };
