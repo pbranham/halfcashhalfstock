@@ -388,40 +388,62 @@ main {
   gap: 10px;
 }
 
+/* List mode: one full-width row per item laid out as a grid —
+   [ image | title+meta | price / cash+stock split ].
+   The card body uses display:contents so the title, meta, price line, and
+   split become direct grid items of the card and can be placed into areas.
+   Row 1: title (left) + price (right). Row 2: meta (left) + split (right). */
 .items.view-list .item {
-  flex-direction: row;
-  align-items: stretch;
-}
-
-.items.view-list .item-image {
-  width: 84px;
-  min-width: 84px;
-  aspect-ratio: 1;
-  align-self: center;
-  border-radius: 8px;
-  margin: 8px 0 8px 10px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    'img title price'
+    'img meta  split';
+  align-items: center;
+  column-gap: 16px;
+  row-gap: 4px;
+  padding: 10px 16px 10px 0;
 }
 
 .items.view-list .item-body {
-  padding: 10px 14px;
+  display: contents;
 }
 
-/* Keep the cash/stock split (the whole point) visible in list mode, but
-   compact it into a single inline row instead of the 2x2 grid. */
+.items.view-list .item-image {
+  grid-area: img;
+  width: 72px;
+  min-width: 72px;
+  height: 72px;
+  aspect-ratio: 1;
+  align-self: center;
+  border-radius: 8px;
+  margin-left: 12px;
+}
+
+.items.view-list .item-title {
+  grid-area: title;
+  align-self: end;
+}
+
+.items.view-list .item-meta {
+  grid-area: meta;
+  align-self: start;
+}
+
+/* Price line sits top-right; the history icon stays grouped with it. */
+.items.view-list .item-bid-row {
+  grid-area: price;
+  justify-self: end;
+  align-self: end;
+  gap: 12px;
+}
+
+/* Cash/stock split sits bottom-right, keeping its 2x2 (label-over-value)
+   layout so the columns read Cash half | GME shares correctly. */
 .items.view-list .item-split {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 8px;
-  padding: 6px 10px;
-}
-
-.items.view-list .item-split .label::after {
-  content: ':';
-}
-
-.items.view-list .item-split .value {
-  margin-right: 8px;
+  grid-area: split;
+  justify-self: end;
+  align-self: start;
 }
 
 .item {
@@ -481,12 +503,16 @@ main {
 .item-audit-link {
   color: var(--fg-muted);
   text-decoration: none;
-  border-bottom: 1px dotted currentColor;
-  padding-bottom: 1px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 6px;
+  padding: 2px;
+  transition: color 0.15s, background 0.15s;
 }
 
 .item-audit-link:hover {
   color: var(--fg);
+  background: var(--accent-soft);
 }
 
 .item-bid {
@@ -500,6 +526,14 @@ main {
   align-items: baseline;
   justify-content: space-between;
   gap: 10px;
+}
+
+/* Right side of the price line: last-bid age + history icon. */
+.item-bid-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .item-bid-time {
@@ -533,7 +567,9 @@ main {
 }
 
 .tag {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -552,6 +588,24 @@ main {
   border-color: #888;
   color: #aaa;
   background: rgba(0, 0, 0, 0.15);
+}
+
+/* Sale-mode tag: spell it out on large grid + list (room to spare), shrink
+   to an icon-only pill on the smaller grids where the text overwhelms. */
+.tag-icon { display: none; }
+.tag-text { display: inline; }
+.items.view-grid-sm .tag-icon,
+.items.view-grid-md .tag-icon {
+  display: block;
+}
+.items.view-grid-sm .tag-text,
+.items.view-grid-md .tag-text {
+  display: none;
+}
+/* Icon-only pill tightens its padding so it stays a neat circle. */
+.items.view-grid-sm .tag,
+.items.view-grid-md .tag {
+  padding: 3px;
 }
 
 .ended-section {
