@@ -472,7 +472,15 @@ main {
   display: contents;
 }
 
-.items.view-list .item-bid-stats {
+/* Visual order in list-mode is [stats · price · chart], not the source order
+   (price · audit · stats — price first because .item-bid-price wraps it, audit
+   second because it lives inside that wrapper, stats third). Stats sits to the
+   left of the price so the eye reads price→split as one column on the right. */
+.items.view-list .item-bid-row .item-bid-stats {
+  order: 0;
+}
+
+.items.view-list .item-bid-row .item-bid {
   order: 1;
 }
 
