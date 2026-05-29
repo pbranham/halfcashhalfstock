@@ -454,12 +454,13 @@ main {
   align-self: start;
 }
 
-/* Price line sits top-right; the history icon stays grouped with it. */
+/* Price block sits top-right; price + history icon on row 1, stats on
+   row 2, right-aligned so the column edge stays clean. */
 .items.view-list .item-bid-row {
   grid-area: price;
   justify-self: end;
   align-self: end;
-  gap: 12px;
+  align-items: flex-end;
 }
 
 /* Cash/stock split sits at the right of the list row, stacked label→value
@@ -545,31 +546,46 @@ main {
   font-variant-numeric: tabular-nums;
 }
 
+/* Vertical stack: price-line (price + history icon) on row 1, stats on
+   row 2. Each row holds at most one large atomic unit (the price) or a
+   collection of small ones (the stat chunks), so no row depends on
+   shoehorning multiple competing widths onto a single line — the
+   geometric failure mode of the previous one-row layout at narrow widths. */
 .item-bid-row {
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Price + history icon. The icon is tiny (~20px) so it shares this line
+   comfortably even on the narrowest tile; margin-left:auto pins it right. */
+.item-bid-price {
+  display: flex;
   align-items: center;
-  flex-wrap: nowrap;
   gap: 8px;
 }
 
-/* Bid count + time remaining (active) or final bids + ended date (ended),
-   stacked beside the large price. Two lines of small text occupy the
-   vertical space next to the taller price font. min-width:0 lets the
-   column shrink under pressure so the history icon stays on the same line. */
+.item-bid-price .item-audit-link {
+  margin-left: auto;
+}
+
+/* Bid count + (time remaining | ended date) as atomic flex items. Each
+   chunk is white-space:nowrap, so "1d 20h left" stays one piece — it
+   either fits beside "5 bids" with a column-gap or wraps as a whole to
+   its own line. Never breaks mid-phrase. */
 .item-bid-stats {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+  flex-wrap: wrap;
+  column-gap: 10px;
+  row-gap: 2px;
   font-size: 12px;
   line-height: 1.2;
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
 }
 
-/* History icon sits at the far right of the price line. */
-.item-bid-row .item-audit-link {
-  margin-left: auto;
+.item-bid-stat {
+  white-space: nowrap;
 }
 
 .item-split {

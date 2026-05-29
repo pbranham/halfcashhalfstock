@@ -540,17 +540,18 @@ function renderItem(item, symbol) {
   // font), and the history icon pinned to the far right. Consolidating these
   // here reclaims the line the meta row used to spend on bids/time.
   const bidRow = el('div', { class: 'item-bid-row' });
-  bidRow.appendChild(
+  const priceLine = el('div', { class: 'item-bid-price' }, [
     el('div', { class: 'item-bid', textContent: item.priceUsd != null ? usd.format(item.priceUsd) : '—' }),
-  );
+    historyLink(item.itemId),
+  ]);
+  bidRow.appendChild(priceLine);
   const stats = el('div', { class: 'item-bid-stats' });
   if (item.bidCount !== null && item.bidCount !== undefined) {
-    stats.appendChild(el('span', { textContent: `${item.bidCount} bid${item.bidCount === 1 ? '' : 's'}` }));
+    stats.appendChild(el('span', { class: 'item-bid-stat', textContent: `${item.bidCount} bid${item.bidCount === 1 ? '' : 's'}` }));
   }
   const remaining = timeRemaining(item.endsAt);
-  if (remaining) stats.appendChild(el('span', { textContent: remaining }));
-  bidRow.appendChild(stats);
-  bidRow.appendChild(historyLink(item.itemId));
+  if (remaining) stats.appendChild(el('span', { class: 'item-bid-stat', textContent: remaining }));
+  if (stats.children.length) bidRow.appendChild(stats);
   body.appendChild(bidRow);
   if (item.split) {
     body.appendChild(splitBox(item.split.cashUsd, item.split.shares));
@@ -648,24 +649,26 @@ function renderEndedItem(item) {
   const atEnd = currentEndedPriceMode === 'at-end';
   const displaySplit = atEnd ? item.endTimeSplit : item.split;
 
-  // Price line: final price + (bid count / ended date) stacked beside it +
-  // history icon, mirroring the active card.
+  // Price line: final price + history icon on row 1, bid count + ended date
+  // as atomic chunks on row 2, mirroring the active card.
   const bidRow = el('div', { class: 'item-bid-row' });
-  bidRow.appendChild(
+  const priceLine = el('div', { class: 'item-bid-price' }, [
     el('div', { class: 'item-bid', textContent: usd.format(item.finalPriceUsd) }),
-  );
+    historyLink(item.itemId),
+  ]);
+  bidRow.appendChild(priceLine);
   const stats = el('div', { class: 'item-bid-stats' });
   if (item.finalBidCount !== null && item.finalBidCount !== undefined) {
-    stats.appendChild(el('span', { textContent: `${item.finalBidCount} bid${item.finalBidCount === 1 ? '' : 's'}` }));
+    stats.appendChild(el('span', { class: 'item-bid-stat', textContent: `${item.finalBidCount} bid${item.finalBidCount === 1 ? '' : 's'}` }));
   }
   const endedDate = item.endedAt ? new Date(item.endedAt) : null;
   if (endedDate) {
     stats.appendChild(el('span', {
+      class: 'item-bid-stat',
       textContent: `Ended ${endedDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`,
     }));
   }
-  bidRow.appendChild(stats);
-  bidRow.appendChild(historyLink(item.itemId));
+  if (stats.children.length) bidRow.appendChild(stats);
   body.appendChild(bidRow);
 
   if (displaySplit) {
