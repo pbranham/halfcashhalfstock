@@ -1,4 +1,5 @@
 const POLL_MS = 30_000;
+const QUICK_RETRY_MS = 4_000;
 const STALE_MS = 120_000;
 
 const SUPPORTED_SYMBOLS = ['EBAY', 'GME'];
@@ -6,6 +7,10 @@ let activeSymbol = SUPPORTED_SYMBOLS[0];
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const shares = new Intl.NumberFormat('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+// Compact form for narrow split columns on tiles: round to 4 significant
+// digits so values like 14.7438 → 14.74 fit on one line beside the logo
+// without needing ellipsis. Totals (wide columns) keep the full 4 dp form.
+const sharesCompact = new Intl.NumberFormat('en-US', { maximumSignificantDigits: 4 });
 const integer = new Intl.NumberFormat('en-US');
 
 // --- Sort & animation state ---
@@ -78,6 +83,30 @@ function saveEndedWindow(value) {
   if (ENDED_WINDOWS.includes(value)) localStorage.setItem('hchs.endedWindow', value);
 }
 let currentEndedWindow = loadEndedWindow();
+
+// --- Item view mode (list / small / medium / large grid) ---
+// All modes share the same renderItem DOM; only a class on the items
+// containers changes, so switching is a pure CSS reflow — no re-render.
+const VIEW_MODES = ['list', 'grid-sm', 'grid-md', 'grid-lg'];
+function loadViewMode() {
+  const stored = localStorage.getItem('hchs.viewMode');
+  return VIEW_MODES.includes(stored) ? stored : 'grid-md';
+}
+function saveViewMode(value) {
+  if (VIEW_MODES.includes(value)) localStorage.setItem('hchs.viewMode', value);
+}
+let currentViewMode = loadViewMode();
+
+// Apply the current view mode class to both the active and ended item
+// containers. Safe to call repeatedly (e.g. after each render).
+function applyViewMode() {
+  for (const id of ['items', 'ended-items']) {
+    const container = document.getElementById(id);
+    if (!container) continue;
+    for (const mode of VIEW_MODES) container.classList.remove(`view-${mode}`);
+    container.classList.add(`view-${currentViewMode}`);
+  }
+}
 
 // --- Ticker state ---
 function loadTickerFromStorage() {
@@ -245,7 +274,7 @@ function el(tag, props = {}, children = []) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
     if (k === 'class') node.className = v;
-    else if (k === 'href' || k === 'target' || k === 'rel' || k === 'src' || k === 'alt' || k === 'loading') {
+    else if (k === 'href' || k === 'target' || k === 'rel' || k === 'src' || k === 'alt' || k === 'loading' || k === 'title' || k.startsWith('aria-')) {
       node.setAttribute(k, v);
     } else {
       node[k] = v;
@@ -311,6 +340,15 @@ function renderLastUpdated(snapshot) {
   setText(el, `Updated ${generated.toLocaleTimeString()}`);
 }
 
+function renderDegradedBanner(snapshot) {
+  const banner = document.getElementById('degraded-banner');
+  if (!banner) return;
+  // snapshot.degraded is set by the server when the listings/quote caches
+  // are serving past-TTL data because live fetches are failing. We still
+  // render all the (stale) data — this just flags that it's not live.
+  banner.hidden = !snapshot?.degraded;
+}
+
 function renderPriceSource(snapshot) {
   const el = document.getElementById('price-source');
   if (!el) return;
@@ -327,19 +365,103 @@ function renderTotals(snapshot, totals) {
   const symbol = snapshot.stock?.symbol ?? activeSymbol;
   const items = [
     { label: 'Active listings', value: integer.format(listingsCount) },
-    { label: 'Total bids', value: integer.format(bidsCount ?? 0) },
+    { label: 'Bids', value: integer.format(bidsCount ?? 0) },
     { label: 'Sum of current bids', value: usd.format(bidUsd) },
-    { label: 'Total cash half', value: usd.format(split.cashUsd) },
-    { label: `Total ${symbol} shares`, value: shares.format(split.shares) },
+    { label: 'Half Cash', value: usd.format(split.cashUsd) },
+    { label: 'Half Stock', value: sharesValue(split.shares) },
   ];
   for (const stat of items) {
+    const valueEl = el('div', { class: 'stat-value' });
+    if (typeof stat.value === 'string') valueEl.textContent = stat.value;
+    else valueEl.appendChild(stat.value);
     root.appendChild(
       el('div', { class: 'stat' }, [
         el('div', { class: 'stat-label', textContent: stat.label }),
-        el('div', { class: 'stat-value', textContent: stat.value }),
+        valueEl,
       ]),
     );
   }
+}
+
+// Inline icon markup. Sale-mode icons replace the spelled-out tag on the
+// smaller grid sizes (CSS toggles text vs icon per view mode); the history
+// icon (a tiny line chart, matching the per-item price/bid chart) replaces
+// the "history →" text link on the price line.
+const ICON_AUCTION =
+  '<svg class="tag-icon" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">' +
+  '<rect x="1.5" y="13.4" width="11" height="1.8" rx="0.9" fill="currentColor"/>' +
+  '<g transform="rotate(45 7 6)">' +
+  '<rect x="3.2" y="1" width="4.4" height="3" rx="0.6" fill="currentColor"/>' +
+  '<rect x="4.7" y="3.4" width="1.4" height="7.6" rx="0.5" fill="currentColor"/>' +
+  '</g></svg>';
+const ICON_BIN =
+  '<svg class="tag-icon" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">' +
+  '<path d="M7.3 1.4 14.2 8.3a1.1 1.1 0 0 1 0 1.5l-4.4 4.4a1.1 1.1 0 0 1-1.5 0L1.4 7.3V2.5a1.1 1.1 0 0 1 1.1-1.1z" fill="none" stroke="currentColor" stroke-width="1.4"/>' +
+  '<circle cx="4.6" cy="4.6" r="1.05" fill="currentColor"/></svg>';
+const ICON_HISTORY =
+  '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">' +
+  '<polyline points="1.5,10.5 5.5,6.5 8.5,8.5 14.5,2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>' +
+  '<line x1="1.5" y1="14" x2="14.5" y2="14" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>';
+
+// Sale-mode tag carrying BOTH an icon and the spelled-out label; CSS shows
+// whichever fits the active view mode (text on large grid + list, icon on
+// small/medium grids).
+function saleTag(isAuction) {
+  const span = el('span', { class: isAuction ? 'tag tag-auction' : 'tag tag-bin' });
+  span.innerHTML = isAuction ? ICON_AUCTION : ICON_BIN;
+  span.appendChild(el('span', { class: 'tag-text', textContent: isAuction ? 'Auction' : 'Buy it now' }));
+  return span;
+}
+
+// History link as a compact icon (lives on the price line). Tooltip +
+// aria-label keep it discoverable/accessible without spelled-out text.
+function historyLink(itemId) {
+  const a = el('a', {
+    class: 'item-audit-link',
+    href: `/item?id=${encodeURIComponent(itemId)}`,
+    title: 'View bid & price history',
+    'aria-label': 'View bid and price history',
+  });
+  a.innerHTML = ICON_HISTORY;
+  return a;
+}
+
+// Ticker-logo state, refreshed from each /api/snapshot response. When the
+// server has a logo.dev token, this is the image URL for the currently
+// selected stock; otherwise null and we fall back to a spelled-out "shares"
+// unit.
+let currentTickerLogoUrl = null;
+let currentTickerSymbol = '';
+
+// The "unit" trailing the shares value — the ticker logo when available
+// (mirrors a currency glyph), otherwise the spelled-out word "shares". The
+// img onerror handler downgrades to the text unit if the logo fails to
+// load (network error, unknown ticker, etc.) without leaving a broken icon.
+function sharesUnit() {
+  if (currentTickerLogoUrl) {
+    const img = el('img', {
+      class: 'ticker-logo',
+      src: currentTickerLogoUrl,
+      alt: currentTickerSymbol,
+      title: currentTickerSymbol,
+      loading: 'lazy',
+    });
+    img.addEventListener('error', () => {
+      img.replaceWith(el('span', { class: 'unit', textContent: 'shares' }));
+    });
+    return img;
+  }
+  return el('span', { class: 'unit', textContent: 'shares' });
+}
+
+// Format a shares amount as "{N} <unit>" where the unit is the ticker logo
+// or the word "shares". `compact: true` uses 4 significant digits (for
+// narrow tile splits); default uses the full 4-decimal form (for totals).
+function sharesValue(n, { compact = false } = {}) {
+  return el('span', {}, [
+    compact ? sharesCompact.format(n) : shares.format(n),
+    sharesUnit(),
+  ]);
 }
 
 function ebayItemUrl(itemId) {
@@ -373,46 +495,35 @@ function renderItem(item, symbol) {
     ]),
   );
   const meta = el('div', { class: 'item-meta' });
-  meta.appendChild(el('span', { class: item.isAuction ? 'tag tag-auction' : 'tag', textContent: item.isAuction ? 'Auction' : 'Buy it now' }));
+  meta.appendChild(saleTag(item.isAuction));
   if (item.sellerId) {
     meta.appendChild(el('span', { class: sellerBadgeClass(item.sellerId), textContent: `@${item.sellerId}` }));
   }
-  if (item.bidCount !== null && item.bidCount !== undefined) {
-    meta.appendChild(el('span', { textContent: `${item.bidCount} bid${item.bidCount === 1 ? '' : 's'}` }));
-  }
-  const remaining = timeRemaining(item.endsAt);
-  if (remaining) meta.appendChild(el('span', { textContent: remaining }));
-  meta.appendChild(
-    el('a', {
-      class: 'item-audit-link',
-      href: `/item?id=${encodeURIComponent(item.itemId)}`,
-      textContent: 'history →',
-      title: 'View bid and price history audit for this item',
-    }),
-  );
   body.appendChild(meta);
 
+  // Price line: the large price on the left, with bid count + time remaining
+  // stacked beside it (two lines of normal text matching the taller price
+  // font), and the history icon pinned to the far right. Consolidating these
+  // here reclaims the line the meta row used to spend on bids/time.
   const bidRow = el('div', { class: 'item-bid-row' });
   bidRow.appendChild(
     el('div', { class: 'item-bid', textContent: item.priceUsd != null ? usd.format(item.priceUsd) : '—' }),
   );
-  const bidAge = formatRelativeBidAge(item.lastBidTime);
-  if (bidAge) {
-    bidRow.appendChild(
-      el('span', {
-        class: 'item-bid-time',
-        textContent: bidAge,
-        title: `Most recent bid activity: ${formatLocalTimestamp(item.lastBidTime)}. This may differ from when the current displayed bid was reached due to proxy bidding.`,
-      }),
-    );
+  const stats = el('div', { class: 'item-bid-stats' });
+  if (item.bidCount !== null && item.bidCount !== undefined) {
+    stats.appendChild(el('span', { textContent: `${item.bidCount} bid${item.bidCount === 1 ? '' : 's'}` }));
   }
+  const remaining = timeRemaining(item.endsAt);
+  if (remaining) stats.appendChild(el('span', { textContent: remaining }));
+  bidRow.appendChild(stats);
+  bidRow.appendChild(historyLink(item.itemId));
   body.appendChild(bidRow);
   if (item.split) {
     const split = el('div', { class: 'item-split' });
-    split.appendChild(el('div', { class: 'label', textContent: 'Cash half' }));
-    split.appendChild(el('div', { class: 'label', textContent: `${symbol} shares` }));
+    split.appendChild(el('div', { class: 'label', textContent: 'Half Cash' }));
+    split.appendChild(el('div', { class: 'label', textContent: 'Half Stock' }));
     split.appendChild(el('div', { class: 'value', textContent: usd.format(item.split.cashUsd) }));
-    split.appendChild(el('div', { class: 'value', textContent: shares.format(item.split.shares) }));
+    split.appendChild(el('div', { class: 'value' }, [sharesValue(item.split.shares, { compact: true })]));
     body.appendChild(split);
   }
   card.appendChild(body);
@@ -447,19 +558,22 @@ function renderEndedSection(snapshot, endedItems, totals) {
   if (totals) {
     const symbol = snapshot.stock?.symbol ?? activeSymbol;
     const displaySplit = atEnd ? totals.splitAtEnd : totals.split;
-    const sharesSuffix = atEnd ? '(at end)' : '(live)';
+    const sharesSuffix = atEnd ? ' (at end)' : ' (live)';
     const stats = [
       { label: 'Ended listings', value: integer.format(totals.listingsCount) },
-      { label: 'Total bids on ended', value: integer.format(totals.bidsCount) },
+      { label: 'Bids', value: integer.format(totals.bidsCount) },
       { label: 'Sum of final bids', value: usd.format(totals.bidUsd) },
-      { label: 'Cash half', value: usd.format(displaySplit.cashUsd) },
-      { label: `${symbol} shares ${sharesSuffix}`, value: shares.format(displaySplit.shares) },
+      { label: 'Half Cash', value: usd.format(displaySplit.cashUsd) },
+      { label: `Half Stock${sharesSuffix}`, value: sharesValue(displaySplit.shares) },
     ];
     for (const stat of stats) {
+      const valueEl = el('div', { class: 'stat-value' });
+      if (typeof stat.value === 'string') valueEl.textContent = stat.value;
+      else valueEl.appendChild(stat.value);
       totalsRoot.appendChild(
         el('div', { class: 'stat' }, [
           el('div', { class: 'stat-label', textContent: stat.label }),
-          el('div', { class: 'stat-value', textContent: stat.value }),
+          valueEl,
         ]),
       );
     }
@@ -477,14 +591,13 @@ function renderEndedSection(snapshot, endedItems, totals) {
   }
 
   root.replaceChildren();
-  const symbol = snapshot.stock?.symbol ?? activeSymbol;
   const sorted = sortEndedItems(endedItems, currentSort);
   for (const item of sorted) {
-    root.appendChild(renderEndedItem(item, symbol));
+    root.appendChild(renderEndedItem(item));
   }
 }
 
-function renderEndedItem(item, symbol) {
+function renderEndedItem(item) {
   const card = el('article', { class: 'item ended-item' });
   const img = item.imageUrl
     ? el('img', { class: 'item-image', src: item.imageUrl, alt: item.title, loading: 'lazy' })
@@ -501,44 +614,37 @@ function renderEndedItem(item, symbol) {
   if (item.sellerId) {
     meta.appendChild(el('span', { class: sellerBadgeClass(item.sellerId), textContent: `@${item.sellerId}` }));
   }
-  if (item.finalBidCount !== null && item.finalBidCount !== undefined) {
-    meta.appendChild(el('span', { textContent: `${item.finalBidCount} bid${item.finalBidCount === 1 ? '' : 's'}` }));
-  }
-  const endedDate = item.endedAt ? new Date(item.endedAt) : null;
-  if (endedDate) meta.appendChild(el('span', { textContent: `Ended ${endedDate.toLocaleString()}` }));
-  meta.appendChild(
-    el('a', {
-      class: 'item-audit-link',
-      href: `/item?id=${encodeURIComponent(item.itemId)}`,
-      textContent: 'history →',
-      title: 'View bid and price history for this item',
-    }),
-  );
   body.appendChild(meta);
 
   const atEnd = currentEndedPriceMode === 'at-end';
   const displaySplit = atEnd ? item.endTimeSplit : item.split;
 
+  // Price line: final price + (bid count / ended date) stacked beside it +
+  // history icon, mirroring the active card.
   const bidRow = el('div', { class: 'item-bid-row' });
   bidRow.appendChild(
     el('div', { class: 'item-bid', textContent: usd.format(item.finalPriceUsd) }),
   );
-  // In at-end mode, show the stock price we used so it's obvious why the
-  // shares column is different from the live view.
-  const bidNote = atEnd
-    ? item.endTimePriceUsd !== null
-      ? `final · $${symbol} ${usd.format(item.endTimePriceUsd)} at end`
-      : 'final · no end-time price'
-    : 'final';
-  bidRow.appendChild(el('span', { class: 'item-bid-time', textContent: bidNote }));
+  const stats = el('div', { class: 'item-bid-stats' });
+  if (item.finalBidCount !== null && item.finalBidCount !== undefined) {
+    stats.appendChild(el('span', { textContent: `${item.finalBidCount} bid${item.finalBidCount === 1 ? '' : 's'}` }));
+  }
+  const endedDate = item.endedAt ? new Date(item.endedAt) : null;
+  if (endedDate) {
+    stats.appendChild(el('span', {
+      textContent: `Ended ${endedDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`,
+    }));
+  }
+  bidRow.appendChild(stats);
+  bidRow.appendChild(historyLink(item.itemId));
   body.appendChild(bidRow);
 
   if (displaySplit) {
     const split = el('div', { class: 'item-split' });
-    split.appendChild(el('div', { class: 'label', textContent: 'Cash half' }));
-    split.appendChild(el('div', { class: 'label', textContent: `${symbol} shares` }));
+    split.appendChild(el('div', { class: 'label', textContent: 'Half Cash' }));
+    split.appendChild(el('div', { class: 'label', textContent: 'Half Stock' }));
     split.appendChild(el('div', { class: 'value', textContent: usd.format(displaySplit.cashUsd) }));
-    split.appendChild(el('div', { class: 'value', textContent: shares.format(displaySplit.shares) }));
+    split.appendChild(el('div', { class: 'value' }, [sharesValue(displaySplit.shares, { compact: true })]));
     body.appendChild(split);
   }
   card.appendChild(body);
@@ -754,16 +860,26 @@ async function refresh() {
       }
 
       const detail = body && typeof body.detail === 'string' ? ` (${body.detail})` : '';
-      renderError(
-        res.status === 503
-          ? `Server can't reach eBay or the price provider right now.${detail}`
-          : `Snapshot request failed (HTTP ${res.status}).${detail}`,
-      );
+      if (res.status === 503) {
+        // Usually a transient cold start (the dev service wakes lazily and
+        // the first snapshot needs an eBay token + a fresh poll). Show a
+        // loading message and retry soon instead of waiting the full poll
+        // interval, so the page populates as soon as the server is ready.
+        renderError(`Fetching live data — retrying…${detail}`);
+        scheduleQuickRetry();
+      } else {
+        renderError(`Snapshot request failed (HTTP ${res.status}).${detail}`);
+      }
       return;
     }
+    clearQuickRetry();
     const snapshot = await res.json();
     lastKnownGoodSymbol = activeSymbol;
     saveTickerToStorage(activeSymbol);
+    // Update logo state BEFORE any render that calls sharesValue().
+    currentTickerLogoUrl = snapshot.tickerLogoUrl ?? null;
+    currentTickerSymbol = snapshot.stock?.symbol ?? activeSymbol;
+    renderDegradedBanner(snapshot);
     renderTicker(snapshot);
     updateIntroSymbol(snapshot.stock?.symbol ?? activeSymbol);
     renderLastUpdated(snapshot);
@@ -775,6 +891,25 @@ async function refresh() {
     );
   } catch (err) {
     renderError(`Network error: ${err instanceof Error ? err.message : String(err)}`);
+    scheduleQuickRetry();
+  }
+}
+
+// Quick-retry after a transient failure (e.g. cold start), so recovery
+// doesn't have to wait a full POLL_MS. One retry in flight at a time; the
+// steady interval keeps running underneath.
+let retryTimer = null;
+function scheduleQuickRetry() {
+  if (retryTimer !== null) return;
+  retryTimer = window.setTimeout(() => {
+    retryTimer = null;
+    refresh();
+  }, QUICK_RETRY_MS);
+}
+function clearQuickRetry() {
+  if (retryTimer !== null) {
+    window.clearTimeout(retryTimer);
+    retryTimer = null;
   }
 }
 
@@ -853,6 +988,30 @@ document.querySelectorAll('.sort-btn').forEach((btn) => {
     if (lastSnapshot) renderFilteredView(lastSnapshot, new Map()); // re-sort active + ended; no bid flash
   });
 });
+
+// View-mode button wiring. Reflects the persisted choice on initial paint
+// and applies it to the containers. Switching modes is a pure CSS class
+// swap — no re-render needed since every mode reuses the same card DOM.
+document.querySelectorAll('.view-btn').forEach((btn) => {
+  btn.classList.toggle('is-active', btn.dataset.view === currentViewMode);
+  btn.addEventListener('click', () => {
+    if (btn.dataset.view === currentViewMode) return;
+    currentViewMode = btn.dataset.view;
+    saveViewMode(currentViewMode);
+    document.querySelectorAll('.view-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
+    applyViewMode();
+  });
+});
+applyViewMode();
+
+// Collapsible "About" intro: persist open/closed across loads.
+const introAbout = document.getElementById('intro-about');
+if (introAbout) {
+  if (localStorage.getItem('hchs.aboutOpen') === '1') introAbout.open = true;
+  introAbout.addEventListener('toggle', () => {
+    localStorage.setItem('hchs.aboutOpen', introAbout.open ? '1' : '0');
+  });
+}
 
 // Seller filter wiring
 document.querySelectorAll('.seller-btn').forEach((btn) => {

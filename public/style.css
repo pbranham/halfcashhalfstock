@@ -115,9 +115,11 @@ body {
   flex-shrink: 0;
 }
 
+.brand-word,
 .brand-name {
   font-weight: 700;
   letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
 .last-updated {
@@ -165,7 +167,9 @@ body {
     grid-template-areas: 'brand ticker' 'updated updated';
     gap: 6px 16px;
   }
-  .brand { grid-area: brand; }
+  .brand { grid-area: brand; gap: 6px; }
+  .brand-word { font-size: 13px; }
+  .brand-icon { width: 44px; height: 25px; }
   .ticker { grid-area: ticker; }
   .last-updated { grid-area: updated; text-align: left; }
 }
@@ -178,13 +182,75 @@ main {
   padding: 24px 20px 40px;
 }
 
+.degraded-banner {
+  margin: 0 0 16px;
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--warn, #d9a441);
+  background: rgba(217, 164, 65, 0.12);
+  color: var(--warn, #d9a441);
+  font-size: 13px;
+  font-weight: 500;
+}
+
 .intro {
   color: var(--fg-muted);
   margin: 0 0 20px;
 }
 
+.intro > summary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--fg);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.4;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.intro > summary::-webkit-details-marker {
+  display: none;
+}
+
+.intro > summary::after {
+  content: 'About ▸';
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.intro[open] > summary::after {
+  content: 'About ▾';
+}
+
+.intro-body {
+  margin-top: 10px;
+}
+
+.intro-body p {
+  margin: 0 0 10px;
+}
+
+.intro-body p:last-child {
+  margin-bottom: 0;
+}
+
 .intro a {
   color: var(--fg);
+}
+
+.totals-heading {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 8px;
 }
 
 .totals {
@@ -313,8 +379,95 @@ main {
 
 .items {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 16px;
+  /* Fallback for first paint before the view-mode class is applied. */
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+}
+
+.items.view-grid-sm {
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+}
+
+.items.view-grid-md {
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+}
+
+.items.view-grid-lg {
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+
+/* Smaller cards get a shorter image so the whole card fits the fold, and a
+   slightly smaller price so the price + bids/time line stays on one row. */
+.items.view-grid-sm .item-image {
+  aspect-ratio: 3 / 2;
+}
+.items.view-grid-sm .item-bid {
+  font-size: 18px;
+}
+
+/* List mode: full-width compact rows — small square thumbnail beside the
+   body, mirroring the most-recent-bid card. */
+.items.view-list {
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+/* List mode: one full-width row per item laid out as a grid —
+   [ image | title+meta | price / cash+stock split ].
+   The card body uses display:contents so the title, meta, price line, and
+   split become direct grid items of the card and can be placed into areas.
+   Row 1: title (left) + price (right). Row 2: meta (left) + split (right). */
+.items.view-list .item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    'img title price'
+    'img meta  split';
+  align-items: center;
+  column-gap: 16px;
+  row-gap: 4px;
+  padding: 10px 16px 10px 0;
+}
+
+.items.view-list .item-body {
+  display: contents;
+}
+
+.items.view-list .item-image {
+  grid-area: img;
+  width: 72px;
+  min-width: 72px;
+  height: 72px;
+  aspect-ratio: 1;
+  align-self: center;
+  border-radius: 8px;
+  margin-left: 12px;
+}
+
+.items.view-list .item-title {
+  grid-area: title;
+  align-self: end;
+}
+
+.items.view-list .item-meta {
+  grid-area: meta;
+  align-self: start;
+}
+
+/* Price line sits top-right; the history icon stays grouped with it. */
+.items.view-list .item-bid-row {
+  grid-area: price;
+  justify-self: end;
+  align-self: end;
+  gap: 12px;
+}
+
+/* Cash/stock split sits bottom-right, keeping its 2x2 (label-over-value)
+   layout so the columns read Cash half | GME shares correctly. */
+.items.view-list .item-split {
+  grid-area: split;
+  justify-self: end;
+  align-self: start;
 }
 
 .item {
@@ -374,12 +527,16 @@ main {
 .item-audit-link {
   color: var(--fg-muted);
   text-decoration: none;
-  border-bottom: 1px dotted currentColor;
-  padding-bottom: 1px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 6px;
+  padding: 2px;
+  transition: color 0.15s, background 0.15s;
 }
 
 .item-audit-link:hover {
   color: var(--fg);
+  background: var(--accent-soft);
 }
 
 .item-bid {
@@ -390,17 +547,29 @@ main {
 
 .item-bid-row {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
 }
 
-.item-bid-time {
-  color: var(--fg-muted);
+/* Bid count + time remaining (active) or final bids + ended date (ended),
+   stacked beside the large price. Two lines of small text occupy the
+   vertical space next to the taller price font. min-width:0 lets the
+   column shrink under pressure so the history icon stays on the same line. */
+.item-bid-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
   font-size: 12px;
+  line-height: 1.2;
+  color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  cursor: help;
+}
+
+/* History icon sits at the far right of the price line. */
+.item-bid-row .item-audit-link {
+  margin-left: auto;
 }
 
 .item-split {
@@ -411,6 +580,10 @@ main {
   border-radius: 8px;
   padding: 10px 12px;
   font-variant-numeric: tabular-nums;
+  /* Pin to card bottom — combined with grid's align-items:stretch on .items,
+     the split row aligns across every card in a row even when titles or
+     bid-rows above differ in content. */
+  margin-top: auto;
 }
 
 .item-split .label {
@@ -423,10 +596,37 @@ main {
 .item-split .value {
   font-size: 15px;
   font-weight: 600;
+  /* Keep the value on a single line. Per-tile splits use the compact
+     4-sig-fig form (sharesCompact) so typical numbers fit without wrap. */
+  white-space: nowrap;
+}
+
+/* Spelled-out "shares" unit — used only when no ticker logo is configured
+   (logo.dev token unset) or the image fails to load. Rendered smaller +
+   muted so the prominent number doesn't get bullied by the unit text. */
+.unit {
+  font-size: 0.72em;
+  font-weight: 500;
+  color: var(--fg-muted);
+  margin-left: 0.3em;
+}
+
+/* Ticker logo as the shares "unit" — sized to one line of the surrounding
+   text so it scales naturally between tile values (15px) and totals values
+   (22px). Vertical-align nudges it onto the text baseline. */
+.ticker-logo {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.15em;
+  margin-left: 0.3em;
+  border-radius: 3px;
+  object-fit: contain;
 }
 
 .tag {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -445,6 +645,24 @@ main {
   border-color: #888;
   color: #aaa;
   background: rgba(0, 0, 0, 0.15);
+}
+
+/* Sale-mode tag: spell it out on large grid + list (room to spare), shrink
+   to an icon-only pill on the smaller grids where the text overwhelms. */
+.tag-icon { display: none; }
+.tag-text { display: inline; }
+.items.view-grid-sm .tag-icon,
+.items.view-grid-md .tag-icon {
+  display: block;
+}
+.items.view-grid-sm .tag-text,
+.items.view-grid-md .tag-text {
+  display: none;
+}
+/* Icon-only pill tightens its padding so it stays a neat circle. */
+.items.view-grid-sm .tag,
+.items.view-grid-md .tag {
+  padding: 3px;
 }
 
 .ended-section {
@@ -538,18 +756,28 @@ footer .disclaimer {
   opacity: 0.7;
 }
 /* Controls bar: stock left, sort right, same line */
-.controls-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
+/* Filter controls live below the totals + most-recent-bid, just above the
+   grid. Two rows: (seller filter + stock) and (sort + view). Each row holds
+   two groups that sit side by side on desktop and wrap on narrow screens. */
+.controls {
   margin-bottom: 20px;
+}
+
+.controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 28px;
+}
+
+.controls-row + .controls-row {
+  margin-top: 10px;
 }
 
 .stock-bar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -655,15 +883,42 @@ footer .disclaimer {
   transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
 
-.sort-btn:hover {
+.sort-btn:hover,
+.view-btn:hover {
   border-color: var(--fg-muted);
   color: var(--fg);
 }
 
-.sort-btn.is-active {
+.sort-btn.is-active,
+.view-btn.is-active {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+.view-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.view-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 9px;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.view-btn svg {
+  display: block;
 }
 
 .seller-bar {
@@ -671,7 +926,6 @@ footer .disclaimer {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  margin-bottom: 12px;
 }
 
 .seller-btn {
@@ -773,63 +1027,4 @@ footer .disclaimer {
 
 .item.highlight {
   animation: highlight-pulse 2s ease-in-out;
-}
-
-.hero {
-  background: var(--bg-elev);
-  border-bottom: 1px solid var(--border);
-  padding: 32px 20px;
-  margin-bottom: 24px;
-}
-
-.hero-content {
-  max-width: 1100px;
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 20px;
-  flex-wrap: wrap;
-}
-
-.hero-text {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--fg-muted);
-  letter-spacing: -0.01em;
-}
-
-.hero-icon {
-  width: 120px;
-  height: 68px;
-  flex-shrink: 0;
-}
-
-.hero-icon svg {
-  width: 100%;
-  height: 100%;
-}
-
-.hero-brand {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--fg);
-  letter-spacing: -0.01em;
-}
-
-@media (max-width: 640px) {
-  .hero-content {
-    flex-direction: column;
-    gap: 12px;
-  }
-  
-  .hero-text,
-  .hero-brand {
-    font-size: 20px;
-  }
-  
-  .hero-icon {
-    width: 100px;
-    height: 56px;
-  }
 }

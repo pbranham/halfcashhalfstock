@@ -111,6 +111,47 @@ describe('createApp', () => {
     expect(body.detail).toBe('upstream-detail-here');
   });
 
+  it('returns 404 from /api/ticker-logo when LOGO_DEV_TOKEN is unset', async () => {
+    await startApp({
+      config: loadConfig({}),
+      log: silentLogger(),
+      fetchListings: async () => [],
+      fetchQuote: async () => QUOTE,
+    });
+    const res = await fetch(`${baseUrl}/api/ticker-logo?symbol=GME`);
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('logo_unavailable');
+  });
+
+  it('returns 400 from /api/ticker-logo for a malformed symbol', async () => {
+    await startApp({
+      config: loadConfig({ LOGO_DEV_TOKEN: 'pk_test' }),
+      log: silentLogger(),
+      fetchListings: async () => [],
+      fetchQuote: async () => QUOTE,
+    });
+    const res = await fetch(`${baseUrl}/api/ticker-logo?symbol=not+a+ticker`);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('bad_request');
+  });
+
+  it('snapshot tickerLogoUrl points at the local proxy when the token is set', async () => {
+    await startApp({
+      config: loadConfig({ LOGO_DEV_TOKEN: 'pk_test' }),
+      log: silentLogger(),
+      fetchListings: async () => [],
+      fetchQuote: async () => QUOTE,
+    });
+    const res = await fetch(`${baseUrl}/api/snapshot?symbol=GME`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { tickerLogoUrl: string | null };
+    expect(body.tickerLogoUrl).toBe('/api/ticker-logo?symbol=GME');
+    // The publishable token should never appear in any client-visible URL.
+    expect(JSON.stringify(body)).not.toContain('pk_test');
+  });
+
   it('emits a strict CSP header', async () => {
     await startApp({
       config: loadConfig({}),

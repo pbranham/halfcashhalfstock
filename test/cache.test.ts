@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { TtlCache } from '../src/cache.js';
+import type { Pool } from 'pg';
+import { TtlCache, DbBackedCache } from '../src/cache.js';
 
 describe('TtlCache', () => {
   it('caches a value within the TTL window', async () => {
@@ -61,5 +62,58 @@ describe('TtlCache', () => {
     cache.invalidate('k');
     await cache.get('k', 1_000, loader);
     expect(loader).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('DbBackedCache', () => {
+  // Minimal pg Pool stub whose query() is routed by SQL shape.
+  function makePool(handlers: {
+    fresh?: unknown; // payload for "expires_at > NOW()" SELECT, or undefined for miss
+    stale?: unknown; // payload for the un-expiry-filtered SELECT, or undefined for miss
+  }) {
+    const query = vi.fn(async (sql: string) => {
+      if (/INSERT INTO cache_entries/.test(sql)) return { rows: [], rowCount: 1 };
+      const filtersByExpiry = /expires_at > NOW\(\)/.test(sql);
+      const payload = filtersByExpiry ? handlers.fresh : handlers.stale;
+      return payload === undefined ? { rows: [] } : { rows: [{ payload }] };
+    });
+    return { pool: { query } as unknown as Pool, query };
+  }
+
+  it('returns the live value and writes it to the DB on a full miss', async () => {
+    const { pool, query } = makePool({ fresh: undefined, stale: undefined });
+    const cache = new DbBackedCache<number>(pool);
+    const loader = vi.fn(async () => 7);
+    expect(await cache.get('k', 1_000, loader)).toBe(7);
+    expect(loader).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO cache_entries/.test(sql))).toBe(true);
+  });
+
+  it('serves a fresh DB row without calling the loader', async () => {
+    const { pool } = makePool({ fresh: 42, stale: 42 });
+    const cache = new DbBackedCache<number>(pool);
+    const loader = vi.fn(async () => 99);
+    expect(await cache.get('k', 1_000, loader)).toBe(42);
+    expect(loader).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a stale DB row when the live fetch fails', async () => {
+    // No fresh row (expired), but a stale row exists; loader throws.
+    const { pool } = makePool({ fresh: undefined, stale: 123 });
+    const cache = new DbBackedCache<number>(pool);
+    const loader = vi.fn(async () => {
+      throw new Error('eBay down');
+    });
+    expect(await cache.get('k', 1_000, loader)).toBe(123);
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates the error when the live fetch fails and no stale row exists', async () => {
+    const { pool } = makePool({ fresh: undefined, stale: undefined });
+    const cache = new DbBackedCache<number>(pool);
+    const loader = vi.fn(async () => {
+      throw new Error('eBay down');
+    });
+    await expect(cache.get('k', 1_000, loader)).rejects.toThrow('eBay down');
   });
 });

@@ -67,6 +67,10 @@ interface Deps {
   log: Logger;
   fetchListings: () => Promise<Listing[]>;
   fetchQuote: (symbol: string) => Promise<PriceQuote>;
+  // True when the listings/quote caches last served past-TTL data because
+  // the live upstream fetch failed — i.e. data is being shown but live
+  // updates are currently failing. Surfaced to the client as snapshot.degraded.
+  dataDegraded?: () => boolean;
   db?: Pool | null;
   tickerQueue?: TickerQueue | null;
   requestStats?: RequestStatsCollector | null;
@@ -150,7 +154,11 @@ function buildDeps(
     };
   }
 
-  return { config, log, fetchListings, fetchQuote, db, tickerQueue, requestStats };
+  const dataDegraded = (): boolean =>
+    (priceCache instanceof DbBackedCache && priceCache.degraded) ||
+    (listingCache instanceof DbBackedCache && listingCache.degraded);
+
+  return { config, log, fetchListings, fetchQuote, dataDegraded, db, tickerQueue, requestStats };
 }
 
 export function createApp(deps: Deps): express.Express {
@@ -276,10 +284,100 @@ export function createApp(deps: Deps): express.Express {
         }
         return composeSnapshot(enriched, quote, ended, endTimeClosesByItemId);
       });
+      // Computed per-request (not baked into the cached snapshot) so the
+      // "live updates delayed" signal reflects current cache health rather
+      // than whatever it was when the snapshot was last composed.
+      const degraded = deps.dataDegraded?.() ?? false;
+      // When the logo.dev token is configured, point the client at our own
+      // proxy endpoint — the token never leaves the server, and the image
+      // bytes are cached process-side so logo.dev is hit roughly once per
+      // ticker per day regardless of how many users browse.
+      const tickerLogoUrl = deps.config.LOGO_DEV_TOKEN
+        ? `/api/ticker-logo?symbol=${encodeURIComponent(symbol)}`
+        : null;
       res
         .status(200)
         .set('Cache-Control', 'public, max-age=15')
-        .json(snapshot);
+        .json({ ...snapshot, degraded, tickerLogoUrl });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Ticker-logo proxy. Keeps the logo.dev token server-side and caches the
+  // image bytes in-process so logo.dev is hit roughly once per ticker per
+  // TTL (default 24h) regardless of how many clients are browsing. The
+  // browser also caches via the Cache-Control header below, so the typical
+  // steady-state cost per user is zero requests after the first paint.
+  // Single-flight: simultaneous misses for the same symbol coalesce. Stale
+  // fallback: if logo.dev fails on refresh, the previous cached entry is
+  // served (mirrors DbBackedCache's stale-fallback behaviour).
+  interface TickerLogoCacheEntry {
+    bytes: Buffer;
+    contentType: string;
+    fetchedAt: number;
+  }
+  const TICKER_LOGO_TTL_MS = 24 * 60 * 60 * 1000;
+  const TICKER_LOGO_BROWSER_MAX_AGE_S = 24 * 60 * 60;
+  const tickerLogoCache = new Map<string, TickerLogoCacheEntry>();
+  const tickerLogoInflight = new Map<string, Promise<TickerLogoCacheEntry>>();
+
+  app.get('/api/ticker-logo', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const token = deps.config.LOGO_DEV_TOKEN;
+      if (!token) {
+        res.status(404).json({ error: 'logo_unavailable', detail: 'LOGO_DEV_TOKEN not configured' });
+        return;
+      }
+      const rawSymbol = typeof req.query.symbol === 'string' ? req.query.symbol.trim().toUpperCase() : '';
+      if (!/^[A-Z][A-Z0-9.\-:]{0,19}$/.test(rawSymbol)) {
+        res.status(400).json({ error: 'bad_request', detail: 'invalid symbol' });
+        return;
+      }
+
+      const serve = (entry: TickerLogoCacheEntry): void => {
+        res
+          .status(200)
+          .set('Content-Type', entry.contentType)
+          .set('Cache-Control', `public, max-age=${TICKER_LOGO_BROWSER_MAX_AGE_S}, immutable`)
+          .send(entry.bytes);
+      };
+
+      const cached = tickerLogoCache.get(rawSymbol);
+      if (cached && Date.now() - cached.fetchedAt < TICKER_LOGO_TTL_MS) {
+        serve(cached);
+        return;
+      }
+
+      let inflight = tickerLogoInflight.get(rawSymbol);
+      if (!inflight) {
+        const url = `https://img.logo.dev/ticker/${encodeURIComponent(rawSymbol)}?token=${encodeURIComponent(token)}&size=64&format=png`;
+        inflight = (async (): Promise<TickerLogoCacheEntry> => {
+          try {
+            const upstream = await fetch(url);
+            if (!upstream.ok) {
+              if (cached) return cached; // stale fallback on upstream non-2xx
+              throw new Error(`logo.dev returned HTTP ${upstream.status}`);
+            }
+            const buf = Buffer.from(await upstream.arrayBuffer());
+            const fresh: TickerLogoCacheEntry = {
+              bytes: buf,
+              contentType: upstream.headers.get('content-type') ?? 'image/png',
+              fetchedAt: Date.now(),
+            };
+            tickerLogoCache.set(rawSymbol, fresh);
+            return fresh;
+          } catch (err) {
+            if (cached) return cached; // stale fallback on network error too
+            throw err;
+          }
+        })().finally(() => {
+          tickerLogoInflight.delete(rawSymbol);
+        });
+        tickerLogoInflight.set(rawSymbol, inflight);
+      }
+      const entry = await inflight;
+      serve(entry);
     } catch (err) {
       next(err);
     }

@@ -111,6 +111,7 @@ automatically.
 | `LOG_LEVEL`               | no       | `info`        | `debug` \| `info` \| `warn` \| `error`                             |
 | `NODE_ENV`                | no       | `development` | `development` \| `test` \| `production`                            |
 | `ENABLE_DEBUG_ENDPOINTS`  | no       | `false`       | When `true`, exposes `/api/debug/ohlc-stats` (dev/staging only)    |
+| `LOGO_DEV_TOKEN`          | no       | —             | logo.dev publishable API key. When set, the dashboard renders the ticker logo as the shares "unit"; otherwise falls back to spelled-out "shares". |
 
 \* Without eBay credentials the server still boots and serves the static UI;
 `/api/snapshot` returns a 503 with a clear log line until both keys are set.

@@ -23,6 +23,7 @@
   <body>
     <header class="topbar">
       <button class="brand" type="button" aria-label="Toggle dark/light theme" title="Click to toggle dark/light theme">
+        <span class="brand-word">Half Cash</span>
         <svg
           class="brand-icon"
           viewBox="0 0 64 36"
@@ -53,7 +54,7 @@
             stroke-linecap="round"
           />
         </svg>
-        <span class="brand-name">halfcashhalfstock</span>
+        <span class="brand-word">Half Stock</span>
       </button>
       <div id="last-updated" class="last-updated" aria-live="polite"></div>
       <div id="ticker" class="ticker" aria-live="polite">
@@ -62,68 +63,75 @@
         <span class="ticker-status"></span>
       </div>
     </header>
-    <section class="hero">
-      <div class="hero-content">
-        <div class="hero-text">Pay with</div>
-        <div class="hero-brand">Half Cash</div>
-        <div class="hero-icon">
-          <svg viewBox="0 0 64 36" xmlns="http://www.w3.org/2000/svg">
-            <rect x="1" y="3" width="62" height="30" rx="3" fill="#2d5b3e" stroke="#1a3826" stroke-width="1.5" />
-            <rect x="1" y="3" width="31" height="30" fill="#3d7d4e" />
-            <circle cx="16.5" cy="18" r="7.5" fill="none" stroke="#a5e8b6" stroke-width="1" />
-            <text x="16.5" y="22" text-anchor="middle" fill="#ffffff" font-family="Georgia, 'Times New Roman', serif" font-weight="700" font-size="11">$</text>
-            <line x1="32" y1="3" x2="32" y2="33" stroke="#ffffff" stroke-width="1" stroke-dasharray="2,1.5" />
-            <rect x="32" y="3" width="31" height="30" fill="#f0e4d3" />
-            <polyline points="34,28 38,23 42,25 46,17 50,21 54,13 58,16 62,11" stroke="#0a8043" stroke-width="1.6" fill="none" stroke-linejoin="round" stroke-linecap="round" />
-          </svg>
-        </div>
-        <div class="hero-brand">Half Stock</div>
-      </div>
-    </section>
     <main>
-      <p class="intro">
-        Ryan Cohen submitted an <a href="https://investor.gamestop.com/eBay/" target="_blank" rel="noopener noreferrer">unsolicited bid to acquire eBay for half cash, half stock</a>, then <a href="https://www.ebay.com/usr/ryan_5050" target="_blank" rel="noopener noreferrer">sold his personal items on eBay</a> to help fund it. Inspired by that, I'm <a href="https://www.ebay.com/usr/boilerpaulie" target="_blank" rel="noopener noreferrer">auctioning my own items on eBay</a> and committing to invest 50% of every dollar in GameStop as eBay's possible future parent company.
-      </p>
-      <p class="intro">
-        What if every eBay shopper could check out with half cash, half stock?
-      </p>
-      <p class="intro">
-        Each auction below is shown as the equivalent half-cash + half-stock allocation at the live market price for <span id="intro-symbol-2">$EBAY</span>. Use the filter to view my listings, Ryan's, or both.
-      </p>
-      <div class="seller-bar" role="group" aria-label="Filter by seller">
-        <span class="sort-label">Show:</span>
-        <button class="seller-btn is-active" data-seller-filter="all">All</button>
-        <button class="seller-btn" data-seller-filter="mine">Mine (@boilerpaulie)</button>
-        <button class="seller-btn" data-seller-filter="ryan">Ryan (@ryan_5050)</button>
+      <div id="degraded-banner" class="degraded-banner" role="status" hidden>
+        ⚠ Live updates are delayed — showing the most recent data we have.
       </div>
-      <div class="controls-bar">
-        <div class="stock-bar" role="group" aria-label="Choose stock">
-          <span class="sort-label">Stock:</span>
-          <button class="stock-btn is-active" data-symbol="EBAY">$EBAY</button>
-          <button class="stock-btn" data-symbol="GME">$GME</button>
-          <input
-            id="ticker-input"
-            type="text"
-            class="ticker-input"
-            placeholder="Custom ticker"
-            aria-label="Enter a custom stock ticker symbol"
-            autocapitalize="characters"
-            autocomplete="off"
-            spellcheck="false"
-            maxlength="20"
-          />
+      <details class="intro" id="intro-about">
+        <summary>What if every eBay shopper could check out with half cash, half stock?</summary>
+        <div class="intro-body">
+          <p>
+            Ryan Cohen submitted an <a href="https://investor.gamestop.com/eBay/" target="_blank" rel="noopener noreferrer">unsolicited bid to acquire eBay for half cash, half stock</a>, then <a href="https://www.ebay.com/usr/ryan_5050" target="_blank" rel="noopener noreferrer">sold his personal items on eBay</a> to help fund it. Inspired by that, I'm <a href="https://www.ebay.com/usr/boilerpaulie" target="_blank" rel="noopener noreferrer">auctioning my own items on eBay</a> and committing to invest 50% of every dollar in GameStop as eBay's possible future parent company.
+          </p>
+          <p>
+            Each auction below is shown as the equivalent half-cash + half-stock allocation at the live market price for <span id="intro-symbol-2">$EBAY</span>. Use the filter to view my listings, Ryan's, or both.
+          </p>
         </div>
-        <div class="sort-bar" role="group" aria-label="Sort listings">
-          <span class="sort-label">Sort:</span>
-          <button class="sort-btn is-active" data-sort="ending-soonest">Ending soonest</button>
-          <button class="sort-btn" data-sort="recent-bid-activity">Recent bids</button>
-          <button class="sort-btn" data-sort="price-low">Price: low &rarr; high</button>
-          <button class="sort-btn" data-sort="price-high">Price: high &rarr; low</button>
-          <button class="sort-btn" data-sort="most-bids">Most bids</button>
-        </div>
-      </div>
+      </details>
+      <h2 class="totals-heading">Totals</h2>
       <section id="totals" class="totals" aria-live="polite"></section>
       <div id="most-recent-bid" class="most-recent-bid" aria-live="polite"></div>
+      <div class="controls">
+        <div class="controls-row">
+          <div class="seller-bar" role="group" aria-label="Filter by seller">
+            <span class="sort-label">Show:</span>
+            <button class="seller-btn is-active" data-seller-filter="all">All</button>
+            <button class="seller-btn" data-seller-filter="mine">Mine (@boilerpaulie)</button>
+            <button class="seller-btn" data-seller-filter="ryan">Ryan (@ryan_5050)</button>
+          </div>
+          <div class="stock-bar" role="group" aria-label="Choose stock">
+            <span class="sort-label">Stock:</span>
+            <button class="stock-btn is-active" data-symbol="EBAY">$EBAY</button>
+            <button class="stock-btn" data-symbol="GME">$GME</button>
+            <input
+              id="ticker-input"
+              type="text"
+              class="ticker-input"
+              placeholder="Custom ticker"
+              aria-label="Enter a custom stock ticker symbol"
+              autocapitalize="characters"
+              autocomplete="off"
+              spellcheck="false"
+              maxlength="20"
+            />
+          </div>
+        </div>
+        <div class="controls-row">
+          <div class="sort-bar" role="group" aria-label="Sort listings">
+            <span class="sort-label">Sort:</span>
+            <button class="sort-btn is-active" data-sort="ending-soonest">Ending soonest</button>
+            <button class="sort-btn" data-sort="recent-bid-activity">Recent bids</button>
+            <button class="sort-btn" data-sort="price-low">Price: low &rarr; high</button>
+            <button class="sort-btn" data-sort="price-high">Price: high &rarr; low</button>
+            <button class="sort-btn" data-sort="most-bids">Most bids</button>
+          </div>
+          <div class="view-bar" role="group" aria-label="Item display mode">
+            <span class="sort-label">View:</span>
+            <button class="view-btn" data-view="list" type="button" aria-label="List view" title="List">
+              <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1" y="2" width="14" height="2.4" rx="1" fill="currentColor"/><rect x="1" y="6.8" width="14" height="2.4" rx="1" fill="currentColor"/><rect x="1" y="11.6" width="14" height="2.4" rx="1" fill="currentColor"/></svg>
+            </button>
+            <button class="view-btn" data-view="grid-sm" type="button" aria-label="Small grid" title="Small grid">
+              <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1" y="1" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="6.25" y="1" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="11.5" y="1" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="1" y="6.25" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="6.25" y="6.25" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="11.5" y="6.25" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="1" y="11.5" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="6.25" y="11.5" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="11.5" y="11.5" width="3.5" height="3.5" rx="0.7" fill="currentColor"/></svg>
+            </button>
+            <button class="view-btn is-active" data-view="grid-md" type="button" aria-label="Medium grid" title="Medium grid">
+              <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1" y="1" width="6" height="6" rx="1" fill="currentColor"/><rect x="9" y="1" width="6" height="6" rx="1" fill="currentColor"/><rect x="1" y="9" width="6" height="6" rx="1" fill="currentColor"/><rect x="9" y="9" width="6" height="6" rx="1" fill="currentColor"/></svg>
+            </button>
+            <button class="view-btn" data-view="grid-lg" type="button" aria-label="Large grid" title="Large grid">
+              <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1" y="1" width="14" height="6.2" rx="1" fill="currentColor"/><rect x="1" y="8.8" width="14" height="6.2" rx="1" fill="currentColor"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
       <section id="items" class="items" aria-live="polite">
         <div class="empty">Loading live auctions…</div>
       </section>
