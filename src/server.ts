@@ -288,10 +288,15 @@ export function createApp(deps: Deps): express.Express {
       // "live updates delayed" signal reflects current cache health rather
       // than whatever it was when the snapshot was last composed.
       const degraded = deps.dataDegraded?.() ?? false;
+      // Optional ticker-logo URL (logo.dev publishable token) — null when
+      // unset so the client falls back to the spelled-out "shares" unit.
+      const tickerLogoUrl = deps.config.LOGO_DEV_TOKEN
+        ? `https://img.logo.dev/ticker/${encodeURIComponent(symbol)}?token=${encodeURIComponent(deps.config.LOGO_DEV_TOKEN)}&size=64&format=png`
+        : null;
       res
         .status(200)
         .set('Cache-Control', 'public, max-age=15')
-        .json({ ...snapshot, degraded });
+        .json({ ...snapshot, degraded, tickerLogoUrl });
     } catch (err) {
       next(err);
     }

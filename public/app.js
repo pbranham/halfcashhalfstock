@@ -7,6 +7,10 @@ let activeSymbol = SUPPORTED_SYMBOLS[0];
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const shares = new Intl.NumberFormat('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+// Compact form for narrow split columns on tiles: round to 4 significant
+// digits so values like 14.7438 → 14.74 fit on one line beside the logo
+// without needing ellipsis. Totals (wide columns) keep the full 4 dp form.
+const sharesCompact = new Intl.NumberFormat('en-US', { maximumSignificantDigits: 4 });
 const integer = new Intl.NumberFormat('en-US');
 
 // --- Sort & animation state ---
@@ -364,7 +368,7 @@ function renderTotals(snapshot, totals) {
     { label: 'Bids', value: integer.format(bidsCount ?? 0) },
     { label: 'Sum of current bids', value: usd.format(bidUsd) },
     { label: 'Half Cash', value: usd.format(split.cashUsd) },
-    { label: `Half $${symbol}`, value: sharesValue(split.shares) },
+    { label: 'Half Stock', value: sharesValue(split.shares) },
   ];
   for (const stat of items) {
     const valueEl = el('div', { class: 'stat-value' });
@@ -422,13 +426,41 @@ function historyLink(itemId) {
   return a;
 }
 
-// Format a shares amount as "{N} <unit>shares</unit>" so the unit can be
-// styled smaller/muted (mirrors how "$" prefixes the cash value but keeps
-// the value on a single line in narrow split columns).
-function sharesValue(n) {
+// Ticker-logo state, refreshed from each /api/snapshot response. When the
+// server has a logo.dev token, this is the image URL for the currently
+// selected stock; otherwise null and we fall back to a spelled-out "shares"
+// unit.
+let currentTickerLogoUrl = null;
+let currentTickerSymbol = '';
+
+// The "unit" trailing the shares value — the ticker logo when available
+// (mirrors a currency glyph), otherwise the spelled-out word "shares". The
+// img onerror handler downgrades to the text unit if the logo fails to
+// load (network error, unknown ticker, etc.) without leaving a broken icon.
+function sharesUnit() {
+  if (currentTickerLogoUrl) {
+    const img = el('img', {
+      class: 'ticker-logo',
+      src: currentTickerLogoUrl,
+      alt: currentTickerSymbol,
+      title: currentTickerSymbol,
+      loading: 'lazy',
+    });
+    img.addEventListener('error', () => {
+      img.replaceWith(el('span', { class: 'unit', textContent: 'shares' }));
+    });
+    return img;
+  }
+  return el('span', { class: 'unit', textContent: 'shares' });
+}
+
+// Format a shares amount as "{N} <unit>" where the unit is the ticker logo
+// or the word "shares". `compact: true` uses 4 significant digits (for
+// narrow tile splits); default uses the full 4-decimal form (for totals).
+function sharesValue(n, { compact = false } = {}) {
   return el('span', {}, [
-    shares.format(n),
-    el('span', { class: 'unit', textContent: 'shares' }),
+    compact ? sharesCompact.format(n) : shares.format(n),
+    sharesUnit(),
   ]);
 }
 
@@ -489,9 +521,9 @@ function renderItem(item, symbol) {
   if (item.split) {
     const split = el('div', { class: 'item-split' });
     split.appendChild(el('div', { class: 'label', textContent: 'Half Cash' }));
-    split.appendChild(el('div', { class: 'label', textContent: `Half $${symbol}` }));
+    split.appendChild(el('div', { class: 'label', textContent: 'Half Stock' }));
     split.appendChild(el('div', { class: 'value', textContent: usd.format(item.split.cashUsd) }));
-    split.appendChild(el('div', { class: 'value' }, [sharesValue(item.split.shares)]));
+    split.appendChild(el('div', { class: 'value' }, [sharesValue(item.split.shares, { compact: true })]));
     body.appendChild(split);
   }
   card.appendChild(body);
@@ -532,7 +564,7 @@ function renderEndedSection(snapshot, endedItems, totals) {
       { label: 'Bids', value: integer.format(totals.bidsCount) },
       { label: 'Sum of final bids', value: usd.format(totals.bidUsd) },
       { label: 'Half Cash', value: usd.format(displaySplit.cashUsd) },
-      { label: `Half $${symbol}${sharesSuffix}`, value: sharesValue(displaySplit.shares) },
+      { label: `Half Stock${sharesSuffix}`, value: sharesValue(displaySplit.shares) },
     ];
     for (const stat of stats) {
       const valueEl = el('div', { class: 'stat-value' });
@@ -620,9 +652,9 @@ function renderEndedItem(item, symbol) {
   if (displaySplit) {
     const split = el('div', { class: 'item-split' });
     split.appendChild(el('div', { class: 'label', textContent: 'Half Cash' }));
-    split.appendChild(el('div', { class: 'label', textContent: `Half $${symbol}` }));
+    split.appendChild(el('div', { class: 'label', textContent: 'Half Stock' }));
     split.appendChild(el('div', { class: 'value', textContent: usd.format(displaySplit.cashUsd) }));
-    split.appendChild(el('div', { class: 'value' }, [sharesValue(displaySplit.shares)]));
+    split.appendChild(el('div', { class: 'value' }, [sharesValue(displaySplit.shares, { compact: true })]));
     body.appendChild(split);
   }
   card.appendChild(body);
@@ -854,6 +886,9 @@ async function refresh() {
     const snapshot = await res.json();
     lastKnownGoodSymbol = activeSymbol;
     saveTickerToStorage(activeSymbol);
+    // Update logo state BEFORE any render that calls sharesValue().
+    currentTickerLogoUrl = snapshot.tickerLogoUrl ?? null;
+    currentTickerSymbol = snapshot.stock?.symbol ?? activeSymbol;
     renderDegradedBanner(snapshot);
     renderTicker(snapshot);
     updateIntroSymbol(snapshot.stock?.symbol ?? activeSymbol);

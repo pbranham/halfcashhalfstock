@@ -30,6 +30,11 @@ const Schema = z.object({
     .transform((v) => v === 'true'),
   APP_ENVIRONMENT: z.string().trim().min(1).optional(),
   ADMIN_TOKEN: z.string().trim().min(8).optional(),
+  // logo.dev publishable API key used to render the ticker logo as the
+  // shares "unit" on the dashboard. Falls back to spelled-out "shares"
+  // when unset. Publishable (client-visible) per logo.dev's docs, so
+  // serving it on /api/snapshot is fine.
+  LOGO_DEV_TOKEN: z.string().trim().min(1).optional(),
 });
 
 export type Config = z.infer<typeof Schema> & { sellerIds: string[] };

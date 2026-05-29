@@ -600,23 +600,31 @@ main {
 .item-split .value {
   font-size: 15px;
   font-weight: 600;
-  /* Keep the value on a single line. With the "shares" unit shrunk via
-     .unit (below), typical values like "0.0231 shares" fit even in the
-     narrowest split column. Outliers get an ellipsis rather than wrapping
-     to two lines (which would make the split box taller than its peers). */
+  /* Keep the value on a single line. Per-tile splits use the compact
+     4-sig-fig form (sharesCompact) so typical numbers fit without wrap. */
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-/* Trailing unit (e.g. "shares") rendered smaller + muted so the prominent
-   number doesn't get bullied by the unit text. Mirrors how "$" sits as a
-   compact prefix on the cash side. */
+/* Spelled-out "shares" unit — used only when no ticker logo is configured
+   (logo.dev token unset) or the image fails to load. Rendered smaller +
+   muted so the prominent number doesn't get bullied by the unit text. */
 .unit {
   font-size: 0.72em;
   font-weight: 500;
   color: var(--fg-muted);
   margin-left: 0.3em;
+}
+
+/* Ticker logo as the shares "unit" — sized to one line of the surrounding
+   text so it scales naturally between tile values (15px) and totals values
+   (22px). Vertical-align nudges it onto the text baseline. */
+.ticker-logo {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.15em;
+  margin-left: 0.3em;
+  border-radius: 3px;
+  object-fit: contain;
 }
 
 .tag {
