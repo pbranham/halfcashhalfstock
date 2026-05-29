@@ -567,10 +567,6 @@ main {
   font-variant-numeric: tabular-nums;
 }
 
-.item-bid-note {
-  opacity: 0.85;
-}
-
 /* History icon sits at the far right of the price line. */
 .item-bid-row .item-audit-link {
   margin-left: auto;

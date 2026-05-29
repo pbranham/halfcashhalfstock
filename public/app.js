@@ -591,14 +591,13 @@ function renderEndedSection(snapshot, endedItems, totals) {
   }
 
   root.replaceChildren();
-  const symbol = snapshot.stock?.symbol ?? activeSymbol;
   const sorted = sortEndedItems(endedItems, currentSort);
   for (const item of sorted) {
-    root.appendChild(renderEndedItem(item, symbol));
+    root.appendChild(renderEndedItem(item));
   }
 }
 
-function renderEndedItem(item, symbol) {
+function renderEndedItem(item) {
   const card = el('article', { class: 'item ended-item' });
   const img = item.imageUrl
     ? el('img', { class: 'item-image', src: item.imageUrl, alt: item.title, loading: 'lazy' })
@@ -634,15 +633,6 @@ function renderEndedItem(item, symbol) {
   if (endedDate) {
     stats.appendChild(el('span', {
       textContent: `Ended ${endedDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`,
-    }));
-  }
-  // In at-end mode, note the stock price used so the shares column makes sense.
-  if (atEnd) {
-    stats.appendChild(el('span', {
-      class: 'item-bid-note',
-      textContent: item.endTimePriceUsd !== null
-        ? `$${symbol} ${usd.format(item.endTimePriceUsd)} at end`
-        : 'no end-time price',
     }));
   }
   bidRow.appendChild(stats);
