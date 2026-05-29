@@ -454,33 +454,24 @@ function renderItem(item, symbol) {
   if (item.sellerId) {
     meta.appendChild(el('span', { class: sellerBadgeClass(item.sellerId), textContent: `@${item.sellerId}` }));
   }
-  if (item.bidCount !== null && item.bidCount !== undefined) {
-    meta.appendChild(el('span', { textContent: `${item.bidCount} bid${item.bidCount === 1 ? '' : 's'}` }));
-  }
-  const remaining = timeRemaining(item.endsAt);
-  if (remaining) meta.appendChild(el('span', { textContent: remaining }));
   body.appendChild(meta);
 
-  // Price line: price on the left, then a right-aligned group with the
-  // last-bid age and the history icon (moved here from the meta row so the
-  // tiled cards read cleaner — the history link no longer crowds the tags).
+  // Price line: the large price on the left, with bid count + time remaining
+  // stacked beside it (two lines of normal text matching the taller price
+  // font), and the history icon pinned to the far right. Consolidating these
+  // here reclaims the line the meta row used to spend on bids/time.
   const bidRow = el('div', { class: 'item-bid-row' });
   bidRow.appendChild(
     el('div', { class: 'item-bid', textContent: item.priceUsd != null ? usd.format(item.priceUsd) : '—' }),
   );
-  const bidMeta = el('div', { class: 'item-bid-meta' });
-  const bidAge = formatRelativeBidAge(item.lastBidTime);
-  if (bidAge) {
-    bidMeta.appendChild(
-      el('span', {
-        class: 'item-bid-time',
-        textContent: bidAge,
-        title: `Most recent bid activity: ${formatLocalTimestamp(item.lastBidTime)}. This may differ from when the current displayed bid was reached due to proxy bidding.`,
-      }),
-    );
+  const stats = el('div', { class: 'item-bid-stats' });
+  if (item.bidCount !== null && item.bidCount !== undefined) {
+    stats.appendChild(el('span', { textContent: `${item.bidCount} bid${item.bidCount === 1 ? '' : 's'}` }));
   }
-  bidMeta.appendChild(historyLink(item.itemId));
-  bidRow.appendChild(bidMeta);
+  const remaining = timeRemaining(item.endsAt);
+  if (remaining) stats.appendChild(el('span', { textContent: remaining }));
+  bidRow.appendChild(stats);
+  bidRow.appendChild(historyLink(item.itemId));
   body.appendChild(bidRow);
   if (item.split) {
     const split = el('div', { class: 'item-split' });
@@ -576,36 +567,38 @@ function renderEndedItem(item, symbol) {
   if (item.sellerId) {
     meta.appendChild(el('span', { class: sellerBadgeClass(item.sellerId), textContent: `@${item.sellerId}` }));
   }
-  if (item.finalBidCount !== null && item.finalBidCount !== undefined) {
-    meta.appendChild(el('span', { textContent: `${item.finalBidCount} bid${item.finalBidCount === 1 ? '' : 's'}` }));
-  }
-  const endedDate = item.endedAt ? new Date(item.endedAt) : null;
-  if (endedDate) meta.appendChild(el('span', { textContent: `Ended ${endedDate.toLocaleString()}` }));
-  meta.appendChild(
-    el('a', {
-      class: 'item-audit-link',
-      href: `/item?id=${encodeURIComponent(item.itemId)}`,
-      textContent: 'history →',
-      title: 'View bid and price history for this item',
-    }),
-  );
   body.appendChild(meta);
 
   const atEnd = currentEndedPriceMode === 'at-end';
   const displaySplit = atEnd ? item.endTimeSplit : item.split;
 
+  // Price line: final price + (bid count / ended date) stacked beside it +
+  // history icon, mirroring the active card.
   const bidRow = el('div', { class: 'item-bid-row' });
   bidRow.appendChild(
     el('div', { class: 'item-bid', textContent: usd.format(item.finalPriceUsd) }),
   );
-  // In at-end mode, show the stock price we used so it's obvious why the
-  // shares column is different from the live view.
-  const bidNote = atEnd
-    ? item.endTimePriceUsd !== null
-      ? `final · $${symbol} ${usd.format(item.endTimePriceUsd)} at end`
-      : 'final · no end-time price'
-    : 'final';
-  bidRow.appendChild(el('span', { class: 'item-bid-time', textContent: bidNote }));
+  const stats = el('div', { class: 'item-bid-stats' });
+  if (item.finalBidCount !== null && item.finalBidCount !== undefined) {
+    stats.appendChild(el('span', { textContent: `${item.finalBidCount} bid${item.finalBidCount === 1 ? '' : 's'}` }));
+  }
+  const endedDate = item.endedAt ? new Date(item.endedAt) : null;
+  if (endedDate) {
+    stats.appendChild(el('span', {
+      textContent: `Ended ${endedDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`,
+    }));
+  }
+  // In at-end mode, note the stock price used so the shares column makes sense.
+  if (atEnd) {
+    stats.appendChild(el('span', {
+      class: 'item-bid-note',
+      textContent: item.endTimePriceUsd !== null
+        ? `$${symbol} ${usd.format(item.endTimePriceUsd)} at end`
+        : 'no end-time price',
+    }));
+  }
+  bidRow.appendChild(stats);
+  bidRow.appendChild(historyLink(item.itemId));
   body.appendChild(bidRow);
 
   if (displaySplit) {

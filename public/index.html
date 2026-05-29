@@ -78,56 +78,60 @@
           </p>
         </div>
       </details>
-      <div class="seller-bar" role="group" aria-label="Filter by seller">
-        <span class="sort-label">Show:</span>
-        <button class="seller-btn is-active" data-seller-filter="all">All</button>
-        <button class="seller-btn" data-seller-filter="mine">Mine (@boilerpaulie)</button>
-        <button class="seller-btn" data-seller-filter="ryan">Ryan (@ryan_5050)</button>
-      </div>
-      <div class="controls-bar">
-        <div class="stock-bar" role="group" aria-label="Choose stock">
-          <span class="sort-label">Stock:</span>
-          <button class="stock-btn is-active" data-symbol="EBAY">$EBAY</button>
-          <button class="stock-btn" data-symbol="GME">$GME</button>
-          <input
-            id="ticker-input"
-            type="text"
-            class="ticker-input"
-            placeholder="Custom ticker"
-            aria-label="Enter a custom stock ticker symbol"
-            autocapitalize="characters"
-            autocomplete="off"
-            spellcheck="false"
-            maxlength="20"
-          />
-        </div>
-        <div class="sort-bar" role="group" aria-label="Sort listings">
-          <span class="sort-label">Sort:</span>
-          <button class="sort-btn is-active" data-sort="ending-soonest">Ending soonest</button>
-          <button class="sort-btn" data-sort="recent-bid-activity">Recent bids</button>
-          <button class="sort-btn" data-sort="price-low">Price: low &rarr; high</button>
-          <button class="sort-btn" data-sort="price-high">Price: high &rarr; low</button>
-          <button class="sort-btn" data-sort="most-bids">Most bids</button>
-        </div>
-        <div class="view-bar" role="group" aria-label="Item display mode">
-          <span class="sort-label">View:</span>
-          <button class="view-btn" data-view="list" type="button" aria-label="List view" title="List">
-            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1" y="2" width="14" height="2.4" rx="1" fill="currentColor"/><rect x="1" y="6.8" width="14" height="2.4" rx="1" fill="currentColor"/><rect x="1" y="11.6" width="14" height="2.4" rx="1" fill="currentColor"/></svg>
-          </button>
-          <button class="view-btn" data-view="grid-sm" type="button" aria-label="Small grid" title="Small grid">
-            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1" y="1" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="6.25" y="1" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="11.5" y="1" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="1" y="6.25" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="6.25" y="6.25" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="11.5" y="6.25" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="1" y="11.5" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="6.25" y="11.5" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="11.5" y="11.5" width="3.5" height="3.5" rx="0.7" fill="currentColor"/></svg>
-          </button>
-          <button class="view-btn is-active" data-view="grid-md" type="button" aria-label="Medium grid" title="Medium grid">
-            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1" y="1" width="6" height="6" rx="1" fill="currentColor"/><rect x="9" y="1" width="6" height="6" rx="1" fill="currentColor"/><rect x="1" y="9" width="6" height="6" rx="1" fill="currentColor"/><rect x="9" y="9" width="6" height="6" rx="1" fill="currentColor"/></svg>
-          </button>
-          <button class="view-btn" data-view="grid-lg" type="button" aria-label="Large grid" title="Large grid">
-            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1" y="1" width="14" height="6.2" rx="1" fill="currentColor"/><rect x="1" y="8.8" width="14" height="6.2" rx="1" fill="currentColor"/></svg>
-          </button>
-        </div>
-      </div>
       <h2 class="totals-heading">Totals</h2>
       <section id="totals" class="totals" aria-live="polite"></section>
       <div id="most-recent-bid" class="most-recent-bid" aria-live="polite"></div>
+      <div class="controls">
+        <div class="controls-row">
+          <div class="seller-bar" role="group" aria-label="Filter by seller">
+            <span class="sort-label">Show:</span>
+            <button class="seller-btn is-active" data-seller-filter="all">All</button>
+            <button class="seller-btn" data-seller-filter="mine">Mine (@boilerpaulie)</button>
+            <button class="seller-btn" data-seller-filter="ryan">Ryan (@ryan_5050)</button>
+          </div>
+          <div class="stock-bar" role="group" aria-label="Choose stock">
+            <span class="sort-label">Stock:</span>
+            <button class="stock-btn is-active" data-symbol="EBAY">$EBAY</button>
+            <button class="stock-btn" data-symbol="GME">$GME</button>
+            <input
+              id="ticker-input"
+              type="text"
+              class="ticker-input"
+              placeholder="Custom ticker"
+              aria-label="Enter a custom stock ticker symbol"
+              autocapitalize="characters"
+              autocomplete="off"
+              spellcheck="false"
+              maxlength="20"
+            />
+          </div>
+        </div>
+        <div class="controls-row">
+          <div class="sort-bar" role="group" aria-label="Sort listings">
+            <span class="sort-label">Sort:</span>
+            <button class="sort-btn is-active" data-sort="ending-soonest">Ending soonest</button>
+            <button class="sort-btn" data-sort="recent-bid-activity">Recent bids</button>
+            <button class="sort-btn" data-sort="price-low">Price: low &rarr; high</button>
+            <button class="sort-btn" data-sort="price-high">Price: high &rarr; low</button>
+            <button class="sort-btn" data-sort="most-bids">Most bids</button>
+          </div>
+          <div class="view-bar" role="group" aria-label="Item display mode">
+            <span class="sort-label">View:</span>
+            <button class="view-btn" data-view="list" type="button" aria-label="List view" title="List">
+              <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1" y="2" width="14" height="2.4" rx="1" fill="currentColor"/><rect x="1" y="6.8" width="14" height="2.4" rx="1" fill="currentColor"/><rect x="1" y="11.6" width="14" height="2.4" rx="1" fill="currentColor"/></svg>
+            </button>
+            <button class="view-btn" data-view="grid-sm" type="button" aria-label="Small grid" title="Small grid">
+              <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1" y="1" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="6.25" y="1" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="11.5" y="1" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="1" y="6.25" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="6.25" y="6.25" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="11.5" y="6.25" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="1" y="11.5" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="6.25" y="11.5" width="3.5" height="3.5" rx="0.7" fill="currentColor"/><rect x="11.5" y="11.5" width="3.5" height="3.5" rx="0.7" fill="currentColor"/></svg>
+            </button>
+            <button class="view-btn is-active" data-view="grid-md" type="button" aria-label="Medium grid" title="Medium grid">
+              <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1" y="1" width="6" height="6" rx="1" fill="currentColor"/><rect x="9" y="1" width="6" height="6" rx="1" fill="currentColor"/><rect x="1" y="9" width="6" height="6" rx="1" fill="currentColor"/><rect x="9" y="9" width="6" height="6" rx="1" fill="currentColor"/></svg>
+            </button>
+            <button class="view-btn" data-view="grid-lg" type="button" aria-label="Large grid" title="Large grid">
+              <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1" y="1" width="14" height="6.2" rx="1" fill="currentColor"/><rect x="1" y="8.8" width="14" height="6.2" rx="1" fill="currentColor"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
       <section id="items" class="items" aria-live="polite">
         <div class="empty">Loading live auctions…</div>
       </section>
