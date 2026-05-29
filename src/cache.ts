@@ -75,18 +75,45 @@ export class DbBackedCache<T> {
       return dbCached;
     }
 
-    const value = await this.#memory.get(key, ttlMs, loader);
-    await this.storeDb(key, value, ttlMs).catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`Failed to cache ${key} to DB:`, message);
-    });
-    return value;
+    try {
+      const value = await this.#memory.get(key, ttlMs, loader);
+      await this.storeDb(key, value, ttlMs).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`Failed to cache ${key} to DB:`, message);
+      });
+      return value;
+    } catch (err) {
+      // The live fetch failed (e.g. a transient eBay/price-provider blip, or
+      // a cold-started process racing its first upstream call). Rather than
+      // error the whole snapshot, fall back to the most recent cached value
+      // even if it's past its TTL — slightly-stale data beats an error page,
+      // and this masks cold-start races where the fresh row just expired.
+      // Only propagate the error when there's no cached value at all.
+      const stale = await this.checkDbStale(key);
+      if (stale !== undefined) return stale;
+      throw err;
+    }
   }
 
   private async checkDb(key: string): Promise<T | undefined> {
     try {
       const result = await this.#pool.query(
         'SELECT payload FROM cache_entries WHERE cache_key = $1 AND expires_at > NOW()',
+        [key],
+      );
+      if (result.rows.length === 0) return undefined;
+      return result.rows[0].payload as T;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Most recent cached value regardless of expiry — used only as a
+  // last-resort fallback when the live fetch fails.
+  private async checkDbStale(key: string): Promise<T | undefined> {
+    try {
+      const result = await this.#pool.query(
+        'SELECT payload FROM cache_entries WHERE cache_key = $1',
         [key],
       );
       if (result.rows.length === 0) return undefined;
