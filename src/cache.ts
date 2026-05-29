@@ -90,7 +90,16 @@ export class DbBackedCache<T> {
       this.#degraded = false;
       await this.storeDb(key, value, ttlMs).catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`Failed to cache ${key} to DB:`, message);
+        // If the storage failure is *still* "invalid input syntax for type
+        // json" after the null-byte strip in storeDb, log a 500-char sample
+        // so we can see exactly what character PG is rejecting. Otherwise
+        // just log the message — the storage failure is non-fatal.
+        if (message.includes('invalid input syntax for type json')) {
+          const sample = JSON.stringify(value).slice(0, 500);
+          console.error(`Failed to cache ${key} to DB: ${message} | sample: ${sample}`);
+        } else {
+          console.error(`Failed to cache ${key} to DB:`, message);
+        }
       });
       return value;
     } catch (err) {
@@ -139,12 +148,21 @@ export class DbBackedCache<T> {
 
   private async storeDb(key: string, value: T, ttlMs: number): Promise<void> {
     const expiresAt = new Date(Date.now() + ttlMs);
+    // Serialize ourselves (rather than letting pg-node auto-stringify) so we
+    // can strip the one character Postgres's JSONB column won't accept: the
+    // null byte (U+0000). RFC 8259 allows it in JSON strings, but JSONB
+    // rejects the whole document if any string contains one. They're never
+    // meaningful in display text (always corruption — copy-paste artifacts
+    // in eBay titles, etc.), so dropping them is safe and preserves the rest
+    // of the payload. JSON.stringify emits the literal six-character escape
+    // sequence backslash-u-0-0-0-0, hence the doubled backslash in the regex.
+    const json = JSON.stringify(value).replace(/\\u0000/g, '');
     await this.#pool.query(
       `INSERT INTO cache_entries (cache_key, payload, expires_at)
-       VALUES ($1, $2, $3)
+       VALUES ($1, $2::jsonb, $3)
        ON CONFLICT (cache_key) DO UPDATE SET
-         payload = $2, expires_at = $3`,
-      [key, value, expiresAt],
+         payload = $2::jsonb, expires_at = $3`,
+      [key, json, expiresAt],
     );
   }
 
