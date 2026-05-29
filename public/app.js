@@ -361,10 +361,10 @@ function renderTotals(snapshot, totals) {
   const symbol = snapshot.stock?.symbol ?? activeSymbol;
   const items = [
     { label: 'Active listings', value: integer.format(listingsCount) },
-    { label: 'Total bids', value: integer.format(bidsCount ?? 0) },
+    { label: 'Bids', value: integer.format(bidsCount ?? 0) },
     { label: 'Sum of current bids', value: usd.format(bidUsd) },
-    { label: 'Total cash half', value: usd.format(split.cashUsd) },
-    { label: `Total ${symbol} shares`, value: shares.format(split.shares) },
+    { label: 'Half Cash', value: usd.format(split.cashUsd) },
+    { label: `Half $${symbol}`, value: `${shares.format(split.shares)} shares` },
   ];
   for (const stat of items) {
     root.appendChild(
@@ -484,10 +484,10 @@ function renderItem(item, symbol) {
   body.appendChild(bidRow);
   if (item.split) {
     const split = el('div', { class: 'item-split' });
-    split.appendChild(el('div', { class: 'label', textContent: 'Cash half' }));
-    split.appendChild(el('div', { class: 'label', textContent: `${symbol} shares` }));
+    split.appendChild(el('div', { class: 'label', textContent: 'Half Cash' }));
+    split.appendChild(el('div', { class: 'label', textContent: `Half $${symbol}` }));
     split.appendChild(el('div', { class: 'value', textContent: usd.format(item.split.cashUsd) }));
-    split.appendChild(el('div', { class: 'value', textContent: shares.format(item.split.shares) }));
+    split.appendChild(el('div', { class: 'value', textContent: `${shares.format(item.split.shares)} shares` }));
     body.appendChild(split);
   }
   card.appendChild(body);
@@ -522,13 +522,13 @@ function renderEndedSection(snapshot, endedItems, totals) {
   if (totals) {
     const symbol = snapshot.stock?.symbol ?? activeSymbol;
     const displaySplit = atEnd ? totals.splitAtEnd : totals.split;
-    const sharesSuffix = atEnd ? '(at end)' : '(live)';
+    const sharesSuffix = atEnd ? ' (at end)' : ' (live)';
     const stats = [
       { label: 'Ended listings', value: integer.format(totals.listingsCount) },
-      { label: 'Total bids on ended', value: integer.format(totals.bidsCount) },
+      { label: 'Bids', value: integer.format(totals.bidsCount) },
       { label: 'Sum of final bids', value: usd.format(totals.bidUsd) },
-      { label: 'Cash half', value: usd.format(displaySplit.cashUsd) },
-      { label: `${symbol} shares ${sharesSuffix}`, value: shares.format(displaySplit.shares) },
+      { label: 'Half Cash', value: usd.format(displaySplit.cashUsd) },
+      { label: `Half $${symbol}${sharesSuffix}`, value: `${shares.format(displaySplit.shares)} shares` },
     ];
     for (const stat of stats) {
       totalsRoot.appendChild(
@@ -610,10 +610,10 @@ function renderEndedItem(item, symbol) {
 
   if (displaySplit) {
     const split = el('div', { class: 'item-split' });
-    split.appendChild(el('div', { class: 'label', textContent: 'Cash half' }));
-    split.appendChild(el('div', { class: 'label', textContent: `${symbol} shares` }));
+    split.appendChild(el('div', { class: 'label', textContent: 'Half Cash' }));
+    split.appendChild(el('div', { class: 'label', textContent: `Half $${symbol}` }));
     split.appendChild(el('div', { class: 'value', textContent: usd.format(displaySplit.cashUsd) }));
-    split.appendChild(el('div', { class: 'value', textContent: shares.format(displaySplit.shares) }));
+    split.appendChild(el('div', { class: 'value', textContent: `${shares.format(displaySplit.shares)} shares` }));
     body.appendChild(split);
   }
   card.appendChild(body);

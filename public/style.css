@@ -244,6 +244,15 @@ main {
   color: var(--fg);
 }
 
+.totals-heading {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 8px;
+}
+
 .totals {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
