@@ -79,6 +79,30 @@ function saveEndedWindow(value) {
 }
 let currentEndedWindow = loadEndedWindow();
 
+// --- Item view mode (list / small / medium / large grid) ---
+// All modes share the same renderItem DOM; only a class on the items
+// containers changes, so switching is a pure CSS reflow — no re-render.
+const VIEW_MODES = ['list', 'grid-sm', 'grid-md', 'grid-lg'];
+function loadViewMode() {
+  const stored = localStorage.getItem('hchs.viewMode');
+  return VIEW_MODES.includes(stored) ? stored : 'grid-md';
+}
+function saveViewMode(value) {
+  if (VIEW_MODES.includes(value)) localStorage.setItem('hchs.viewMode', value);
+}
+let currentViewMode = loadViewMode();
+
+// Apply the current view mode class to both the active and ended item
+// containers. Safe to call repeatedly (e.g. after each render).
+function applyViewMode() {
+  for (const id of ['items', 'ended-items']) {
+    const container = document.getElementById(id);
+    if (!container) continue;
+    for (const mode of VIEW_MODES) container.classList.remove(`view-${mode}`);
+    container.classList.add(`view-${currentViewMode}`);
+  }
+}
+
 // --- Ticker state ---
 function loadTickerFromStorage() {
   const stored = localStorage.getItem('ticker');
@@ -853,6 +877,30 @@ document.querySelectorAll('.sort-btn').forEach((btn) => {
     if (lastSnapshot) renderFilteredView(lastSnapshot, new Map()); // re-sort active + ended; no bid flash
   });
 });
+
+// View-mode button wiring. Reflects the persisted choice on initial paint
+// and applies it to the containers. Switching modes is a pure CSS class
+// swap — no re-render needed since every mode reuses the same card DOM.
+document.querySelectorAll('.view-btn').forEach((btn) => {
+  btn.classList.toggle('is-active', btn.dataset.view === currentViewMode);
+  btn.addEventListener('click', () => {
+    if (btn.dataset.view === currentViewMode) return;
+    currentViewMode = btn.dataset.view;
+    saveViewMode(currentViewMode);
+    document.querySelectorAll('.view-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
+    applyViewMode();
+  });
+});
+applyViewMode();
+
+// Collapsible "About" intro: persist open/closed across loads.
+const introAbout = document.getElementById('intro-about');
+if (introAbout) {
+  if (localStorage.getItem('hchs.aboutOpen') === '1') introAbout.open = true;
+  introAbout.addEventListener('toggle', () => {
+    localStorage.setItem('hchs.aboutOpen', introAbout.open ? '1' : '0');
+  });
+}
 
 // Seller filter wiring
 document.querySelectorAll('.seller-btn').forEach((btn) => {

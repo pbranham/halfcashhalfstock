@@ -115,9 +115,11 @@ body {
   flex-shrink: 0;
 }
 
+.brand-word,
 .brand-name {
   font-weight: 700;
   letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
 .last-updated {
@@ -165,7 +167,9 @@ body {
     grid-template-areas: 'brand ticker' 'updated updated';
     gap: 6px 16px;
   }
-  .brand { grid-area: brand; }
+  .brand { grid-area: brand; gap: 6px; }
+  .brand-word { font-size: 13px; }
+  .brand-icon { width: 44px; height: 25px; }
   .ticker { grid-area: ticker; }
   .last-updated { grid-area: updated; text-align: left; }
 }
@@ -181,6 +185,48 @@ main {
 .intro {
   color: var(--fg-muted);
   margin: 0 0 20px;
+}
+
+.intro > summary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--fg);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.4;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.intro > summary::-webkit-details-marker {
+  display: none;
+}
+
+.intro > summary::after {
+  content: 'About ▸';
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.intro[open] > summary::after {
+  content: 'About ▾';
+}
+
+.intro-body {
+  margin-top: 10px;
+}
+
+.intro-body p {
+  margin: 0 0 10px;
+}
+
+.intro-body p:last-child {
+  margin-bottom: 0;
 }
 
 .intro a {
@@ -313,8 +359,69 @@ main {
 
 .items {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 16px;
+  /* Fallback for first paint before the view-mode class is applied. */
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+}
+
+.items.view-grid-sm {
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+}
+
+.items.view-grid-md {
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+}
+
+.items.view-grid-lg {
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+
+/* Smaller cards get a shorter image so the whole card fits the fold. */
+.items.view-grid-sm .item-image {
+  aspect-ratio: 3 / 2;
+}
+
+/* List mode: full-width compact rows — small square thumbnail beside the
+   body, mirroring the most-recent-bid card. */
+.items.view-list {
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.items.view-list .item {
+  flex-direction: row;
+  align-items: stretch;
+}
+
+.items.view-list .item-image {
+  width: 84px;
+  min-width: 84px;
+  aspect-ratio: 1;
+  align-self: center;
+  border-radius: 8px;
+  margin: 8px 0 8px 10px;
+}
+
+.items.view-list .item-body {
+  padding: 10px 14px;
+}
+
+/* Keep the cash/stock split (the whole point) visible in list mode, but
+   compact it into a single inline row instead of the 2x2 grid. */
+.items.view-list .item-split {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  padding: 6px 10px;
+}
+
+.items.view-list .item-split .label::after {
+  content: ':';
+}
+
+.items.view-list .item-split .value {
+  margin-right: 8px;
 }
 
 .item {
@@ -655,15 +762,42 @@ footer .disclaimer {
   transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
 
-.sort-btn:hover {
+.sort-btn:hover,
+.view-btn:hover {
   border-color: var(--fg-muted);
   color: var(--fg);
 }
 
-.sort-btn.is-active {
+.sort-btn.is-active,
+.view-btn.is-active {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+.view-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.view-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 9px;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.view-btn svg {
+  display: block;
 }
 
 .seller-bar {
@@ -773,63 +907,4 @@ footer .disclaimer {
 
 .item.highlight {
   animation: highlight-pulse 2s ease-in-out;
-}
-
-.hero {
-  background: var(--bg-elev);
-  border-bottom: 1px solid var(--border);
-  padding: 32px 20px;
-  margin-bottom: 24px;
-}
-
-.hero-content {
-  max-width: 1100px;
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 20px;
-  flex-wrap: wrap;
-}
-
-.hero-text {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--fg-muted);
-  letter-spacing: -0.01em;
-}
-
-.hero-icon {
-  width: 120px;
-  height: 68px;
-  flex-shrink: 0;
-}
-
-.hero-icon svg {
-  width: 100%;
-  height: 100%;
-}
-
-.hero-brand {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--fg);
-  letter-spacing: -0.01em;
-}
-
-@media (max-width: 640px) {
-  .hero-content {
-    flex-direction: column;
-    gap: 12px;
-  }
-  
-  .hero-text,
-  .hero-brand {
-    font-size: 20px;
-  }
-  
-  .hero-icon {
-    width: 100px;
-    height: 56px;
-  }
 }
