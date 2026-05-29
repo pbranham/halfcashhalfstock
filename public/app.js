@@ -14,7 +14,16 @@ const sharesCompact = new Intl.NumberFormat('en-US', { maximumSignificantDigits:
 const integer = new Intl.NumberFormat('en-US');
 
 // --- Sort & animation state ---
-let currentSort = 'ending-soonest';
+// Sort mode — must match data-sort values on .sort-btn elements in index.html.
+const SORT_MODES = ['ending-soonest', 'recent-bid-activity', 'price-low', 'price-high', 'most-bids'];
+function loadSort() {
+  const stored = localStorage.getItem('hchs.sort');
+  return SORT_MODES.includes(stored) ? stored : 'ending-soonest';
+}
+function saveSort(value) {
+  if (SORT_MODES.includes(value)) localStorage.setItem('hchs.sort', value);
+}
+let currentSort = loadSort();
 let lastSnapshot = null;
 let prevBidCounts = new Map(); // itemId → bidCount from last successful render
 
@@ -1006,11 +1015,15 @@ if (tickerInput) {
   });
 }
 
-// Sort button wiring
+// Sort button wiring — restore the persisted active button on load, then
+// listen for clicks. The is-active class on the default button in HTML
+// (ending-soonest) is overwritten here on every load.
 document.querySelectorAll('.sort-btn').forEach((btn) => {
+  btn.classList.toggle('is-active', btn.dataset.sort === currentSort);
   btn.addEventListener('click', () => {
     if (btn.dataset.sort === currentSort) return;
     currentSort = btn.dataset.sort;
+    saveSort(currentSort);
     document.querySelectorAll('.sort-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
     if (lastSnapshot) renderFilteredView(lastSnapshot, new Map()); // re-sort active + ended; no bid flash
   });
