@@ -462,8 +462,8 @@ main {
   gap: 12px;
 }
 
-/* Cash/stock split sits bottom-right, keeping its 2x2 (label-over-value)
-   layout so the columns read Cash half | GME shares correctly. */
+/* Cash/stock split sits at the right of the list row, stacked label→value
+   per half (same markup as grid mode). */
 .items.view-list .item-split {
   grid-area: split;
   justify-self: end;
@@ -573,17 +573,27 @@ main {
 }
 
 .item-split {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   background: var(--accent-soft);
   border-radius: 8px;
   padding: 10px 12px;
   font-variant-numeric: tabular-nums;
   /* Pin to card bottom — combined with grid's align-items:stretch on .items,
-     the split row aligns across every card in a row even when titles or
+     the split box aligns across every card in a row even when titles or
      bid-rows above differ in content. */
   margin-top: auto;
+}
+
+/* One full-width row per half: label left, value right. space-between keeps
+   them apart; the value never shrinks so it can't be crowded, and the label
+   wraps before the two ever collide. */
+.item-split .split-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .item-split .label {
@@ -593,30 +603,15 @@ main {
   letter-spacing: 0.06em;
 }
 
-/* The "Half Stock" label carries the ticker logo as a small brand chip in a
-   constant spot on every tile — keeping it out of the (variable-width) value
-   so the icon can never bleed past the tile edge. */
-.item-split .label-stock {
-  display: flex;
-  align-items: center;
-  gap: 0.35em;
-}
-
-.item-split .label-stock .ticker-logo {
-  margin-left: 0;
-  width: 1.25em;
-  height: 1.25em;
-}
-
 .item-split .value {
   font-size: 15px;
   font-weight: 600;
-  /* Keep the value on a single line. Per-tile splits use the compact
-     4-sig-fig form (sharesCompact) so typical numbers fit without wrap.
-     min-width:0 lets the two 1fr columns stay an even 50/50 split rather
-     than letting a wide value steal width and wrap the labels unevenly. */
+  /* Value stays whole on one line, right-aligned; the row's label yields
+     space (wraps) when the value is wide, so big-ticket dollar amounts never
+     overflow into the label or push the ticker logo past the tile edge. */
   white-space: nowrap;
-  min-width: 0;
+  flex-shrink: 0;
+  text-align: right;
 }
 
 /* Spelled-out "shares" unit — used only when no ticker logo is configured

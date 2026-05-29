@@ -462,23 +462,26 @@ function sharesUnit() {
   return el('span', { class: 'unit', textContent: 'shares' });
 }
 
-// The half-cash / half-stock split box shared by active and ended cards. Two
-// label/value pillars; the ticker logo rides in the "Half Stock" label (a
-// constant-width spot on every tile) so the value column stays a pure number
-// that can't bleed the icon outside the tile. On logo load failure the chip
-// just disappears — the label text still conveys which asset it is.
+// The half-cash / half-stock split box shared by active and ended cards.
+// Two full-width rows (label left, value right) rather than side-by-side
+// pillars: a 50%-of-tile column can't hold four-digit ended-auction dollar
+// amounts, so they'd overflow and collide. Full-width rows give each value
+// room, and right-aligning the (non-shrinking) value keeps it from ever
+// overlapping the label or bleeding the ticker logo past the tile edge.
 function splitBox(cashUsd, sharesAmount) {
   const split = el('div', { class: 'item-split' });
-  split.appendChild(el('div', { class: 'label', textContent: 'Half Cash' }));
-  const stockLabel = el('div', { class: 'label label-stock', textContent: 'Half Stock' });
-  const logo = tickerLogoImg();
-  if (logo) {
-    logo.addEventListener('error', () => logo.remove());
-    stockLabel.appendChild(logo);
-  }
-  split.appendChild(stockLabel);
-  split.appendChild(el('div', { class: 'value', textContent: usd.format(cashUsd) }));
-  split.appendChild(el('div', { class: 'value', textContent: sharesCompact.format(sharesAmount) }));
+  split.appendChild(
+    el('div', { class: 'split-row' }, [
+      el('span', { class: 'label', textContent: 'Half Cash' }),
+      el('span', { class: 'value', textContent: usd.format(cashUsd) }),
+    ]),
+  );
+  split.appendChild(
+    el('div', { class: 'split-row' }, [
+      el('span', { class: 'label', textContent: 'Half Stock' }),
+      el('span', { class: 'value' }, [sharesValue(sharesAmount, { compact: true })]),
+    ]),
+  );
   return split;
 }
 
