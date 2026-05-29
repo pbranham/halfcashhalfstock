@@ -364,13 +364,16 @@ function renderTotals(snapshot, totals) {
     { label: 'Bids', value: integer.format(bidsCount ?? 0) },
     { label: 'Sum of current bids', value: usd.format(bidUsd) },
     { label: 'Half Cash', value: usd.format(split.cashUsd) },
-    { label: `Half $${symbol}`, value: `${shares.format(split.shares)} shares` },
+    { label: `Half $${symbol}`, value: sharesValue(split.shares) },
   ];
   for (const stat of items) {
+    const valueEl = el('div', { class: 'stat-value' });
+    if (typeof stat.value === 'string') valueEl.textContent = stat.value;
+    else valueEl.appendChild(stat.value);
     root.appendChild(
       el('div', { class: 'stat' }, [
         el('div', { class: 'stat-label', textContent: stat.label }),
-        el('div', { class: 'stat-value', textContent: stat.value }),
+        valueEl,
       ]),
     );
   }
@@ -417,6 +420,16 @@ function historyLink(itemId) {
   });
   a.innerHTML = ICON_HISTORY;
   return a;
+}
+
+// Format a shares amount as "{N} <unit>shares</unit>" so the unit can be
+// styled smaller/muted (mirrors how "$" prefixes the cash value but keeps
+// the value on a single line in narrow split columns).
+function sharesValue(n) {
+  return el('span', {}, [
+    shares.format(n),
+    el('span', { class: 'unit', textContent: 'shares' }),
+  ]);
 }
 
 function ebayItemUrl(itemId) {
@@ -478,7 +491,7 @@ function renderItem(item, symbol) {
     split.appendChild(el('div', { class: 'label', textContent: 'Half Cash' }));
     split.appendChild(el('div', { class: 'label', textContent: `Half $${symbol}` }));
     split.appendChild(el('div', { class: 'value', textContent: usd.format(item.split.cashUsd) }));
-    split.appendChild(el('div', { class: 'value', textContent: `${shares.format(item.split.shares)} shares` }));
+    split.appendChild(el('div', { class: 'value' }, [sharesValue(item.split.shares)]));
     body.appendChild(split);
   }
   card.appendChild(body);
@@ -519,13 +532,16 @@ function renderEndedSection(snapshot, endedItems, totals) {
       { label: 'Bids', value: integer.format(totals.bidsCount) },
       { label: 'Sum of final bids', value: usd.format(totals.bidUsd) },
       { label: 'Half Cash', value: usd.format(displaySplit.cashUsd) },
-      { label: `Half $${symbol}${sharesSuffix}`, value: `${shares.format(displaySplit.shares)} shares` },
+      { label: `Half $${symbol}${sharesSuffix}`, value: sharesValue(displaySplit.shares) },
     ];
     for (const stat of stats) {
+      const valueEl = el('div', { class: 'stat-value' });
+      if (typeof stat.value === 'string') valueEl.textContent = stat.value;
+      else valueEl.appendChild(stat.value);
       totalsRoot.appendChild(
         el('div', { class: 'stat' }, [
           el('div', { class: 'stat-label', textContent: stat.label }),
-          el('div', { class: 'stat-value', textContent: stat.value }),
+          valueEl,
         ]),
       );
     }
@@ -606,7 +622,7 @@ function renderEndedItem(item, symbol) {
     split.appendChild(el('div', { class: 'label', textContent: 'Half Cash' }));
     split.appendChild(el('div', { class: 'label', textContent: `Half $${symbol}` }));
     split.appendChild(el('div', { class: 'value', textContent: usd.format(displaySplit.cashUsd) }));
-    split.appendChild(el('div', { class: 'value', textContent: `${shares.format(displaySplit.shares)} shares` }));
+    split.appendChild(el('div', { class: 'value' }, [sharesValue(displaySplit.shares)]));
     body.appendChild(split);
   }
   card.appendChild(body);

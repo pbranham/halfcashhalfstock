@@ -548,17 +548,19 @@ main {
 .item-bid-row {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 12px;
+  flex-wrap: nowrap;
+  gap: 8px;
 }
 
 /* Bid count + time remaining (active) or final bids + ended date (ended),
    stacked beside the large price. Two lines of small text occupy the
-   vertical space next to the taller price font. */
+   vertical space next to the taller price font. min-width:0 lets the
+   column shrink under pressure so the history icon stays on the same line. */
 .item-bid-stats {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
   font-size: 12px;
   line-height: 1.2;
   color: var(--fg-muted);
@@ -582,6 +584,10 @@ main {
   border-radius: 8px;
   padding: 10px 12px;
   font-variant-numeric: tabular-nums;
+  /* Pin to card bottom — combined with grid's align-items:stretch on .items,
+     the split row aligns across every card in a row even when titles or
+     bid-rows above differ in content. */
+  margin-top: auto;
 }
 
 .item-split .label {
@@ -594,6 +600,23 @@ main {
 .item-split .value {
   font-size: 15px;
   font-weight: 600;
+  /* Keep the value on a single line. With the "shares" unit shrunk via
+     .unit (below), typical values like "0.0231 shares" fit even in the
+     narrowest split column. Outliers get an ellipsis rather than wrapping
+     to two lines (which would make the split box taller than its peers). */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Trailing unit (e.g. "shares") rendered smaller + muted so the prominent
+   number doesn't get bullied by the unit text. Mirrors how "$" sits as a
+   compact prefix on the cash side. */
+.unit {
+  font-size: 0.72em;
+  font-weight: 500;
+  color: var(--fg-muted);
+  margin-left: 0.3em;
 }
 
 .tag {
