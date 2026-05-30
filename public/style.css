@@ -496,6 +496,48 @@ main {
   align-self: start;
 }
 
+/* --- Phone portrait --- */
+@media (max-width: 600px) {
+  /* The largest grid is redundant on a phone: both grid-md (210px min) and
+     grid-lg (300px min) collapse to a single column at this width, so they
+     render identically. Drop the grid-lg toggle — list / 2-up / 1-up are the
+     three distinct, useful densities here. */
+  .view-btn[data-view='grid-lg'] {
+    display: none;
+  }
+
+  /* List mode at desktop is a 3-column row [img | title+meta | price+split],
+     which crams on a phone. Restack to [thumb | everything else], with the
+     right column flowing title → meta → price → split top-to-bottom. */
+  .items.view-list .item {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      'img title'
+      'img meta'
+      'img price'
+      'img split';
+    align-items: start;
+    column-gap: 12px;
+    row-gap: 6px;
+    padding: 10px 14px 12px 0;
+  }
+  .items.view-list .item-image {
+    align-self: start;
+    margin-top: 2px;
+  }
+  /* Undo the desktop right-alignment so the stacked right column reads
+     left-aligned like a normal mobile list item. */
+  .items.view-list .item-title,
+  .items.view-list .item-bid-row,
+  .items.view-list .item-split {
+    justify-self: start;
+    align-self: start;
+  }
+  .items.view-list .item-bid-row {
+    align-items: baseline;
+  }
+}
+
 .item {
   background: var(--bg-card);
   border: 1px solid var(--border);
