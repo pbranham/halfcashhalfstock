@@ -49,6 +49,11 @@ function endedEbayUrl(itemWebUrl, itemId) {
   return `${base}${sep}nordt=true&orig_cvip=true`;
 }
 
+function hiResImg(url, size = 1600) {
+  if (!url || !/(^|\.)ebayimg\.com\//.test(url)) return url;
+  return url.replace(/\/s-l\d+(\.\w+)/i, `/s-l${size}$1`);
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -68,7 +73,9 @@ function renderHeader(listing) {
   const ebayUrl = listing.endedAt
     ? endedEbayUrl(listing.itemWebUrl, listing.itemId)
     : (listing.itemWebUrl || ebayItemUrl(listing.itemId));
-  const img = listing.imageUrl ? `<img src="${escapeHtml(listing.imageUrl)}" alt="" loading="lazy" />` : '';
+  const img = listing.imageUrl
+    ? `<img src="${escapeHtml(hiResImg(listing.imageUrl))}" alt="" loading="lazy" />`
+    : '';
   headerEl.innerHTML = `
     ${img}
     <div class="item-header-text">

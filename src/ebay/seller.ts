@@ -47,6 +47,18 @@ const SEARCH_PATH = '/buy/browse/v1/item_summary/search';
 const PAGE_LIMIT = 200;
 const MAX_PAGES = 10;
 
+// eBay's image CDN encodes the rendered size in the filename as `s-l<N>`
+// (e.g. s-l140, s-l500). Browse search returns small thumbnails; bumping the
+// number requests a larger render of the SAME upload at no extra API cost.
+// 1600 is eBay's largest standard size. Only rewrites i.ebayimg.com URLs and
+// only when the s-l token is present, so non-eBay or unexpected URLs pass
+// through untouched.
+export function upgradeEbayImageUrl(url: string | null, size = 1600): string | null {
+  if (!url) return url;
+  if (!/(^|\.)ebayimg\.com\//.test(url)) return url;
+  return url.replace(/\/s-l\d+(\.\w+)/i, `/s-l${size}$1`);
+}
+
 export interface SellerListingsOptions {
   marketplaceCurrency?: string;
 }
@@ -125,7 +137,9 @@ function normalizeListing(
       ? priceValue
       : null;
 
-  const imageUrl = s.image?.imageUrl ?? s.thumbnailImages?.[0]?.imageUrl ?? null;
+  const imageUrl = upgradeEbayImageUrl(
+    s.image?.imageUrl ?? s.thumbnailImages?.[0]?.imageUrl ?? null,
+  );
 
   return {
     itemId,

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EbayAppTokenProvider } from '../src/ebay/auth.js';
 import { EbayClient } from '../src/ebay/client.js';
-import { listSellerActiveItems } from '../src/ebay/seller.js';
+import { listSellerActiveItems, upgradeEbayImageUrl } from '../src/ebay/seller.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -22,6 +22,51 @@ function buildClient(fetchImpl: ReturnType<typeof vi.fn>): EbayClient {
     fetchImpl: fetchImpl as unknown as typeof fetch,
   });
 }
+
+describe('upgradeEbayImageUrl', () => {
+  it('bumps the s-l size token on eBay CDN URLs', () => {
+    expect(upgradeEbayImageUrl('https://i.ebayimg.com/images/g/abc/s-l500.jpg')).toBe(
+      'https://i.ebayimg.com/images/g/abc/s-l1600.jpg',
+    );
+    expect(upgradeEbayImageUrl('https://i.ebayimg.com/thumbs/images/g/x/s-l140.webp', 800)).toBe(
+      'https://i.ebayimg.com/thumbs/images/g/x/s-l800.webp',
+    );
+  });
+
+  it('leaves non-eBay and tokenless URLs untouched, and passes null through', () => {
+    expect(upgradeEbayImageUrl('https://example.com/s-l500.jpg')).toBe(
+      'https://example.com/s-l500.jpg',
+    );
+    expect(upgradeEbayImageUrl('https://i.ebayimg.com/no-size-token.jpg')).toBe(
+      'https://i.ebayimg.com/no-size-token.jpg',
+    );
+    expect(upgradeEbayImageUrl(null)).toBeNull();
+  });
+
+  it('normalizes the seller listing image to high-res', async () => {
+    const fetchImpl = vi.fn();
+    fetchImpl.mockResolvedValueOnce(
+      jsonResponse({ access_token: 't', expires_in: 7200, token_type: 'Application' }),
+    );
+    fetchImpl.mockResolvedValueOnce(
+      jsonResponse({
+        itemSummaries: [
+          {
+            itemId: 'v1|111',
+            title: 'Thing',
+            image: { imageUrl: 'https://i.ebayimg.com/images/g/abc/s-l225.jpg' },
+            itemWebUrl: 'https://www.ebay.com/itm/111',
+            price: { value: '5', currency: 'USD' },
+            buyingOptions: ['FIXED_PRICE'],
+          },
+        ],
+      }),
+    );
+    const client = buildClient(fetchImpl);
+    const items = await listSellerActiveItems(client, 'ryan_5050');
+    expect(items[0]?.imageUrl).toBe('https://i.ebayimg.com/images/g/abc/s-l1600.jpg');
+  });
+});
 
 describe('listSellerActiveItems', () => {
   it('rejects malformed seller ids', async () => {
