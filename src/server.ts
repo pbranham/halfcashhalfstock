@@ -236,6 +236,11 @@ export function createApp(deps: Deps): express.Express {
         ? rawEndedDays
         : 14;
 
+      // Record the view so the passive poll keeps this ticker warm for the
+      // request window (known tickers skip submitForValidation below, so this
+      // is the only recency signal for them).
+      deps.tickerQueue?.markRequested(symbol);
+
       if (deps.tickerQueue && !deps.tickerQueue.isKnown(symbol)) {
         if (deps.tickerQueue.isBlacklisted(symbol)) {
           res.status(400).json({ error: 'invalid_ticker', symbol });
