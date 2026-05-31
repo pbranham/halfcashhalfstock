@@ -149,14 +149,37 @@ body {
   font-weight: 700;
 }
 
-.ticker-status {
-  color: var(--fg-muted);
+/* Status + price-feed timestamp stack vertically to the right of the price.
+   align-items: baseline on .ticker aligns the first line of this column
+   with the price baseline, so the layout reads as "$EBAY $21.18 STATUS /
+   TIME" without the meta column pushing the row taller. Empty children
+   (e.g. an empty status when the market is open) collapse so the live
+   case shows just the clock. */
+.ticker-meta {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  text-align: left;
 }
 
-.ticker.is-stale .ticker-status::before {
+.ticker-status,
+.ticker-as-of {
+  display: block;
+}
+.ticker-status:empty,
+.ticker-as-of:empty {
+  display: none;
+}
+
+/* Stale = "no fresh snapshot in 2+ minutes". The warning attaches to the
+   meta wrapper rather than ticker-status so it still shows in the
+   market-open case when status is empty. */
+.ticker.is-stale .ticker-meta::before {
   content: '⚠ ';
   color: var(--warn);
 }
