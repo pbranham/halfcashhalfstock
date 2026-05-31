@@ -21,6 +21,7 @@ import {
   forceMarkEnded,
   getClosingPriceAt,
   persistSnapshot,
+  readAdditionalImagesByItemId,
   readBidsForItem,
   readEndedListings,
   readListingDetail,
@@ -34,6 +35,7 @@ import { EbayAppTokenProvider } from './ebay/auth.js';
 import { EbayClient } from './ebay/client.js';
 import { listSellerActiveItems, type Listing } from './ebay/seller.js';
 import { createAdaptiveSellerFetch } from './seller-poll.js';
+import { createItemDetailsEnricher } from './item-details-enricher.js';
 import { fetchBidHistory } from './ebay/bid-history.js';
 import { normalizeTradingItemId } from './ebay/trading.js';
 import { parseViewbids, ViewbidsParseError } from './ebay/viewbids.js';
@@ -75,6 +77,11 @@ interface Deps {
   db?: Pool | null;
   tickerQueue?: TickerQueue | null;
   requestStats?: RequestStatsCollector | null;
+  // Fire-and-forget: kick off a Browse /item/{id} fetch for any of the given
+  // items (active or ended) that's missing or has stale details (gallery +
+  // description). Doesn't block the response; results show up on subsequent
+  // snapshots.
+  enrichItemDetails?: (targets: readonly { itemId: string; imageUrl: string | null }[]) => void;
 }
 
 async function enrichWithBidHistory(deps: Deps, listings: Listing[]): Promise<Listing[]> {
@@ -129,6 +136,9 @@ function buildDeps(
     priceCache.get(symbol, PRICE_TTL_MS, () => priceProvider.getQuote(symbol));
 
   let fetchListings: () => Promise<Listing[]>;
+  let enrichItemDetails:
+    | ((targets: readonly { itemId: string; imageUrl: string | null }[]) => void)
+    | undefined;
   if (hasEbayCredentials(config)) {
     const tokenProvider = new EbayAppTokenProvider({
       appId: config.EBAY_APP_ID!,
@@ -149,6 +159,11 @@ function buildDeps(
           listSellerActiveItems(client, sellerId),
         ),
     });
+    // Per-item details enricher: only set when both eBay creds and DB are
+    // present, since persisted output is the whole point.
+    if (db) {
+      enrichItemDetails = createItemDetailsEnricher({ pool: db, client, log });
+    }
   } else {
     fetchListings = () => {
       throw new Error('eBay credentials are not configured (set EBAY_APP_ID and EBAY_CERT_ID)');
@@ -159,7 +174,17 @@ function buildDeps(
     (priceCache instanceof DbBackedCache && priceCache.degraded) ||
     (listingCache instanceof DbBackedCache && listingCache.degraded);
 
-  return { config, log, fetchListings, fetchQuote, dataDegraded, db, tickerQueue, requestStats };
+  return {
+    config,
+    log,
+    fetchListings,
+    fetchQuote,
+    dataDegraded,
+    db,
+    tickerQueue,
+    requestStats,
+    ...(enrichItemDetails ? { enrichItemDetails } : {}),
+  };
 }
 
 export function createApp(deps: Deps): express.Express {
@@ -181,6 +206,11 @@ export function createApp(deps: Deps): express.Express {
           'object-src': ["'none'"],
           'base-uri': ["'self'"],
           'frame-ancestors': ["'none'"],
+          // Allow the item page to render eBay seller descriptions in a
+          // sandboxed srcdoc iframe (about:srcdoc). The iframe itself has
+          // an opaque origin so the parent CSP doesn't restrict what runs
+          // inside; this rule just permits the parent to mount the frame.
+          'frame-src': ["'self'"],
         },
       },
     }),
@@ -259,6 +289,14 @@ export function createApp(deps: Deps): express.Express {
         const [listings, quote] = await Promise.all([deps.fetchListings(), deps.fetchQuote(symbol)]);
         const enriched = await enrichWithBidHistory(deps, listings);
         const ended = deps.db ? await readEndedListings(deps.db, endedDays) : [];
+        // Best-effort gallery + description backfill for any item in this
+        // snapshot (active OR ended) whose details are missing or stale.
+        // Fire-and-forget; results show up on subsequent snapshots and the
+        // helper single-flights so repeat calls collapse to one pass. Ended
+        // items often 404 on eBay once they're past their visibility window
+        // — the enricher persists an empty row in that case so they don't
+        // re-attempt every snapshot.
+        deps.enrichItemDetails?.([...listings, ...ended]);
         // For each USD-denominated ended item, find the OHLC close at the
         // moment it ended. The result is fixed forever for any given
         // (itemId, ticker) pair, so consult the process-level cache first
@@ -288,7 +326,15 @@ export function createApp(deps: Deps): express.Express {
             });
           }
         }
-        return composeSnapshot(enriched, quote, ended, endTimeClosesByItemId);
+        // Bulk-fetch the additionalImages galleries for every item in this
+        // snapshot (active + ended) so each card carries its full gallery.
+        // The query touches only rows where additional_images is non-null,
+        // so it's cheap even for sellers with hundreds of listings.
+        const allItemIds = [...enriched.map((l) => l.itemId), ...ended.map((e) => e.itemId)];
+        const additionalImagesByItemId = deps.db
+          ? await readAdditionalImagesByItemId(deps.db, allItemIds)
+          : new Map<string, string[]>();
+        return composeSnapshot(enriched, quote, ended, endTimeClosesByItemId, additionalImagesByItemId);
       });
       // Computed per-request (not baked into the cached snapshot) so the
       // "live updates delayed" signal reflects current cache health rather

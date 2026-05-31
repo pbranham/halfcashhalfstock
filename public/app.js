@@ -1,3 +1,6 @@
+import { openImageLightbox } from '/lightbox.js';
+import { attachCyclingCarousel } from '/carousel.js';
+
 const POLL_MS = 30_000;
 const QUICK_RETRY_MS = 4_000;
 const STALE_MS = 120_000;
@@ -480,6 +483,64 @@ function hiResImg(url, size = 1600) {
   return url.replace(/\/s-l\d+(\.\w+)/i, `/s-l${size}$1`);
 }
 
+// Build a cycling image carousel for an item's gallery. Pass
+// `[primary, ...additional]` deduped. The track wrap-cycles in both
+// directions (swipe past either end → other end) and clicking an image
+// opens the lightbox at the same index; when the lightbox closes, the
+// inline gallery jumps to whatever image the user was on in the modal so
+// they stay continuous.
+function imageGallery(images, alt) {
+  const cleaned = images.filter(Boolean).map((u) => hiResImg(u));
+  // Dedupe while preserving order so a listing whose primary equals
+  // additional[0] doesn't flash the same image twice.
+  const seen = new Set();
+  const ordered = [];
+  for (const u of cleaned) {
+    if (seen.has(u)) continue;
+    seen.add(u);
+    ordered.push(u);
+  }
+  const single = ordered.length <= 1;
+  const wrap = el('div', { class: `item-gallery${single ? ' single-image' : ''}` });
+  if (ordered.length === 0) return wrap;
+
+  const track = el('div', { class: 'gallery-track' });
+  wrap.appendChild(track);
+  // Counter goes on every gallery (consistent indicator regardless of how
+  // many images the listing has — eBay caps at 24, which would overflow
+  // any dot strip on a 160px tile).
+  const counter = el('div', { class: 'gallery-counter', 'aria-hidden': 'true' });
+  wrap.appendChild(counter);
+
+  const prev = el('button', { class: 'gallery-nav gallery-prev', type: 'button', 'aria-label': 'Previous image', textContent: '‹' });
+  const next = el('button', { class: 'gallery-nav gallery-next', type: 'button', 'aria-label': 'Next image', textContent: '›' });
+  if (!single) {
+    wrap.appendChild(prev);
+    wrap.appendChild(next);
+  }
+
+  const carousel = attachCyclingCarousel(track, {
+    images: ordered,
+    alt: alt ?? '',
+    counterEl: counter,
+  });
+  prev.addEventListener('click', (e) => { e.stopPropagation(); carousel.step(-1); });
+  next.addEventListener('click', (e) => { e.stopPropagation(); carousel.step(1); });
+
+  // Click any image to open the lightbox at the currently-visible slide;
+  // when the lightbox closes, jump this inline carousel to the index the
+  // user landed on so opening + closing maintains continuity.
+  track.style.cursor = 'zoom-in';
+  track.addEventListener('click', (e) => {
+    if (!(e.target instanceof HTMLImageElement)) return;
+    e.stopPropagation();
+    openImageLightbox(ordered, carousel.getIndex(), alt ?? '', {
+      onClose: (finalIdx) => carousel.goTo(finalIdx),
+    });
+  });
+  return wrap;
+}
+
 // The half-cash / half-stock split box shared by active and ended cards.
 //
 // Each half is a flex-wrap line holding a label + an atomic (nowrap) value.
@@ -536,10 +597,7 @@ function endedEbayUrl(itemWebUrl, itemId) {
 
 function renderItem(item, symbol) {
   const card = el('article', { class: 'item' });
-  const img = item.imageUrl
-    ? el('img', { class: 'item-image', src: hiResImg(item.imageUrl), alt: item.title, loading: 'lazy' })
-    : el('div', { class: 'item-image' });
-  card.appendChild(img);
+  card.appendChild(imageGallery([item.imageUrl, ...(item.additionalImages ?? [])], item.title));
   const body = el('div', { class: 'item-body' });
   body.appendChild(
     el('h2', { class: 'item-title' }, [
@@ -647,10 +705,7 @@ function renderEndedSection(snapshot, endedItems, totals) {
 
 function renderEndedItem(item) {
   const card = el('article', { class: 'item ended-item' });
-  const img = item.imageUrl
-    ? el('img', { class: 'item-image', src: hiResImg(item.imageUrl), alt: item.title, loading: 'lazy' })
-    : el('div', { class: 'item-image' });
-  card.appendChild(img);
+  card.appendChild(imageGallery([item.imageUrl, ...(item.additionalImages ?? [])], item.title));
   const body = el('div', { class: 'item-body' });
   body.appendChild(
     el('h2', { class: 'item-title' }, [

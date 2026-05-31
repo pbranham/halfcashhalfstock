@@ -1,3 +1,6 @@
+import { openImageLightbox } from '/lightbox.js';
+import { attachCyclingCarousel } from '/carousel.js';
+
 const params = new URLSearchParams(window.location.search);
 const itemId = params.get('id') || '';
 
@@ -54,6 +57,62 @@ function hiResImg(url, size = 1600) {
   return url.replace(/\/s-l\d+(\.\w+)/i, `/s-l${size}$1`);
 }
 
+// Mirrors imageGallery() in app.js — uses the same attachCyclingCarousel
+// helper for clone-pad wrap-around and counter, built with DOM methods so
+// it slots next to the innerHTML-rendered header text.
+function buildImageGallery(images, alt) {
+  const cleaned = (images || []).filter(Boolean).map((u) => hiResImg(u));
+  const seen = new Set();
+  const ordered = [];
+  for (const u of cleaned) {
+    if (seen.has(u)) continue;
+    seen.add(u);
+    ordered.push(u);
+  }
+  const single = ordered.length <= 1;
+  const wrap = document.createElement('div');
+  wrap.className = `item-gallery${single ? ' single-image' : ''}`;
+  if (ordered.length === 0) return wrap;
+
+  const track = document.createElement('div');
+  track.className = 'gallery-track';
+  wrap.appendChild(track);
+  const counter = document.createElement('div');
+  counter.className = 'gallery-counter';
+  counter.setAttribute('aria-hidden', 'true');
+  wrap.appendChild(counter);
+
+  const mkBtn = (cls, label, text) => {
+    const b = document.createElement('button');
+    b.className = `gallery-nav ${cls}`;
+    b.type = 'button';
+    b.setAttribute('aria-label', label);
+    b.textContent = text;
+    return b;
+  };
+  const prev = mkBtn('gallery-prev', 'Previous image', '‹');
+  const next = mkBtn('gallery-next', 'Next image', '›');
+  if (!single) wrap.append(prev, next);
+
+  const carousel = attachCyclingCarousel(track, {
+    images: ordered,
+    alt: alt || '',
+    counterEl: counter,
+  });
+  prev.addEventListener('click', (e) => { e.stopPropagation(); carousel.step(-1); });
+  next.addEventListener('click', (e) => { e.stopPropagation(); carousel.step(1); });
+
+  track.style.cursor = 'zoom-in';
+  track.addEventListener('click', (e) => {
+    if (!(e.target instanceof HTMLImageElement)) return;
+    e.stopPropagation();
+    openImageLightbox(ordered, carousel.getIndex(), alt || '', {
+      onClose: (finalIdx) => carousel.goTo(finalIdx),
+    });
+  });
+  return wrap;
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -73,11 +132,9 @@ function renderHeader(listing) {
   const ebayUrl = listing.endedAt
     ? endedEbayUrl(listing.itemWebUrl, listing.itemId)
     : (listing.itemWebUrl || ebayItemUrl(listing.itemId));
-  const img = listing.imageUrl
-    ? `<img src="${escapeHtml(hiResImg(listing.imageUrl))}" alt="" loading="lazy" />`
-    : '';
+  // Render the text first via innerHTML (escaped), then prepend the gallery
+  // as a DOM node so the carousel buttons/event listeners stay live.
   headerEl.innerHTML = `
-    ${img}
     <div class="item-header-text">
       <h2>${escapeHtml(listing.title || 'Untitled item')}</h2>
       <p class="item-meta">Item ID: <code>${escapeHtml(listing.itemId)}</code></p>
@@ -86,7 +143,45 @@ function renderHeader(listing) {
       <p class="item-meta"><a href="${escapeHtml(ebayUrl)}" target="_blank" rel="noopener noreferrer">View on eBay ↗</a></p>
     </div>
   `;
+  const gallery = buildImageGallery(
+    [listing.imageUrl, ...(listing.additionalImages || [])],
+    listing.title,
+  );
+  headerEl.insertBefore(gallery, headerEl.firstChild);
   headerEl.hidden = false;
+}
+
+// eBay descriptions are full HTML (sometimes with styling, embedded images,
+// even <script> the seller pasted from a template). Render in a sandboxed
+// srcdoc iframe so it can't touch the parent, can't run scripts (no
+// allow-scripts), can't break out of its frame. The iframe gets an opaque
+// origin, so the parent's CSP doesn't restrict images inside.
+function renderDescription(descriptionHtml) {
+  const section = document.getElementById('description-section');
+  if (!section) return;
+  if (!descriptionHtml) {
+    section.hidden = true;
+    return;
+  }
+  const mount = document.getElementById('description-mount');
+  mount.replaceChildren();
+  const iframe = document.createElement('iframe');
+  iframe.className = 'item-description-iframe';
+  iframe.sandbox = ''; // empty sandbox = max restriction (no scripts, no same-origin)
+  iframe.loading = 'lazy';
+  iframe.title = 'Item description';
+  // Wrap in a tiny shell so seller HTML has a sensible default font + colour
+  // and doesn't render against a pure-white browser default that clashes
+  // with our dark theme. The body styling is on the iframe document so the
+  // parent CSS can't leak in.
+  iframe.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>
+    html, body { margin: 0; padding: 12px; }
+    body { font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: #1a1a1a; background: #fff; }
+    img, video, iframe { max-width: 100%; height: auto; }
+    table { max-width: 100%; }
+  </style></head><body>${descriptionHtml}</body></html>`;
+  mount.appendChild(iframe);
+  section.hidden = false;
 }
 
 function renderCurrentState(listing, bids) {
@@ -983,6 +1078,7 @@ async function load() {
     loading.hidden = true;
     renderHeader(data.listing);
     renderCurrentState(data.listing, data.bids);
+    renderDescription(data.listing.descriptionHtml);
     renderChart(data.snapshots, data.listing, data.bids);
     renderBids(data.bids);
     renderSnapshots(data.snapshots);
