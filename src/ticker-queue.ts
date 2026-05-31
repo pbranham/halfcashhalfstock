@@ -18,6 +18,12 @@ export interface TickerQueueOptions {
   activeIntervalMs?: number;
   maxWaitMs?: number;
   negativeCacheTtlMs?: number;
+  // How long after a ticker was last requested (viewed) we keep passive-
+  // polling it. Always-active tickers (EBAY, GME) ignore this and poll
+  // forever; custom tickers fall out of the poll once nobody's looked at
+  // them for this long, so a ticker someone typed days ago stops burning
+  // the provider rate limit. Default 30 min.
+  requestWindowMs?: number;
 }
 
 interface PendingResolver {
@@ -35,11 +41,15 @@ export class TickerQueue {
   readonly #activeIntervalMs: number;
   readonly #maxWaitMs: number;
   readonly #negativeCacheTtlMs: number;
+  readonly #requestWindowMs: number;
 
   readonly #activeQueue = new Set<string>();
   readonly #negativeCache = new Map<string, number>();
   readonly #pendingResolvers = new Map<string, PendingResolver[]>();
   readonly #knownTickers = new Set<string>();
+  // When each non-always-active ticker was last requested (viewed). Drives
+  // which custom tickers the passive poll still refreshes.
+  readonly #requestedAt = new Map<string, number>();
   readonly #lastQuoteAsOf = new Map<string, string>();
 
   #passiveTimer: NodeJS.Timeout | null = null;
@@ -58,6 +68,7 @@ export class TickerQueue {
     this.#activeIntervalMs = options.activeIntervalMs ?? 2_500;
     this.#maxWaitMs = options.maxWaitMs ?? 4_000;
     this.#negativeCacheTtlMs = options.negativeCacheTtlMs ?? 60 * 60 * 1000;
+    this.#requestWindowMs = options.requestWindowMs ?? 30 * 60 * 1000;
 
     for (const t of this.#alwaysActive) this.#knownTickers.add(t);
   }
@@ -81,11 +92,19 @@ export class TickerQueue {
     });
   }
 
-  getStatus(): { lastBackfillAt: string | null; backfillStatus: string; knownTickers: string[] } {
+  getStatus(): {
+    lastBackfillAt: string | null;
+    backfillStatus: string;
+    knownTickers: string[];
+    activelyPolling: string[];
+  } {
     return {
       lastBackfillAt: this.#lastBackfillAt ? this.#lastBackfillAt.toISOString() : null,
       backfillStatus: this.#backfillStatus,
       knownTickers: Array.from(this.#knownTickers).sort(),
+      // The set the passive poll actually refreshes right now: always-active
+      // plus custom tickers viewed within the request window.
+      activelyPolling: this.activePollSet().sort(),
     };
   }
 
@@ -141,6 +160,29 @@ export class TickerQueue {
     return this.#knownTickers.has(symbol);
   }
 
+  // Record that a ticker was just requested (e.g. selected on the dashboard).
+  // Always-active tickers are polled regardless, so we don't track them.
+  // Call this for every viewed symbol, even known ones — isKnown short-
+  // circuits validation, so this is the only signal that keeps a known
+  // custom ticker warm in the passive poll.
+  markRequested(symbol: string): void {
+    if (this.#alwaysActive.has(symbol)) return;
+    this.#requestedAt.set(symbol, Date.now());
+  }
+
+  // Tickers the passive poll should refresh: the always-active set plus any
+  // custom ticker requested within the request window. Prunes stale entries
+  // as a side effect so the map can't grow unbounded.
+  private activePollSet(): string[] {
+    const now = Date.now();
+    const set = new Set(this.#alwaysActive);
+    for (const [ticker, at] of this.#requestedAt) {
+      if (now - at <= this.#requestWindowMs) set.add(ticker);
+      else this.#requestedAt.delete(ticker);
+    }
+    return Array.from(set);
+  }
+
   isBlacklisted(symbol: string): boolean {
     const expiry = this.#negativeCache.get(symbol);
     if (!expiry) return false;
@@ -155,6 +197,7 @@ export class TickerQueue {
     if (this.isBlacklisted(symbol)) {
       return { valid: false, symbol, error: 'invalid_ticker' };
     }
+    this.markRequested(symbol);
     if (this.isKnown(symbol)) {
       return { valid: true, symbol, price: 0 };
     }
@@ -243,8 +286,13 @@ export class TickerQueue {
 
   private async runPassivePoll(): Promise<void> {
     if (this.#stopping) return;
+    // refreshKnownTickers keeps the isKnown() validation cache warm, but the
+    // POLL set is scoped to always-active + recently-requested tickers so we
+    // don't hammer the provider for every ticker ever typed (the prior
+    // behaviour, which never aged out because polling itself refreshed the
+    // 5-day OHLC window the known-set query keyed on).
     await this.refreshKnownTickers();
-    const tickers = Array.from(this.#knownTickers);
+    const tickers = this.activePollSet();
     if (tickers.length === 0) return;
 
     const quotes = await this.fetchQuotes(tickers);

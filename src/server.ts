@@ -33,6 +33,7 @@ import {
 import { EbayAppTokenProvider } from './ebay/auth.js';
 import { EbayClient } from './ebay/client.js';
 import { listSellerActiveItems, type Listing } from './ebay/seller.js';
+import { createAdaptiveSellerFetch } from './seller-poll.js';
 import { fetchBidHistory } from './ebay/bid-history.js';
 import { normalizeTradingItemId } from './ebay/trading.js';
 import { parseViewbids, ViewbidsParseError } from './ebay/viewbids.js';
@@ -137,17 +138,17 @@ function buildDeps(
       tokenProvider,
       marketplaceId: config.EBAY_MARKETPLACE_ID,
     });
-    fetchListings = async () => {
-      // Per-seller cache keys so each seller's poll caches independently.
-      const perSeller = await Promise.all(
-        config.sellerIds.map((sellerId) =>
-          listingCache.get(sellerId, LISTINGS_TTL_MS, () =>
-            listSellerActiveItems(client, sellerId),
-          ),
+    // Per-seller cache keys so each seller's poll caches independently. The
+    // adaptive wrapper skips sellers with zero active listings for a while so
+    // an idle seller (e.g. Ryan, all auctions ended) doesn't cost a Browse
+    // call every 30s.
+    fetchListings = createAdaptiveSellerFetch({
+      sellerIds: config.sellerIds,
+      fetchOne: (sellerId) =>
+        listingCache.get(sellerId, LISTINGS_TTL_MS, () =>
+          listSellerActiveItems(client, sellerId),
         ),
-      );
-      return perSeller.flat();
-    };
+    });
   } else {
     fetchListings = () => {
       throw new Error('eBay credentials are not configured (set EBAY_APP_ID and EBAY_CERT_ID)');
@@ -235,6 +236,11 @@ export function createApp(deps: Deps): express.Express {
       const endedDays = Number.isFinite(rawEndedDays) && rawEndedDays > 0 && rawEndedDays <= 36500
         ? rawEndedDays
         : 14;
+
+      // Record the view so the passive poll keeps this ticker warm for the
+      // request window (known tickers skip submitForValidation below, so this
+      // is the only recency signal for them).
+      deps.tickerQueue?.markRequested(symbol);
 
       if (deps.tickerQueue && !deps.tickerQueue.isKnown(symbol)) {
         if (deps.tickerQueue.isBlacklisted(symbol)) {

@@ -471,6 +471,15 @@ function sharesUnit() {
   return el('span', { class: 'unit', textContent: 'shares' });
 }
 
+// Upgrade an eBay image URL to a larger render (see upgradeEbayImageUrl on
+// the server). Applied at render so even listings persisted with a small
+// thumbnail URL (e.g. ended rows fetched before the server-side upgrade
+// landed) display crisply. Non-eBay URLs pass through unchanged.
+function hiResImg(url, size = 1600) {
+  if (!url || !/(^|\.)ebayimg\.com\//.test(url)) return url;
+  return url.replace(/\/s-l\d+(\.\w+)/i, `/s-l${size}$1`);
+}
+
 // The half-cash / half-stock split box shared by active and ended cards.
 //
 // Each half is a flex-wrap line holding a label + an atomic (nowrap) value.
@@ -528,7 +537,7 @@ function endedEbayUrl(itemWebUrl, itemId) {
 function renderItem(item, symbol) {
   const card = el('article', { class: 'item' });
   const img = item.imageUrl
-    ? el('img', { class: 'item-image', src: item.imageUrl, alt: item.title, loading: 'lazy' })
+    ? el('img', { class: 'item-image', src: hiResImg(item.imageUrl), alt: item.title, loading: 'lazy' })
     : el('div', { class: 'item-image' });
   card.appendChild(img);
   const body = el('div', { class: 'item-body' });
@@ -639,7 +648,7 @@ function renderEndedSection(snapshot, endedItems, totals) {
 function renderEndedItem(item) {
   const card = el('article', { class: 'item ended-item' });
   const img = item.imageUrl
-    ? el('img', { class: 'item-image', src: item.imageUrl, alt: item.title, loading: 'lazy' })
+    ? el('img', { class: 'item-image', src: hiResImg(item.imageUrl), alt: item.title, loading: 'lazy' })
     : el('div', { class: 'item-image' });
   card.appendChild(img);
   const body = el('div', { class: 'item-body' });
@@ -789,7 +798,7 @@ function renderMostRecentBid(snapshot, items) {
     bidItem?.imageUrl
       ? el('img', {
           class: 'most-recent-bid-thumb',
-          src: bidItem.imageUrl,
+          src: hiResImg(bidItem.imageUrl),
           alt: bid.title,
           loading: 'lazy',
         })

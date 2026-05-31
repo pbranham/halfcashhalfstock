@@ -49,6 +49,11 @@ function endedEbayUrl(itemWebUrl, itemId) {
   return `${base}${sep}nordt=true&orig_cvip=true`;
 }
 
+function hiResImg(url, size = 1600) {
+  if (!url || !/(^|\.)ebayimg\.com\//.test(url)) return url;
+  return url.replace(/\/s-l\d+(\.\w+)/i, `/s-l${size}$1`);
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -68,7 +73,9 @@ function renderHeader(listing) {
   const ebayUrl = listing.endedAt
     ? endedEbayUrl(listing.itemWebUrl, listing.itemId)
     : (listing.itemWebUrl || ebayItemUrl(listing.itemId));
-  const img = listing.imageUrl ? `<img src="${escapeHtml(listing.imageUrl)}" alt="" loading="lazy" />` : '';
+  const img = listing.imageUrl
+    ? `<img src="${escapeHtml(hiResImg(listing.imageUrl))}" alt="" loading="lazy" />`
+    : '';
   headerEl.innerHTML = `
     ${img}
     <div class="item-header-text">
@@ -650,7 +657,7 @@ function drawChart() {
   })();
   const yLeftLabels = yTickValues.map((p) => {
     const y = yPriceFor(p);
-    return `<text x="${PAD.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="12" font-weight="500" fill="#4caf50" opacity="0.95">${fmtUsd(p)}</text>`;
+    return `<text x="${PAD.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="12" font-weight="500" fill="#5cdb95" opacity="0.95">${fmtUsd(p)}</text>`;
   }).join('');
 
   // Y-axis click target + mode badge. Transparent rect catches clicks
@@ -686,7 +693,7 @@ function drawChart() {
   }).join('');
 
   const dots = points.map((p, i) => `
-    <circle class="chart-dot" data-idx="${i}" cx="${xFor(p.t).toFixed(1)}" cy="${yPriceFor(p.price).toFixed(1)}" r="3.5" fill="#4caf50" />
+    <circle class="chart-dot" data-idx="${i}" cx="${xFor(p.t).toFixed(1)}" cy="${yPriceFor(p.price).toFixed(1)}" r="3.5" fill="#5cdb95" />
   `).join('');
 
   // Hollow circles stacked at the bidder's max-placement timestamp,
@@ -698,7 +705,7 @@ function drawChart() {
     if (d.retracted) {
       return `<circle class="chart-max-dot is-retracted" cx="${xFor(d.t).toFixed(1)}" cy="${yPriceFor(d.price).toFixed(1)}" r="2.5" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.28" pointer-events="none" />`;
     }
-    return `<circle class="chart-max-dot" cx="${xFor(d.t).toFixed(1)}" cy="${yPriceFor(d.price).toFixed(1)}" r="2.5" fill="none" stroke="#4caf50" stroke-width="1.2" opacity="0.5" pointer-events="none" />`;
+    return `<circle class="chart-max-dot" cx="${xFor(d.t).toFixed(1)}" cy="${yPriceFor(d.price).toFixed(1)}" r="2.5" fill="none" stroke="#5cdb95" stroke-width="1.2" opacity="0.5" pointer-events="none" />`;
   }).join('');
 
   // Retraction markers: a hollow placement circle at (placedAt, max), a
@@ -726,11 +733,11 @@ function drawChart() {
       ${gridLines}
       ${maxDotMarkers}
       ${retractionMarkerSvg}
-      <path d="${pricePath}" stroke="#4caf50" stroke-width="2" fill="none" />
+      <path d="${pricePath}" stroke="#5cdb95" stroke-width="2" fill="none" />
       ${dots}
       <line class="chart-guide" x1="0" y1="${PAD.top}" x2="0" y2="${PAD.top + innerH}" stroke="#fff" stroke-width="1" stroke-dasharray="3,3" opacity="0" pointer-events="none" />
-      <circle class="chart-marker-price" cx="0" cy="0" r="6" fill="#a5e8b6" stroke="#0d1f15" stroke-width="2" opacity="0" pointer-events="none" />
-      <circle class="chart-marker-count" cx="0" cy="0" r="5" fill="#ffd54f" stroke="#0d1f15" stroke-width="2" opacity="0" pointer-events="none" />
+      <circle class="chart-marker-price" cx="0" cy="0" r="6" fill="#5cdb95" stroke="#0c0e14" stroke-width="2" opacity="0" pointer-events="none" />
+      <circle class="chart-marker-count" cx="0" cy="0" r="5" fill="#ffd54f" stroke="#0c0e14" stroke-width="2" opacity="0" pointer-events="none" />
       <rect class="chart-hit" x="${PAD.left}" y="${PAD.top}" width="${innerW}" height="${innerH}" fill="transparent" />
       ${xAxisLabels}
       ${yLeftLabels}

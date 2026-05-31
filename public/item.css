@@ -1,6 +1,10 @@
-.item-body {
-  background: var(--bg, #0d1f15);
-  color: var(--text, #e8efe8);
+/* Item audit page. Reuses the shared theme tokens from style.css (:root)
+   so it matches the dashboard's look in both dark and light modes. The page
+   body carries .item-page (not .item-body — that's the dashboard card class
+   in style.css). */
+.item-page {
+  background: var(--bg);
+  color: var(--fg);
 }
 
 .item-main {
@@ -13,9 +17,10 @@
   display: flex;
   gap: 1rem;
   margin-bottom: 1.5rem;
-  background: var(--card-bg, #142b1d);
-  border: 1px solid var(--border, #2d5b3e);
-  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
   padding: 1rem;
   flex-wrap: wrap;
 }
@@ -25,7 +30,7 @@
   height: 96px;
   object-fit: cover;
   border-radius: 6px;
-  background: #000;
+  background: var(--bg-elev);
   flex: 0 0 auto;
 }
 
@@ -41,18 +46,19 @@
 
 .item-header .item-meta {
   font-size: 0.85rem;
-  opacity: 0.75;
+  color: var(--fg-muted);
   margin: 0.15rem 0;
 }
 
 .item-header a {
-  color: #a5e8b6;
+  color: var(--accent);
 }
 
 .item-section {
-  background: var(--card-bg, #142b1d);
-  border: 1px solid var(--border, #2d5b3e);
-  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
   padding: 1rem;
   margin-bottom: 1.5rem;
 }
@@ -70,7 +76,7 @@
 .section-summary {
   font-size: 0.75rem;
   font-weight: 400;
-  opacity: 0.7;
+  color: var(--fg-muted);
 }
 
 .stat-grid {
@@ -80,7 +86,8 @@
 }
 
 .stat-card {
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.6rem 0.75rem;
 }
@@ -89,12 +96,13 @@
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  opacity: 0.7;
+  color: var(--fg-muted);
 }
 
 .stat-card .stat-value {
   font-size: 1.3rem;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   margin-top: 0.2rem;
 }
@@ -118,6 +126,7 @@
   flex-wrap: wrap;
   font-size: 0.75rem;
   margin-bottom: 0.5rem;
+  color: var(--fg-muted);
 }
 
 .chart-legend .swatch {
@@ -129,8 +138,10 @@
   vertical-align: middle;
 }
 
+/* Chart series colours match the SVG the chart renders in item.js; keep them
+   in sync if either changes. Bid line/dots use the theme accent. */
 .chart-legend .line-bid {
-  background: #4caf50;
+  background: var(--accent);
 }
 
 /* Solid dot swatches use the same shape and size as the chart's bid dots
@@ -144,14 +155,17 @@
 }
 
 .chart-legend .dot-active {
-  background: #4caf50;
+  background: var(--accent);
 }
 
 .chart-legend .dot-proxy {
-  border: 1.2px solid #4caf50;
+  border: 1.2px solid var(--accent);
   opacity: 0.6;
 }
 
+/* Volume + cumulative use literal series colours (orange / yellow) that
+   match the chart SVG drawn in item.js — keep these in sync with the
+   fills/strokes there, NOT with the theme tokens. */
 .chart-legend .volume-bars {
   width: 10px;
   height: 8px;
@@ -168,7 +182,7 @@
 
 .chart-help {
   font-size: 0.75rem;
-  opacity: 0.65;
+  color: var(--fg-muted);
   margin: 0.4rem 0 0;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   min-height: 1em;
@@ -188,20 +202,21 @@
 .data-table td {
   text-align: left;
   padding: 0.45rem 0.65rem;
-  border-bottom: 1px solid var(--border, #2d5b3e);
+  border-bottom: 1px solid var(--border);
 }
 
 .data-table th {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-elev);
   font-weight: 600;
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  opacity: 0.85;
+  color: var(--fg-muted);
 }
 
 .data-table td.numeric {
   text-align: right;
+  font-variant-numeric: tabular-nums;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
@@ -217,7 +232,7 @@
 .bid-note-toggle {
   background: none;
   border: none;
-  color: #ff9090;
+  color: var(--warn);
   cursor: pointer;
   font-size: 0.75rem;
   padding: 0 0.4rem 0 0;
@@ -229,25 +244,25 @@
 }
 
 .bid-note-toggle:hover {
-  color: #ffb0b0;
+  text-decoration: underline;
 }
 
 .bid-note-cell {
-  background: rgba(90, 31, 31, 0.18);
-  border-bottom: 1px solid var(--border, #2d5b3e);
+  background: rgba(245, 177, 74, 0.12);
+  border-bottom: 1px solid var(--border);
   padding: 0.4rem 0.65rem 0.5rem 1.5rem !important;
   font-size: 0.8rem;
-  color: #ffd0d0;
+  color: var(--fg);
 }
 
 .bid-note {
   font-style: italic;
-  opacity: 0.85;
+  color: var(--fg-muted);
 }
 
 .error-banner {
   background: #5a1f1f;
-  color: #ffe;
+  color: #ffecec;
   padding: 0.75rem 1rem;
   border-radius: 6px;
   margin-bottom: 1rem;
@@ -256,7 +271,7 @@
 .loading {
   text-align: center;
   padding: 2rem;
-  opacity: 0.7;
+  color: var(--fg-muted);
 }
 
 .admin-row {
@@ -266,8 +281,8 @@
 }
 
 .admin-btn {
-  background: var(--card-bg, #142b1d);
-  border: 1px solid var(--border, #2d5b3e);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
   color: inherit;
   padding: 0.45rem 0.85rem;
   border-radius: 6px;
@@ -277,14 +292,14 @@
 }
 
 .admin-btn:hover {
-  border-color: #a5e8b6;
+  border-color: var(--accent);
 }
 
 .admin-output {
   margin-top: 0.75rem;
   padding: 0.8rem 1rem;
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid var(--border, #2d5b3e);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 0.75rem;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
@@ -299,19 +314,18 @@
   margin-bottom: 0.35rem;
   font-size: 0.95rem;
   font-weight: 600;
-  opacity: 0.85;
 }
 
 .admin-help {
   margin: 0 0 0.6rem;
   font-size: 0.8rem;
-  opacity: 0.7;
+  color: var(--fg-muted);
 }
 
 .admin-help code {
   font-size: 0.75rem;
   padding: 1px 4px;
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--bg-elev);
   border-radius: 3px;
 }
 
@@ -320,8 +334,8 @@
   box-sizing: border-box;
   margin-bottom: 0.6rem;
   padding: 0.6rem 0.75rem;
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid var(--border, #2d5b3e);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
   border-radius: 6px;
   color: inherit;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
@@ -332,5 +346,5 @@
 
 .admin-textarea:focus {
   outline: none;
-  border-color: #a5e8b6;
+  border-color: var(--accent);
 }
