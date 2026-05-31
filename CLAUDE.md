@@ -12,11 +12,16 @@ seller accounts** (`boilerpaulie` + `ryan_5050` by default; configurable via
 EBAY stock" equivalent at the live market price. The dashboard has a seller
 filter (`[All] [Mine] [Ryan]`), a per-card seller badge, and a `[Live] [At
 auction end]` toggle on the ended-auctions section that revalues each closed
-auction using the EBAY close at the moment it ended.
+auction using the EBAY close at the moment it ended. Per-card image
+carousels + a click-to-zoom lightbox surface every gallery photo each listing
+carries; the item-audit page also renders the seller's HTML description in a
+sandboxed iframe.
 
 Ryan's original 36 auctions all ended in early May 2026 and are still shown
 in the ended-section; my own (boilerpaulie) auctions started rolling in late
-May.
+May. As of late May 2026, Ryan has zero active listings — the adaptive seller
+poll (see "Useful patterns") puts him to sleep for 30 min between checks, so
+the active API budget is effectively one seller most of the time.
 
 Production: https://halfcashhalfstock.onrender.com — Dev:
 https://halfcashhalfstock-dev.onrender.com (deploys from
@@ -25,51 +30,107 @@ https://halfcashhalfstock-dev.onrender.com (deploys from
 ## Stack at a glance
 
 - Node 20, TypeScript strict, ESM (`"type":"module"`, `.js` import specifiers).
-- Express + Helmet (strict CSP, no inline scripts) + express-rate-limit.
+- Express + Helmet (strict CSP, no inline scripts; explicit `frame-src 'self'`
+  for the description iframe) + express-rate-limit.
 - Postgres via `pg` Pool. Migrations in `migrations/NNN_*.sql` run sequentially
-  on startup by `src/db/migrate.ts`; latest is `013_listings_seller_id`.
-- Vanilla static frontend in `public/` — no bundler. CSP-compatible.
-- Vitest for tests. ESLint + Prettier for lint/format.
+  on startup by `src/db/migrate.ts`; latest is `015_listing_item_details`.
+- Vanilla static frontend in `public/` — no bundler, no CDNs. Browser-native
+  ESM modules (`<script type="module">`) for `app.js`/`item.js`; those import
+  `carousel.js` + `lightbox.js`.
+- Vitest for tests (currently **155**). ESLint + Prettier for lint/format.
 - `fast-xml-parser` (Trading API XML); no HTML parser dep (regex in
   `viewbids.ts`).
 - Render hosts both web service and Postgres. Local dev works without DB
   (graceful degradation).
 
+## Documentation upkeep — read this first
+
+**CLAUDE.md is part of every feature commit's contract.** A commit that
+does any of the following MUST update this file in the same commit, not
+"later":
+
+- Adds, removes, or renames a source module / public asset / migration
+- Adds an env var, DB column, admin action, API endpoint, or
+  `localStorage` key
+- Changes a documented behaviour, convention, or invariant
+- Materially changes architecture (new background pass, new caching
+  layer, new external dependency, replaced library)
+
+Common edit targets when shipping a feature: the **Layout** block, the
+relevant **prose section** (or a new one), the **Environment** list, the
+**UI persistence** list, the **API budget** numbers, and the **test
+count** in "Stack at a glance".
+
+Smaller commits — bug fixes inside an existing module, UI tweaks that
+don't change conventions — generally don't need doc updates.
+
+When in doubt, ask: "would a returning Claude session reading just this
+file get confused or make wrong assumptions about what I shipped?" If
+yes, update the doc.
+
+This rule exists because the doc has drifted before and the cost of
+re-discovering current state from git history is high. Don't let it
+drift again.
+
 ## Layout
 
 ```
 src/
-  server.ts            HTTP, routes, request-stats wiring, graceful shutdown
-  config.ts            zod env schema; resolveEbayTradingUserToken / has*Credentials helpers
-  cache.ts             TtlCache + DbBackedCache (single-flight)
-  log.ts               Logger
-  snapshot.ts          composeSnapshot — listings + price + math + totals
-  ticker-queue.ts      stock OHLC backfill scheduler
-  request-stats.ts     privacy-respecting metrics + UA classifier + sessions
-  math.ts              pure half/half split
+  server.ts                  HTTP, routes, request-stats wiring, graceful shutdown
+  config.ts                  zod env schema; resolveEbayTradingUserToken / has*Credentials helpers
+  cache.ts                   TtlCache + DbBackedCache (single-flight, stale-fallback, U+0000 strip)
+  log.ts                     Logger
+  snapshot.ts                composeSnapshot — listings + price + math + totals + galleries
+  ticker-queue.ts            stock OHLC scheduler with request-windowed scoping
+  request-stats.ts           privacy-respecting metrics + UA classifier + sessions
+  math.ts                    pure half/half split
+  seller-poll.ts             createAdaptiveSellerFetch: sleep sellers with 0 listings
+  item-details-enricher.ts   fire-and-forget gallery + description backfill
   db/
-    pool.ts            pg.Pool factory
-    migrate.ts         filesystem-driven migration runner (atomic per file)
-    persist.ts         every DB read/write the app does
+    pool.ts                  pg.Pool factory
+    migrate.ts               filesystem-driven migration runner (atomic per file)
+    persist.ts               every DB read/write the app does
   ebay/
-    auth.ts            Browse API OAuth client_credentials, cached
-    client.ts          generic Browse API HTTP wrapper
-    seller.ts          listSellerActiveItems → normalized Listing[]
-    trading.ts         GetAllBidders XML client (see "Dead code" below)
-    bid-history.ts     fetchBidHistory: DB-first, Trading API fallback, DB final fallback
-    backfill.ts        backfillEndedListings — DEAD for our use case (see below)
-    viewbids.ts        public bid-history page scraper + parser (current path)
+    auth.ts                  Browse API OAuth client_credentials, cached
+    client.ts                generic Browse API HTTP wrapper
+    seller.ts                listSellerActiveItems → normalized Listing[]; upgradeEbayImageUrl
+    item-details.ts          fetchItemDetails → gallery + description per item
+    trading.ts               GetAllBidders XML client (see "Dead code" below)
+    bid-history.ts           fetchBidHistory: DB-first, Trading API fallback, DB final fallback
+    backfill.ts              backfillEndedListings — DEAD for our use case (see below)
+    viewbids.ts              public bid-history page scraper + parser (current path)
   prices/
-    finnhub.ts, yahoo.ts, provider.ts, types.ts   chained provider
+    finnhub.ts, yahoo.ts, provider.ts, types.ts   chained provider (Yahoo effectively retired)
 public/
-  index.html  app.js   dashboard (active + recently ended)
-  item.html   item.js  per-item audit page
-  admin.html  admin.js admin dashboard + maintenance actions
+  index.html  app.js         dashboard (active + recently ended)
+  item.html   item.js        per-item audit page (gallery + description iframe)
+  admin.html  admin.js       admin dashboard + maintenance actions
+  carousel.js                attachCyclingCarousel: shared clone-pad cycling track
+  lightbox.js                openImageLightbox: shared fullscreen modal
   *.css       theme-init.js
 test/
   one *.test.ts per src/ module; vitest, no jsdom
 migrations/  NNN_*.sql, applied in order, recorded in `_migrations` table
 ```
+
+## API budget
+
+eBay Browse free tier is **~5,000 calls/day**. Three things keep us
+comfortably under it, and the headroom is enough that future features
+(e.g. last-minute endgame burst polling) are affordable.
+
+- **Adaptive seller polling** (`createAdaptiveSellerFetch`): a seller that
+  comes back with zero active listings is skipped for 30 min before we
+  check again. With Ryan currently dormant, baseline cost is
+  `1 seller × 1 call / 30s = 2,880 calls/day`.
+- **Ticker queue scoping** (`TickerQueue`): the passive price-poll refreshes
+  only EBAY + GME forever, plus any custom ticker viewed within the last
+  30 min. Custom tickers age out so we don't hammer Finnhub for every
+  symbol ever typed into the dropdown.
+- **Per-item details enrichment** (`createItemDetailsEnricher`): the per-
+  item Browse `/item/{id}` call (gallery + description) runs only for rows
+  missing details OR older than 7 days, concurrency capped at 4. After the
+  initial backfill it amortises to near-zero/day.
 
 ## Conventions that bit us
 
@@ -80,13 +141,14 @@ migrations/  NNN_*.sql, applied in order, recorded in `_migrations` table
   with `{action: 'xxx', ...}` body, gated by `ADMIN_TOKEN` env var. New
   features add a new action branch, NOT a new route.
 - **Global JSON limit is 10kb**, but the cleanup route has a route-scoped
-  4mb parser so pasted eBay pages fit (server.ts ~line 466). The global
-  parser explicitly skips `/api/admin/cleanup` to avoid clashing.
+  4mb parser so pasted eBay pages fit. The global parser explicitly skips
+  `/api/admin/cleanup` to avoid clashing.
 - **Item ID validation regex**: `/^[A-Za-z0-9|.-]{1,64}$/` — reuse this for
   any new admin action that takes an itemId.
-- **Public JS is vanilla and CSP-strict**: no inline scripts, no eval, no
-  CDNs. New behavior goes in an existing `public/*.js` file or a new one
-  loaded via `<script src>`.
+- **Public JS is vanilla ESM + CSP-strict**: no inline scripts, no eval, no
+  CDNs. New behavior goes in an existing `public/*.js` file or a new module
+  imported via `<script type="module">`. `frame-src 'self'` is the one CSP
+  exception we needed — for the description iframe.
 - **Tests mock fetch with `vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(...))`**.
   See `test/ebay.trading.test.ts` for the pattern.
 - **Tests mock pg with a `MockPool`** — `{ query: vi.fn().mockResolvedValue({rows:[], rowCount:0}) }`.
@@ -95,9 +157,9 @@ migrations/  NNN_*.sql, applied in order, recorded in `_migrations` table
 - **Commits**: scoped style (`feat(admin):`, `fix(viewbids):`, etc), 1-2 sentence
   "why" body, HEREDOC, footer `https://claude.ai/code/session_...`. See
   recent log for examples.
-- **Branch**: develop on `claude/ebay-auction-monitor-vdOMZ`. PR #18 is the
-  long-running draft for this branch; update its body when shipping notable
-  commits rather than opening a new PR per change.
+- **Branch**: develop on `claude/ebay-auction-monitor-vdOMZ`. PRs are opened
+  per coherent change (the long-running-draft pattern was abandoned around
+  PR #22); keep PRs scoped and merge them when CI is green.
 
 ## Live-environment limitations
 
@@ -136,7 +198,7 @@ Ended-section header has a `[Live] [At auction end]` segmented control.
 Persisted in `localStorage.hchs.endedPriceMode`. When "At auction end" is on:
 
 - Each ended item's split is recomputed using the stock close nearest the
-  item's `endedAt`. Per-card bid-row note shows the close used.
+  item's `endedAt`.
 - The ended totals row sums the per-item end-time splits and surfaces a
   "Missing end-time price" stat whenever `pricedAtEndCount < listingsCount`.
 
@@ -147,9 +209,10 @@ Data path:
   preference `1m > 15m > 1d`. Returns null when no row covers `when`.
 - The snapshot endpoint calls it for every USD-denominated ended item against
   the currently-selected ticker, builds a `Map<itemId, close|null>`, and
-  passes it as the optional 4th arg to `composeSnapshot`.
+  passes it to `composeSnapshot` (5th arg now; the 6th is the
+  `additionalImagesByItemId` map used by the gallery feature).
 - The OHLC table's `interval='1d'` rows are exempt from `purgeOldOhlcData`,
-  so daily history accumulates indefinitely. Populate it via the new
+  so daily history accumulates indefinitely. Populate it via the
   `backfill_ohlc_history` admin action (defaults: tickers `EBAY,GME`, range
   `90d`). The action calls `YahooProvider.getHistoricalCandles(ticker, '1d',
   range)` and bulk-upserts the candles. Re-runnable; idempotent.
@@ -157,6 +220,49 @@ Data path:
 For an auction that ended during market hours, finer-grain candles (if still
 within retention) give a more accurate price; for older auctions only the
 daily close at market open exists, which is good enough for the visualization.
+
+## Per-item gallery + description (PR #26)
+
+Each listing can carry up to 24 gallery images + an HTML description that
+`item_summary/search` doesn't return. We backfill lazily.
+
+- **`fetchItemDetails(client, itemId, primaryImageUrl)`** wraps Browse's
+  per-item endpoint, upgrades all URLs to `s-l1600` (eBay's largest standard
+  render size), and dedupes against the primary so render code can do
+  `[primary, ...additional]` without doubling up. Returns null on 404;
+  non-404 errors re-throw.
+- **`createItemDetailsEnricher`** is fire-and-forget. Given the items in a
+  snapshot (active + ended, as a thin `{itemId, imageUrl}[]` shape), it picks
+  rows missing details OR older than 7 days, fetches with concurrency 4,
+  persists via `upsertItemDetails`, and never throws. Single-flighted at
+  module scope so re-entrant calls collapse to one in-flight pass. The
+  snapshot endpoint kicks it after `readEndedListings` returns.
+- Storage: three columns on `listings` (`additional_images jsonb`,
+  `description_html text`, `details_fetched_at timestamptz`). A 404 from
+  eBay persists an empty row so we don't re-attempt the missing item every
+  snapshot (the 7-day staleness window still applies).
+
+Frontend carousel:
+
+- **`public/carousel.js`** — `attachCyclingCarousel(track, opts)` is the
+  shared cycling-carousel helper, used by the inline tile galleries
+  (`app.js`), the item-page header gallery (`item.js`), and the modal
+  (`lightbox.js`). The clone-pad pattern (prepend last-image clone, append
+  first-image clone) + a `scrollend`-driven warp handles infinite wrap-
+  around for both swipe and button clicks. Both tracks use
+  `scroll-behavior: smooth` in CSS, so the warp specifically toggles to
+  `auto` to avoid the smooth scroll animating *through* every in-between
+  slide (PR #26's last fix). Image count is a fixed-width `i / N` counter
+  (eBay caps at 24 — dots overflow narrow tiles past ~8).
+- **`public/lightbox.js`** — `openImageLightbox(urls, startIndex, alt,
+  {onClose})` mounts a single persistent `.lightbox` div to `<body>` on
+  first open. ESC / backdrop / × close; arrow keys flip slides; opens at
+  the inline carousel's snapped index and reports the closing index back
+  via `onClose` so the inline carousel re-syncs.
+- **Description iframe**: `<iframe sandbox="" srcdoc="…">`. Empty sandbox =
+  no scripts + opaque origin, so seller HTML can't reach the parent and the
+  parent CSP doesn't restrict the iframe's own images/styles. CSP has
+  explicit `frame-src 'self'` to permit mounting the about:srcdoc frame.
 
 ## Bid-history reconciliation (PR #18 + #19)
 
@@ -230,6 +336,23 @@ video games). Unique items never redirect. The fix is the documented
 no-redirect parameter **`nordt=true`** — `orig_cvip=true` does NOT work.
 Applied in `endedEbayUrl()` in both `public/app.js` and `public/item.js`.
 
+## Two-timestamp UI (PR #27)
+
+Top bar carries two distinct timestamps, both derived from data already on
+the snapshot:
+
+- **Price-feed time** (right column, under the ticker): `snapshot.stock.asOf`
+  formatted differently depending on market state — `4:00 PM` when open
+  (live, day prefix would read as falsely anchored), `FRI 4:00 PM` when
+  closed (so a Friday close shown on Saturday is unambiguous).
+- **Auction-data time** (center column): `snapshot.generatedAt`, labelled
+  `Auctions updated at 4:30 PM`. The three words are individual spans so
+  the mobile-portrait CSS can stack them vertically while desktop renders
+  them inline.
+
+Stale ⚠ is on `.ticker-meta::before` so it surfaces in both market-open
+(only as-of shown) and market-closed (status + as-of shown) cases.
+
 ## Dead code / dead ends
 
 Don't propose these — we already tried them and confirmed they don't work
@@ -242,13 +365,51 @@ for ended-auction bid recovery as a non-seller:
 - Shopping API (`GetItemDetails`): decommissioned 2025-02-05.
 - Finding API (`findCompletedItems`): decommissioned 2025-02-05.
 - Marketplace Insights API: closed to new applicants.
-- Browse API for ended listings: stops returning them.
+- Browse API for ended listings: stops returning them after a few hours.
+- **Yahoo Finance unofficial endpoint** (`prices/yahoo.ts`): started 401-ing
+  in mid-2026 — Yahoo now requires a "crumb" CSRF token via a cookie/header
+  pair. We decided not to chase the crumb because Finnhub + the DbBackedCache
+  stale-fallback handle Finnhub's sporadic 429s adequately. Yahoo is still
+  wired in the provider chain but contributes only log noise; planned
+  removal pending. If Finnhub becomes chronically flaky, swap to a real
+  server-to-server provider (Alpha Vantage / IEX Cloud) rather than fight
+  Yahoo.
+- **Push notifications for bid events**: eBay's Platform Notifications API
+  doesn't emit bid-by-bid events for *anyone's* listings (own or other
+  sellers'). The supported events are mostly listing-lifecycle +
+  `AuctionCheckoutComplete` (post-sale). Polling is the only path.
 
-The viewbids public-page scraper is the only path that works, and it only
-works for ~90 days after an auction ends.
+The viewbids public-page scraper is the only path that works for bid
+history, and it only works for ~90 days after an auction ends.
 
 ## Useful patterns already in code
 
+- **Adaptive seller polling** (`createAdaptiveSellerFetch` in
+  `src/seller-poll.ts`): sellers with zero active listings sleep for 30
+  min before we check again; sellers with anything live are polled at the
+  normal cadence. See `test/seller-poll.test.ts`.
+- **Ticker queue scoping** (`TickerQueue.markRequested` /
+  `activePollSet`): passive poll refreshes only EBAY + GME forever plus
+  custom tickers viewed in the last 30 min. Custom tickers age out so we
+  don't burn the Finnhub free 60/min budget on every ticker ever typed.
+- **Stale-fallback in `DbBackedCache`**: when a live fetch fails and the DB
+  has a past-TTL row, we serve the stale row and set `degraded=true`. The
+  snapshot endpoint surfaces that as `snapshot.degraded` so the frontend
+  shows an amber banner instead of zeroes.
+- **Null-byte sanitization in cache writes** (`storeDb`): strips ` `
+  escapes before JSONB insert — Postgres JSONB rejects the whole document
+  if any string contains one, even though RFC 8259 permits them. Tripped
+  on an eBay title in PR #24; regression-tested.
+- **Defensive math at the snapshot boundary** (`isSplittablePrice`):
+  every `splitHalfCashHalfStock` call goes through a `Number.isFinite +
+  non-negative` predicate so a malformed cached payload or unexpected
+  Browse API shape doesn't 503 the snapshot. Bad-priced rows just show
+  "—".
+- **Hi-res images everywhere** (`upgradeEbayImageUrl`): every eBay CDN
+  URL goes through a `s-l<N>` token bump to `s-l1600` server-side (in
+  `normalizeListing` + `fetchItemDetails`) and also at render time in
+  `app.js` / `item.js` (covers ended rows persisted with a small URL
+  before the upgrade landed).
 - **Stuck-listing recovery**: `markEndedListings` stamps any listing not
   seen in the active poll for >1 hour as ended. The "Find stuck" admin
   button surfaces listings where this auto-recovery missed.
@@ -261,17 +422,29 @@ works for ~90 days after an auction ends.
   Postgres before any upstream call — minimizes API quota and works across
   multiple Render instances.
 
+## UI persistence
+
+Dashboard state lives in `localStorage`:
+
+- `hchs.sellerFilter` — `all` / `mine` / `ryan`
+- `hchs.endedPriceMode` — `live` / `at-end`
+- `hchs.endedWindow` — `14` / `all`
+- `hchs.viewMode` — `list` / `grid-sm` / `grid-md` / `grid-lg`
+- `hchs.sort` — one of the five sort modes
+- `hchs.aboutOpen` — `1` / `0` for the collapsible intro
+- `ticker` — the custom ticker selected in the input
+- `theme` — `dark` / `light` override (icon-toggle)
+
 ## Efficient workflows
 
 - **Before committing**: `npm run build && npm test && npm run lint`
   (typecheck is part of build via `tsc`). All three should finish in ~5s
   combined.
-- **Vitest is fast** (~2s for 115 tests); run early when iterating.
+- **Vitest is fast** (~2s for 155 tests); run early when iterating.
 - **Don't paste large content into chat** — save to a file (e.g. `.tmp/x.html`,
   gitignored) and tell me the path. I'll Read just the lines I need.
-- **PR activity**: the current long-running PR is #19. Update its body
-  when shipping notable commits. `gh` CLI is not available; use the
-  `mcp__github__*` MCP tools.
+- **PRs are opened per coherent change**, not against one long-running
+  draft. `gh` CLI is not available; use the `mcp__github__*` MCP tools.
 - **`/clear` between phases**. The plan→implement→calibrate→ship cycle
   doesn't need the earlier phases' context once you've moved on.
 
@@ -282,7 +455,12 @@ works for ~90 days after an auction ends.
 - `EBAY_SELLER_IDS` — comma-separated list of sellers to poll. Defaults to
   `boilerpaulie,ryan_5050`. Legacy `EBAY_SELLER_ID` (single value) is
   accepted as a fallback when `EBAY_SELLER_IDS` is unset.
-- `FINNHUB_API_KEY` — stock prices (Yahoo fallback works without).
+- `FINNHUB_API_KEY` — stock prices. Yahoo is in the provider chain but
+  currently 401s (see "Dead code"); we don't actually fall back to it.
+  The DbBackedCache + stale-fallback handles sporadic Finnhub 429s.
+- `LOGO_DEV_TOKEN` — logo.dev publishable token for ticker logos. Server
+  proxies `/api/ticker-logo?symbol=…` with a 24h in-memory cache so the
+  token never appears in client-visible URLs.
 - `DATABASE_URL` — Postgres (optional; everything degrades gracefully).
 - `ADMIN_TOKEN` — required to access `/admin` (>= 8 chars).
 - `APP_ENVIRONMENT` — tags request_stats rows ("prod" / "dev").
