@@ -383,6 +383,26 @@ export async function forceMarkEnded(pool: Pool, itemId: string): Promise<boolea
   return (result.rowCount ?? 0) > 0;
 }
 
+// Set the authoritative final price + bid count on an ended listing, sourced
+// from the Trading API GetItem SellingStatus. Only touches rows that are
+// already marked ended (ended_at IS NOT NULL) so this can never clobber the
+// live price of an auction still in the active poll. Returns true if a row
+// was updated.
+export async function updateEndedListingFinals(
+  pool: Pool,
+  itemId: string,
+  finalPriceUsd: number,
+  finalBidCount: number,
+): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE listings
+     SET current_price_usd = $2, current_bid_count = $3
+     WHERE item_id = $1 AND ended_at IS NOT NULL`,
+    [itemId, finalPriceUsd, finalBidCount],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 export interface EndedListingRow {
   itemId: string;
   sellerId: string;

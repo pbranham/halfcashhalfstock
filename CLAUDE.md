@@ -37,7 +37,7 @@ https://halfcashhalfstock-dev.onrender.com (deploys from
 - Vanilla static frontend in `public/` — no bundler, no CDNs. Browser-native
   ESM modules (`<script type="module">`) for `app.js`/`item.js`; those import
   `carousel.js` + `lightbox.js`.
-- Vitest for tests (currently **155**). ESLint + Prettier for lint/format.
+- Vitest for tests (currently **157**). ESLint + Prettier for lint/format.
 - `fast-xml-parser` (Trading API XML); no HTML parser dep (regex in
   `viewbids.ts`).
 - Render hosts both web service and Postgres. Local dev works without DB
@@ -264,12 +264,44 @@ Frontend carousel:
   parent CSP doesn't restrict the iframe's own images/styles. CSP has
   explicit `frame-src 'self'` to permit mounting the about:srcdoc frame.
 
+## Final price/bid-count reconcile via GetItem (Trading API)
+
+**Distinct from the bid-history timeline below.** The dashboard's half/half
+math only needs the *final price* and *bid count*, not the per-bid timeline.
+Those two numbers are available authoritatively from the Trading API
+`GetItem` call (`SellingStatus.CurrentPrice` + `BidCount`) for ANY item in
+eBay's ~90-day window — own listings and others' — via `api.ebay.com`, which
+is **not** subject to the "Pardon Our Interruption" datacenter-IP challenge
+that blocks scraping the public viewbids page. So this path works
+server-side, no paste required.
+
+- `getItemSellingStatus(itemId, userToken)` in `src/ebay/trading.ts` —
+  GetItem XML call; returns `{ listingStatus, currentPrice, currencyId,
+  bidCount, ack, errorMessage }`. Does NOT return the bid timeline.
+- `updateEndedListingFinals(pool, itemId, priceUsd, bidCount)` in
+  `db/persist.ts` — writes the finals, but only onto rows already marked
+  ended (`ended_at IS NOT NULL`), so it can never clobber a live auction.
+- Admin action `reconcile_selling_status` (`{ itemId?, apply? }`) —
+  **DRY RUN by default**: reports DB-vs-eBay per ended item and writes
+  nothing. Re-run with `apply:true` to persist. Only acts when the item is
+  Completed/Ended, USD, price finite/>0, Ack≠Failure, and the value differs.
+  Capped at 60 items/run. Admin UI has "Dry run" + "Apply" buttons.
+- **Still requires `EBAY_USER_TOKEN`.** As of this writing the dry-run has
+  not yet been verified against real eBay responses on the dev deploy —
+  confirm GetItem returns sane finals for an ended boilerpaulie auction
+  before trusting `apply`, and before wiring any automatic post-close pass.
+
+This does NOT replace the viewbids paste flow for the *bid timeline* (the
+per-bidder chart on the item page) — only the final price/count the
+dashboard totals use.
+
 ## Bid-history reconciliation (PR #18 + #19)
 
 The eBay Trading API's `GetAllBidders` returns empty for non-sellers on
 ended auctions. The Shopping and Finding APIs are decommissioned (Feb 2025).
 Marketplace Insights is closed to new applicants. **The only complete public
-source of historical bid history is `https://www.ebay.com/bfl/viewbids/<id>?item=<id>&rt=nc`.**
+source of the per-bid timeline is `https://www.ebay.com/bfl/viewbids/<id>?item=<id>&rt=nc`** (see the GetItem section above for the simpler
+final-price-only path).
 
 Implementation:
 
@@ -440,7 +472,7 @@ Dashboard state lives in `localStorage`:
 - **Before committing**: `npm run build && npm test && npm run lint`
   (typecheck is part of build via `tsc`). All three should finish in ~5s
   combined.
-- **Vitest is fast** (~2s for 155 tests); run early when iterating.
+- **Vitest is fast** (~2s for 157 tests); run early when iterating.
 - **Don't paste large content into chat** — save to a file (e.g. `.tmp/x.html`,
   gitignored) and tell me the path. I'll Read just the lines I need.
 - **PRs are opened per coherent change**, not against one long-running

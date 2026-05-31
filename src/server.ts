@@ -29,6 +29,7 @@ import {
   readOhlcStats,
   readStuckListings,
   reconcileItemBids,
+  updateEndedListingFinals,
   type SnapshotPersistInput,
 } from './db/persist.js';
 import { EbayAppTokenProvider } from './ebay/auth.js';
@@ -702,6 +703,7 @@ export function createApp(deps: Deps): express.Express {
         html?: string;
         tickers?: unknown;
         range?: string;
+        apply?: boolean;
       } | undefined;
       const action = body?.action;
 
@@ -984,6 +986,97 @@ export function createApp(deps: Deps): express.Express {
           currentBidCount: listing.finalBidCount,
         }));
         res.status(200).json({ action: 'list_ended_for_reconcile', count: items.length, items });
+        return;
+      }
+
+      if (action === 'reconcile_selling_status') {
+        // Pull authoritative final price + bid count for ended auctions from
+        // the Trading API (GetItem SellingStatus). Works for any item in
+        // eBay's ~90-day window — own listings AND others' — and goes via
+        // api.ebay.com so it dodges the viewbids datacenter-IP challenge.
+        //
+        // DRY RUN BY DEFAULT: reports DB-vs-API for each item and does NOT
+        // write unless body.apply === true. Run it once, eyeball the diffs,
+        // then re-run with apply:true. body.itemId scopes to a single item.
+        const userToken = resolveEbayTradingUserToken(deps.config);
+        if (!userToken) {
+          res.status(503).json({
+            error: 'reconcile_unavailable',
+            detail: 'EBAY_USER_TOKEN must be set',
+          });
+          return;
+        }
+        const apply = body?.apply === true;
+        const singleItemId = typeof body?.itemId === 'string' ? body.itemId.trim() : '';
+        if (singleItemId && !/^[A-Za-z0-9|.-]{1,64}$/.test(singleItemId)) {
+          res.status(400).json({ error: 'bad_request', detail: 'invalid itemId' });
+          return;
+        }
+
+        const ended = await readEndedListings(deps.db, 3650);
+        const targets = singleItemId
+          ? ended.filter((e) => e.itemId === singleItemId)
+          : ended;
+        // Cap so a manual run can't fire hundreds of Trading calls at once.
+        const MAX = 60;
+        const capped = targets.slice(0, MAX);
+
+        const { getItemSellingStatus } = await import('./ebay/trading.js');
+        const results: Array<Record<string, unknown>> = [];
+        let updated = 0;
+        for (const e of capped) {
+          try {
+            const ss = await getItemSellingStatus(e.itemId, userToken);
+            const closed = ss.listingStatus === 'Completed' || ss.listingStatus === 'Ended';
+            const usd = ss.currencyId === null || ss.currencyId === 'USD';
+            const priceOk = Number.isFinite(ss.currentPrice) && ss.currentPrice > 0;
+            const eligible = ss.ack !== 'Failure' && closed && usd && priceOk;
+            const priceChanged = Math.abs(ss.currentPrice - e.finalPriceUsd) > 0.005;
+            const bidChanged = ss.bidCount !== e.finalBidCount;
+            const willUpdate = eligible && (priceChanged || bidChanged);
+
+            let didUpdate = false;
+            if (apply && willUpdate) {
+              didUpdate = await updateEndedListingFinals(
+                deps.db,
+                e.itemId,
+                ss.currentPrice,
+                ss.bidCount,
+              );
+              if (didUpdate) updated += 1;
+            }
+            results.push({
+              itemId: e.itemId,
+              title: e.title,
+              listingStatus: ss.listingStatus,
+              currency: ss.currencyId,
+              ack: ss.ack,
+              error: ss.errorMessage,
+              dbPrice: e.finalPriceUsd,
+              apiPrice: ss.currentPrice,
+              dbBidCount: e.finalBidCount,
+              apiBidCount: ss.bidCount,
+              eligible,
+              willUpdate,
+              updated: didUpdate,
+            });
+          } catch (err) {
+            results.push({
+              itemId: e.itemId,
+              title: e.title,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+
+        res.status(200).json({
+          action: 'reconcile_selling_status',
+          mode: apply ? 'applied' : 'dry-run',
+          scanned: capped.length,
+          truncated: targets.length > MAX,
+          updated,
+          results,
+        });
         return;
       }
 

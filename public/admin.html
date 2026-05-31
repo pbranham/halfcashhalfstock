@@ -152,6 +152,13 @@
               </div>
             </div>
             <div class="maintenance-row">
+              <span>Reconcile final price + bid count from eBay (GetItem; no paste). Dry-run shows DB vs eBay; Apply writes it.</span>
+              <div class="row-actions">
+                <button id="reconcile-status-dry-btn" type="button" class="admin-btn">Dry run</button>
+                <button id="reconcile-status-apply-btn" type="button" class="admin-btn admin-btn-primary">Apply</button>
+              </div>
+            </div>
+            <div class="maintenance-row">
               <span>Reconcile ended bids (fetch eBay bid-history pages; paste fallback for blocked items)</span>
               <div class="row-actions">
                 <button id="reconcile-bids-btn" type="button" class="admin-btn admin-btn-primary">Reconcile all</button>

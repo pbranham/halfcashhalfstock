@@ -109,6 +109,120 @@ export function normalizeTradingItemId(itemId: string): string {
   return itemId;
 }
 
+// --- GetItem: authoritative final selling status for an ended auction ---
+//
+// Unlike GetAllBidders (which the non-seller can't use post-close), GetItem
+// returns SellingStatus for any item still in eBay's ~90-day visibility
+// window — the final CurrentPrice and the final BidCount, the two numbers
+// the dashboard's half/half math actually needs. It goes to api.ebay.com,
+// so it's NOT subject to the "Pardon Our Interruption" datacenter-IP
+// challenge that blocks server-side scraping of the public viewbids page.
+// It does NOT return the per-bid timeline (that still needs the HTML paste);
+// it answers "what did this auction close at, and how many bids".
+
+export interface ItemSellingStatus {
+  itemId: string;
+  // "Active" | "Completed" | "Ended" | "CustomCode" — Completed/Ended means
+  // the auction has closed and CurrentPrice is final.
+  listingStatus: string | null;
+  currentPrice: number;
+  currencyId: string | null;
+  bidCount: number;
+  ack: string | null;
+  // First error short message when Ack is Failure (e.g. invalid item, token
+  // expired, item outside the visibility window).
+  errorMessage: string | null;
+}
+
+interface AmountNode {
+  '@_currencyID'?: string;
+  '#text'?: number | string;
+}
+
+interface ParsedItemResponse {
+  GetItemResponse?: {
+    Ack?: string;
+    Errors?: { LongMessage?: string; ShortMessage?: string } | Array<{ LongMessage?: string; ShortMessage?: string }>;
+    Item?: {
+      SellingStatus?: {
+        CurrentPrice?: unknown;
+        BidCount?: unknown;
+        ListingStatus?: string;
+      };
+    };
+  };
+}
+
+export async function getItemSellingStatus(
+  itemId: string,
+  userToken: string,
+): Promise<ItemSellingStatus> {
+  const tradingItemId = normalizeTradingItemId(itemId);
+  const requestBody = `<?xml version="1.0" encoding="UTF-8"?>
+<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <RequesterCredentials>
+    <eBayAuthToken>${escapeXml(userToken)}</eBayAuthToken>
+  </RequesterCredentials>
+  <ItemID>${escapeXml(tradingItemId)}</ItemID>
+</GetItemRequest>`;
+
+  const res = await fetch('https://api.ebay.com/ws/api.dll', {
+    method: 'POST',
+    headers: {
+      'X-EBAY-API-CALL-NAME': 'GetItem',
+      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-SITEID': '0',
+      'Content-Type': 'text/xml',
+    },
+    body: requestBody,
+  });
+
+  if (!res.ok) {
+    throw new Error(`eBay Trading API error: ${res.status} ${res.statusText}`);
+  }
+
+  const xml = await res.text();
+  const parsed = parser.parse(xml) as ParsedItemResponse;
+  const resp = parsed?.GetItemResponse;
+  const ss = resp?.Item?.SellingStatus;
+
+  return {
+    itemId: tradingItemId,
+    listingStatus: ss?.ListingStatus ?? null,
+    currentPrice: parseMoney(ss?.CurrentPrice),
+    currencyId: extractCurrencyId(ss?.CurrentPrice),
+    bidCount: parseIntLoose(ss?.BidCount),
+    ack: resp?.Ack ?? null,
+    errorMessage: extractFirstError(resp?.Errors),
+  };
+}
+
+function extractCurrencyId(val: unknown): string | null {
+  if (typeof val === 'object' && val !== null) {
+    const id = (val as AmountNode)['@_currencyID'];
+    if (typeof id === 'string') return id;
+  }
+  return null;
+}
+
+function parseIntLoose(val: unknown): number {
+  if (typeof val === 'number') return Math.trunc(val);
+  if (typeof val === 'string') {
+    const n = Number(val);
+    return Number.isFinite(n) ? Math.trunc(n) : 0;
+  }
+  return 0;
+}
+
+type ErrorNode = { LongMessage?: string; ShortMessage?: string };
+
+function extractFirstError(errors: ErrorNode | ErrorNode[] | undefined): string | null {
+  if (!errors) return null;
+  const first = Array.isArray(errors) ? errors[0] : errors;
+  if (!first) return null;
+  return first.LongMessage ?? first.ShortMessage ?? null;
+}
+
 // eBay AmountType fields carry an optional currencyID attribute, so fast-xml-parser
 // may produce either a plain number or { '@_currencyID': '...', '#text': number }.
 function parseMoney(val: unknown): number {
