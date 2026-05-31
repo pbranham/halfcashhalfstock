@@ -203,6 +203,11 @@ export function createApp(deps: Deps): express.Express {
           'object-src': ["'none'"],
           'base-uri': ["'self'"],
           'frame-ancestors': ["'none'"],
+          // Allow the item page to render eBay seller descriptions in a
+          // sandboxed srcdoc iframe (about:srcdoc). The iframe itself has
+          // an opaque origin so the parent CSP doesn't restrict what runs
+          // inside; this rule just permits the parent to mount the frame.
+          'frame-src': ["'self'"],
         },
       },
     }),
