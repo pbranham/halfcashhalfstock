@@ -327,6 +327,25 @@ function isUsMarketOpen(now = new Date()) {
   return minutesInDay >= 9 * 60 + 30 && minutesInDay < 16 * 60;
 }
 
+// Short clock format: "4:00 PM" (no seconds). Stale snapshots refresh on a
+// 30s cadence so seconds-precision was always either 0s ago or 30s ago —
+// minute-precision is cleaner and reads exactly the same.
+function formatClock(date) {
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+// The price's "as of" time, formatted differently depending on whether the
+// market is open. Live: just the clock (it ticks in real time, so showing
+// "MON 3:42 PM" reads as falsely-anchored). Closed: prepend the short
+// weekday so a stale close-of-day price is unambiguous on a weekend.
+function formatPriceAsOf(asOfDate, marketOpen) {
+  if (!asOfDate || Number.isNaN(asOfDate.getTime())) return '';
+  const clock = formatClock(asOfDate);
+  if (marketOpen) return clock;
+  const weekday = asOfDate.toLocaleDateString([], { weekday: 'short' }).toUpperCase();
+  return `${weekday} ${clock}`;
+}
+
 function renderTicker(snapshot) {
   const ticker = document.getElementById('ticker');
   if (!ticker) return;
@@ -337,19 +356,44 @@ function renderTicker(snapshot) {
   const generated = snapshot?.generatedAt ? new Date(snapshot.generatedAt) : null;
   const isStale = generated ? Date.now() - generated.getTime() > STALE_MS : false;
   ticker.classList.toggle('is-stale', isStale);
-  const status = isUsMarketOpen() ? '' : 'market closed';
-  setText(ticker.querySelector('.ticker-status'), status);
+  const marketOpen = isUsMarketOpen();
+  setText(ticker.querySelector('.ticker-status'), marketOpen ? '' : 'Market closed');
+  // Price-feed timestamp lives directly below the market-status line so the
+  // user can tell at a glance how stale the stock value is (especially over
+  // a weekend, when the close from Friday afternoon should be unambiguous).
+  const asOf = snapshot?.stock?.asOf ? new Date(snapshot.stock.asOf) : null;
+  setText(ticker.querySelector('.ticker-as-of'), formatPriceAsOf(asOf, marketOpen));
 }
 
+// The center "Updated" widget tracks the *auction* data timestamp —
+// distinct from the price-feed time shown under the ticker. snapshot.
+// generatedAt fires right after the listings cache returns, so it's a
+// faithful "when did we last refresh the auctions" signal.
 function renderLastUpdated(snapshot) {
   const el = document.getElementById('last-updated');
   if (!el) return;
   const generated = snapshot?.generatedAt ? new Date(snapshot.generatedAt) : null;
   if (!generated) {
-    setText(el, '');
+    el.replaceChildren();
     return;
   }
-  setText(el, `Updated ${generated.toLocaleTimeString()}`);
+  // Three discrete spans so the mobile CSS can stack them onto their own
+  // lines (Auctions / updated at / 3:37 AM) while desktop renders them
+  // inline as a single sentence — text nodes between spans give the
+  // inline spacing for free.
+  const mk = (cls, text) => {
+    const s = document.createElement('span');
+    s.className = cls;
+    s.textContent = text;
+    return s;
+  };
+  el.replaceChildren(
+    mk('updated-headline', 'Auctions'),
+    document.createTextNode(' '),
+    mk('updated-verb', 'updated at'),
+    document.createTextNode(' '),
+    mk('updated-time', formatClock(generated)),
+  );
 }
 
 function renderDegradedBanner(snapshot) {

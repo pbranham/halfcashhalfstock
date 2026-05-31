@@ -137,6 +137,16 @@ body {
   justify-self: end;
 }
 
+/* Symbol + price form a single inline block; the meta column (status +
+   timestamp) sits beside it. The wrapper exists so on narrow phones we
+   can stack `quote` and `meta` vertically instead of cramming all four
+   pieces onto one flex row that wraps mid-word ("FRI 4:00 / PM"). */
+.ticker-quote {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
 .ticker-symbol {
   color: var(--fg-muted);
   font-size: 12px;
@@ -149,29 +159,93 @@ body {
   font-weight: 700;
 }
 
-.ticker-status {
-  color: var(--fg-muted);
+/* Status + price-feed timestamp stack vertically to the right of the price.
+   align-items: baseline on .ticker aligns the first line of this column
+   with the price baseline, so the layout reads as "$EBAY $21.18 STATUS /
+   TIME" without the meta column pushing the row taller. Empty children
+   (e.g. an empty status when the market is open) collapse so the live
+   case shows just the clock. */
+.ticker-meta {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  text-align: left;
 }
 
-.ticker.is-stale .ticker-status::before {
+.ticker-status,
+.ticker-as-of {
+  display: block;
+  /* Don't break "MARKET CLOSED" into "MARKET / CLOSED" or "FRI 4:00 PM"
+     into "FRI 4:00 / PM" if the column happens to be narrow — better to
+     overflow predictably (which won't happen at our current widths since
+     the mobile rule below moves meta to its own row). */
+  white-space: nowrap;
+}
+.ticker-status:empty,
+.ticker-as-of:empty {
+  display: none;
+}
+
+/* Stale = "no fresh snapshot in 2+ minutes". The warning attaches to the
+   meta wrapper rather than ticker-status so it still shows in the
+   market-open case when status is empty. */
+.ticker.is-stale .ticker-meta::before {
   content: '⚠ ';
   color: var(--warn);
 }
 
 @media (max-width: 720px) {
+  /* Keep the left / center / right structure intact on portrait — the
+     previous "brand | ticker / updated full-width" rearrangement was
+     visually disorganised. Each cell stacks its contents vertically
+     instead, so a narrow screen reads as three short columns. */
   .topbar {
-    grid-template-columns: 1fr 1fr;
-    grid-template-areas: 'brand ticker' 'updated updated';
-    gap: 6px 16px;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas: 'brand updated ticker';
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
   }
-  .brand { grid-area: brand; gap: 6px; }
-  .brand-word { font-size: 13px; }
-  .brand-icon { width: 44px; height: 25px; }
-  .ticker { grid-area: ticker; }
-  .last-updated { grid-area: updated; text-align: left; }
+
+  /* Brand: Half Cash / icon / Half Stock vertical. Smaller icon so the
+     stacked-column height stays reasonable. */
+  .brand {
+    grid-area: brand;
+    flex-direction: column;
+    gap: 2px;
+    align-items: center;
+  }
+  .brand-word { font-size: 12px; line-height: 1.1; }
+  .brand-icon { width: 36px; height: 21px; }
+
+  /* Updated: three-line stack. Spans were rendered with text nodes
+     between them so display:block here gives one line per span; desktop
+     keeps them inline. */
+  .last-updated {
+    grid-area: updated;
+    text-align: center;
+    line-height: 1.25;
+  }
+  .last-updated > span {
+    display: block;
+  }
+
+  /* Ticker: keep "$GME $21.18" as the inline headline; meta stays in its
+     existing vertical-column form below. Discard the temporary horizontal
+     meta + bullet rule from the previous attempt. */
+  .ticker {
+    grid-area: ticker;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+  }
+  .ticker-price { font-size: 17px; }
+  .ticker-meta { flex-direction: column; }
 }
 
 main {
