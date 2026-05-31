@@ -1,4 +1,5 @@
 import { openImageLightbox } from '/lightbox.js';
+import { attachCyclingCarousel } from '/carousel.js';
 
 const POLL_MS = 30_000;
 const QUICK_RETRY_MS = 4_000;
@@ -482,10 +483,12 @@ function hiResImg(url, size = 1600) {
   return url.replace(/\/s-l\d+(\.\w+)/i, `/s-l${size}$1`);
 }
 
-// Build a horizontally-scrolling carousel of the item's images. Pass
-// `[primary, ...additional]` deduped; if the result is one image (or zero),
-// you get a single static image with no nav UI (single-image hides nav +
-// dots via CSS). Click prev/next or swipe on touch to flip.
+// Build a cycling image carousel for an item's gallery. Pass
+// `[primary, ...additional]` deduped. The track wrap-cycles in both
+// directions (swipe past either end → other end) and clicking an image
+// opens the lightbox at the same index; when the lightbox closes, the
+// inline gallery jumps to whatever image the user was on in the modal so
+// they stay continuous.
 function imageGallery(images, alt) {
   const cleaned = images.filter(Boolean).map((u) => hiResImg(u));
   // Dedupe while preserving order so a listing whose primary equals
@@ -497,72 +500,44 @@ function imageGallery(images, alt) {
     seen.add(u);
     ordered.push(u);
   }
-  const wrap = el('div', { class: `item-gallery${ordered.length <= 1 ? ' single-image' : ''}` });
-  if (ordered.length === 0) {
-    return wrap;
-  }
+  const single = ordered.length <= 1;
+  const wrap = el('div', { class: `item-gallery${single ? ' single-image' : ''}` });
+  if (ordered.length === 0) return wrap;
+
   const track = el('div', { class: 'gallery-track' });
-  for (const src of ordered) {
-    track.appendChild(el('img', { src, alt: alt ?? '', loading: 'lazy' }));
+  wrap.appendChild(track);
+  // Counter goes on every gallery (consistent indicator regardless of how
+  // many images the listing has — eBay caps at 24, which would overflow
+  // any dot strip on a 160px tile).
+  const counter = el('div', { class: 'gallery-counter', 'aria-hidden': 'true' });
+  wrap.appendChild(counter);
+
+  const prev = el('button', { class: 'gallery-nav gallery-prev', type: 'button', 'aria-label': 'Previous image', textContent: '‹' });
+  const next = el('button', { class: 'gallery-nav gallery-next', type: 'button', 'aria-label': 'Next image', textContent: '›' });
+  if (!single) {
+    wrap.appendChild(prev);
+    wrap.appendChild(next);
   }
-  // Clicking any image opens the full-size lightbox at that index. Delegated
-  // on the track so all <img> children share one listener and we can derive
-  // the index from the visually-snapped slide rather than the click target —
-  // a click that lands between snapped slides during a scroll still opens
-  // at "the slide the user is looking at".
+
+  const carousel = attachCyclingCarousel(track, {
+    images: ordered,
+    alt: alt ?? '',
+    counterEl: counter,
+  });
+  prev.addEventListener('click', (e) => { e.stopPropagation(); carousel.step(-1); });
+  next.addEventListener('click', (e) => { e.stopPropagation(); carousel.step(1); });
+
+  // Click any image to open the lightbox at the currently-visible slide;
+  // when the lightbox closes, jump this inline carousel to the index the
+  // user landed on so opening + closing maintains continuity.
   track.style.cursor = 'zoom-in';
   track.addEventListener('click', (e) => {
     if (!(e.target instanceof HTMLImageElement)) return;
     e.stopPropagation();
-    const idx = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
-    openImageLightbox(ordered, idx, alt ?? '');
+    openImageLightbox(ordered, carousel.getIndex(), alt ?? '', {
+      onClose: (finalIdx) => carousel.goTo(finalIdx),
+    });
   });
-  wrap.appendChild(track);
-
-  if (ordered.length > 1) {
-    const prev = el('button', { class: 'gallery-nav gallery-prev', type: 'button', 'aria-label': 'Previous image', textContent: '‹' });
-    const next = el('button', { class: 'gallery-nav gallery-next', type: 'button', 'aria-label': 'Next image', textContent: '›' });
-    wrap.appendChild(prev);
-    wrap.appendChild(next);
-
-    // Dots are great up to ~8 images but bleed off narrow tiles once you
-    // get into 15+ photo listings. Past that threshold use a compact
-    // "i / N" text counter instead; same role, fixed footprint.
-    const DOT_THRESHOLD = 8;
-    let setActive;
-    if (ordered.length <= DOT_THRESHOLD) {
-      const dots = el('div', { class: 'gallery-dots', 'aria-hidden': 'true' });
-      for (let i = 0; i < ordered.length; i++) {
-        dots.appendChild(el('span', i === 0 ? { class: 'is-active' } : {}));
-      }
-      wrap.appendChild(dots);
-      setActive = (idx) => {
-        const spans = dots.children;
-        for (let i = 0; i < spans.length; i++) spans[i].classList.toggle('is-active', i === idx);
-      };
-    } else {
-      const counter = el('div', { class: 'gallery-counter', 'aria-hidden': 'true', textContent: `1 / ${ordered.length}` });
-      wrap.appendChild(counter);
-      setActive = (idx) => {
-        counter.textContent = `${idx + 1} / ${ordered.length}`;
-      };
-    }
-
-    // Step by one image-width; smooth scroll picks up from CSS.
-    const step = (dir) => {
-      const w = track.clientWidth;
-      track.scrollBy({ left: dir * w, behavior: 'smooth' });
-    };
-    prev.addEventListener('click', (e) => { e.stopPropagation(); step(-1); });
-    next.addEventListener('click', (e) => { e.stopPropagation(); step(1); });
-
-    // Update active indicator as the user scrolls. scrollLeft / clientWidth
-    // gives the snapped index since each slide is the full track width.
-    track.addEventListener('scroll', () => {
-      const idx = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
-      setActive(idx);
-    }, { passive: true });
-  }
   return wrap;
 }
 

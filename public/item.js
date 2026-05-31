@@ -1,4 +1,5 @@
 import { openImageLightbox } from '/lightbox.js';
+import { attachCyclingCarousel } from '/carousel.js';
 
 const params = new URLSearchParams(window.location.search);
 const itemId = params.get('id') || '';
@@ -56,10 +57,9 @@ function hiResImg(url, size = 1600) {
   return url.replace(/\/s-l\d+(\.\w+)/i, `/s-l${size}$1`);
 }
 
-// Mirrors imageGallery() in app.js: a scroll-snap track + prev/next + dots,
-// built with DOM nodes so we can drop it next to innerHTML-rendered text.
-// Returns the wrap element. Empty/single-image collapses the nav UI via
-// the .single-image class.
+// Mirrors imageGallery() in app.js — uses the same attachCyclingCarousel
+// helper for clone-pad wrap-around and counter, built with DOM methods so
+// it slots next to the innerHTML-rendered header text.
 function buildImageGallery(images, alt) {
   const cleaned = (images || []).filter(Boolean).map((u) => hiResImg(u));
   const seen = new Set();
@@ -69,84 +69,47 @@ function buildImageGallery(images, alt) {
     seen.add(u);
     ordered.push(u);
   }
+  const single = ordered.length <= 1;
   const wrap = document.createElement('div');
-  wrap.className = `item-gallery${ordered.length <= 1 ? ' single-image' : ''}`;
+  wrap.className = `item-gallery${single ? ' single-image' : ''}`;
   if (ordered.length === 0) return wrap;
 
   const track = document.createElement('div');
   track.className = 'gallery-track';
-  for (const src of ordered) {
-    const img = document.createElement('img');
-    img.src = src;
-    img.alt = alt || '';
-    img.loading = 'lazy';
-    track.appendChild(img);
-  }
   wrap.appendChild(track);
-  // Click any image to open the full-size lightbox at the snapped index.
-  // See app.js imageGallery() for the same pattern.
+  const counter = document.createElement('div');
+  counter.className = 'gallery-counter';
+  counter.setAttribute('aria-hidden', 'true');
+  wrap.appendChild(counter);
+
+  const mkBtn = (cls, label, text) => {
+    const b = document.createElement('button');
+    b.className = `gallery-nav ${cls}`;
+    b.type = 'button';
+    b.setAttribute('aria-label', label);
+    b.textContent = text;
+    return b;
+  };
+  const prev = mkBtn('gallery-prev', 'Previous image', '‹');
+  const next = mkBtn('gallery-next', 'Next image', '›');
+  if (!single) wrap.append(prev, next);
+
+  const carousel = attachCyclingCarousel(track, {
+    images: ordered,
+    alt: alt || '',
+    counterEl: counter,
+  });
+  prev.addEventListener('click', (e) => { e.stopPropagation(); carousel.step(-1); });
+  next.addEventListener('click', (e) => { e.stopPropagation(); carousel.step(1); });
+
   track.style.cursor = 'zoom-in';
   track.addEventListener('click', (e) => {
     if (!(e.target instanceof HTMLImageElement)) return;
     e.stopPropagation();
-    const idx = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
-    openImageLightbox(ordered, idx, alt || '');
+    openImageLightbox(ordered, carousel.getIndex(), alt || '', {
+      onClose: (finalIdx) => carousel.goTo(finalIdx),
+    });
   });
-
-  if (ordered.length > 1) {
-    const mkBtn = (cls, label, text) => {
-      const b = document.createElement('button');
-      b.className = `gallery-nav ${cls}`;
-      b.type = 'button';
-      b.setAttribute('aria-label', label);
-      b.textContent = text;
-      return b;
-    };
-    const prev = mkBtn('gallery-prev', 'Previous image', '‹');
-    const next = mkBtn('gallery-next', 'Next image', '›');
-    wrap.append(prev, next);
-
-    // Dots above ~8 images bleed off narrow tiles; switch to an "i / N"
-    // counter past that threshold. Mirrors app.js's imageGallery().
-    const DOT_THRESHOLD = 8;
-    let setActive;
-    if (ordered.length <= DOT_THRESHOLD) {
-      const dots = document.createElement('div');
-      dots.className = 'gallery-dots';
-      dots.setAttribute('aria-hidden', 'true');
-      for (let i = 0; i < ordered.length; i++) {
-        const d = document.createElement('span');
-        if (i === 0) d.className = 'is-active';
-        dots.appendChild(d);
-      }
-      wrap.appendChild(dots);
-      setActive = (idx) => {
-        const spans = dots.children;
-        for (let i = 0; i < spans.length; i++) spans[i].classList.toggle('is-active', i === idx);
-      };
-    } else {
-      const counter = document.createElement('div');
-      counter.className = 'gallery-counter';
-      counter.setAttribute('aria-hidden', 'true');
-      counter.textContent = `1 / ${ordered.length}`;
-      wrap.appendChild(counter);
-      setActive = (idx) => {
-        counter.textContent = `${idx + 1} / ${ordered.length}`;
-      };
-    }
-
-    const step = (dir) => {
-      const w = track.clientWidth;
-      track.scrollBy({ left: dir * w, behavior: 'smooth' });
-    };
-    prev.addEventListener('click', (e) => { e.stopPropagation(); step(-1); });
-    next.addEventListener('click', (e) => { e.stopPropagation(); step(1); });
-
-    track.addEventListener('scroll', () => {
-      const idx = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
-      setActive(idx);
-    }, { passive: true });
-  }
   return wrap;
 }
 
