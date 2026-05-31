@@ -37,6 +37,7 @@ import { EbayClient } from './ebay/client.js';
 import { listSellerActiveItems, type Listing } from './ebay/seller.js';
 import { createAdaptiveSellerFetch } from './seller-poll.js';
 import { createItemDetailsEnricher } from './item-details-enricher.js';
+import { reconcileFinalsForItems } from './reconcile-finals.js';
 import { fetchBidHistory } from './ebay/bid-history.js';
 import { normalizeTradingItemId } from './ebay/trading.js';
 import { parseViewbids, ViewbidsParseError } from './ebay/viewbids.js';
@@ -104,10 +105,35 @@ async function enrichWithBidHistory(deps: Deps, listings: Listing[]): Promise<Li
   );
 
   if (deps.db) {
-    persistSnapshot(deps.db, enriched).catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      deps.log.error('db persistence failed', { error: message });
-    });
+    const pool = deps.db;
+    persistSnapshot(pool, enriched)
+      .then((result) => {
+        // Items that JUST transitioned to ended in this cycle get their
+        // authoritative final price + bid count locked in via GetItem
+        // immediately — no scheduled sweep, no human in the loop. The
+        // Trading API call is independent of the Browse poll and runs
+        // fire-and-forget so a slow eBay response doesn't block anything.
+        if (userToken && result.justEnded.length > 0) {
+          void reconcileFinalsForItems({
+            pool,
+            userToken,
+            itemIds: result.justEnded,
+            log: deps.log,
+          }).then((rs) => {
+            const updated = rs.filter((r) => r.outcome === 'updated').length;
+            const errored = rs.filter((r) => r.outcome === 'error').length;
+            deps.log.info('post-close reconcile', {
+              candidates: result.justEnded.length,
+              updated,
+              errored,
+            });
+          });
+        }
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        deps.log.error('db persistence failed', { error: message });
+      });
   }
 
   return enriched.map(({ listing }) => listing);
