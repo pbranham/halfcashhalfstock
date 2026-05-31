@@ -16,6 +16,10 @@ export interface ListingView {
   isAuction: boolean;
   split: HalfSplit | null;
   lastBidTime: string | null;
+  // Extra gallery images from the per-item Browse details. Excludes
+  // imageUrl, so callers render [imageUrl, ...additionalImages]. Empty
+  // until the background enrichment pass populates the row.
+  additionalImages: string[];
 }
 
 export interface EndedListingView {
@@ -30,6 +34,9 @@ export interface EndedListingView {
   finalPriceUsd: number;
   finalBidCount: number;
   currency: string;
+  // Same shape as ListingView.additionalImages — gallery URLs from the
+  // per-item Browse details, excluding imageUrl.
+  additionalImages: string[];
   // Split using the LIVE stock price for the snapshot's ticker.
   split: HalfSplit | null;
   // The stock close (in USD) at the moment this auction ended, looked up
@@ -92,6 +99,10 @@ export function composeSnapshot(
   // for looking these up from the OHLC table for the current stock symbol —
   // composeSnapshot stays synchronous.
   endTimeClosesByItemId: ReadonlyMap<string, number | null> = new Map(),
+  // Gallery URLs (excluding the primary imageUrl) keyed by itemId. Same
+  // shape as endTimeClosesByItemId: caller looks them up, composer just
+  // surfaces them. Items without an entry get an empty array.
+  additionalImagesByItemId: ReadonlyMap<string, string[]> = new Map(),
 ): Snapshot {
   const items: ListingView[] = listings.map((l) => ({
     itemId: l.itemId,
@@ -106,6 +117,7 @@ export function composeSnapshot(
     isAuction: l.isAuction,
     split: isSplittablePrice(l.priceUsd) ? splitHalfCashHalfStock(l.priceUsd, stock.price) : null,
     lastBidTime: l.lastBidTime ?? null,
+    additionalImages: additionalImagesByItemId.get(l.itemId) ?? [],
   }));
 
   // Items with at least one real bid AND a USD price contribute to the
@@ -147,6 +159,7 @@ export function composeSnapshot(
       finalPriceUsd: e.finalPriceUsd,
       finalBidCount: e.finalBidCount,
       currency: e.currency,
+      additionalImages: additionalImagesByItemId.get(e.itemId) ?? [],
       split: isUsd && isSplittablePrice(e.finalPriceUsd) ? splitHalfCashHalfStock(e.finalPriceUsd, stock.price) : null,
       endTimePriceUsd: endTimeClose,
       endTimeSplit:

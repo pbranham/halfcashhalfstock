@@ -21,6 +21,7 @@ import {
   forceMarkEnded,
   getClosingPriceAt,
   persistSnapshot,
+  readAdditionalImagesByItemId,
   readBidsForItem,
   readEndedListings,
   readListingDetail,
@@ -314,7 +315,15 @@ export function createApp(deps: Deps): express.Express {
             });
           }
         }
-        return composeSnapshot(enriched, quote, ended, endTimeClosesByItemId);
+        // Bulk-fetch the additionalImages galleries for every item in this
+        // snapshot (active + ended) so each card carries its full gallery.
+        // The query touches only rows where additional_images is non-null,
+        // so it's cheap even for sellers with hundreds of listings.
+        const allItemIds = [...enriched.map((l) => l.itemId), ...ended.map((e) => e.itemId)];
+        const additionalImagesByItemId = deps.db
+          ? await readAdditionalImagesByItemId(deps.db, allItemIds)
+          : new Map<string, string[]>();
+        return composeSnapshot(enriched, quote, ended, endTimeClosesByItemId, additionalImagesByItemId);
       });
       // Computed per-request (not baked into the cached snapshot) so the
       // "live updates delayed" signal reflects current cache health rather

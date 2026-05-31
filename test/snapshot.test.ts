@@ -180,6 +180,21 @@ describe('composeSnapshot', () => {
     expect(snapshot.items[0]?.lastBidTime).toBe('2026-05-07T12:00:00.000Z');
   });
 
+  it('surfaces additionalImages from the supplied map; empty array when no entry', () => {
+    const snapshot = composeSnapshot(
+      [
+        listing({ itemId: 'v1|hasimgs', priceUsd: 1 }),
+        listing({ itemId: 'v1|noimgs', priceUsd: 1 }),
+      ],
+      QUOTE,
+      [],
+      new Map(),
+      new Map([['v1|hasimgs', ['https://i.ebayimg.com/x/s-l1600.jpg']]]),
+    );
+    expect(snapshot.items[0]?.additionalImages).toEqual(['https://i.ebayimg.com/x/s-l1600.jpg']);
+    expect(snapshot.items[1]?.additionalImages).toEqual([]);
+  });
+
   it('includes ended listings with their own totals', () => {
     const snapshot = composeSnapshot(
       [listing({ itemId: 'v1|1', priceUsd: 100 })],
