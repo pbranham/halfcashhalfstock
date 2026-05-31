@@ -480,6 +480,61 @@ function hiResImg(url, size = 1600) {
   return url.replace(/\/s-l\d+(\.\w+)/i, `/s-l${size}$1`);
 }
 
+// Build a horizontally-scrolling carousel of the item's images. Pass
+// `[primary, ...additional]` deduped; if the result is one image (or zero),
+// you get a single static image with no nav UI (single-image hides nav +
+// dots via CSS). Click prev/next or swipe on touch to flip.
+function imageGallery(images, alt) {
+  const cleaned = images.filter(Boolean).map((u) => hiResImg(u));
+  // Dedupe while preserving order so a listing whose primary equals
+  // additional[0] doesn't flash the same image twice.
+  const seen = new Set();
+  const ordered = [];
+  for (const u of cleaned) {
+    if (seen.has(u)) continue;
+    seen.add(u);
+    ordered.push(u);
+  }
+  const wrap = el('div', { class: `item-gallery${ordered.length <= 1 ? ' single-image' : ''}` });
+  if (ordered.length === 0) {
+    return wrap;
+  }
+  const track = el('div', { class: 'gallery-track' });
+  for (const src of ordered) {
+    track.appendChild(el('img', { src, alt: alt ?? '', loading: 'lazy' }));
+  }
+  wrap.appendChild(track);
+
+  if (ordered.length > 1) {
+    const prev = el('button', { class: 'gallery-nav gallery-prev', type: 'button', 'aria-label': 'Previous image', textContent: '‹' });
+    const next = el('button', { class: 'gallery-nav gallery-next', type: 'button', 'aria-label': 'Next image', textContent: '›' });
+    const dots = el('div', { class: 'gallery-dots', 'aria-hidden': 'true' });
+    for (let i = 0; i < ordered.length; i++) {
+      dots.appendChild(el('span', i === 0 ? { class: 'is-active' } : {}));
+    }
+    wrap.appendChild(prev);
+    wrap.appendChild(next);
+    wrap.appendChild(dots);
+
+    // Step by one image-width; smooth scroll picks up from CSS.
+    const step = (dir) => {
+      const w = track.clientWidth;
+      track.scrollBy({ left: dir * w, behavior: 'smooth' });
+    };
+    prev.addEventListener('click', (e) => { e.stopPropagation(); step(-1); });
+    next.addEventListener('click', (e) => { e.stopPropagation(); step(1); });
+
+    // Update active dot as the user scrolls. scrollLeft / clientWidth gives
+    // the snapped index since each slide is the full track width.
+    track.addEventListener('scroll', () => {
+      const idx = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+      const spans = dots.children;
+      for (let i = 0; i < spans.length; i++) spans[i].classList.toggle('is-active', i === idx);
+    }, { passive: true });
+  }
+  return wrap;
+}
+
 // The half-cash / half-stock split box shared by active and ended cards.
 //
 // Each half is a flex-wrap line holding a label + an atomic (nowrap) value.
@@ -536,10 +591,7 @@ function endedEbayUrl(itemWebUrl, itemId) {
 
 function renderItem(item, symbol) {
   const card = el('article', { class: 'item' });
-  const img = item.imageUrl
-    ? el('img', { class: 'item-image', src: hiResImg(item.imageUrl), alt: item.title, loading: 'lazy' })
-    : el('div', { class: 'item-image' });
-  card.appendChild(img);
+  card.appendChild(imageGallery([item.imageUrl, ...(item.additionalImages ?? [])], item.title));
   const body = el('div', { class: 'item-body' });
   body.appendChild(
     el('h2', { class: 'item-title' }, [
@@ -647,10 +699,7 @@ function renderEndedSection(snapshot, endedItems, totals) {
 
 function renderEndedItem(item) {
   const card = el('article', { class: 'item ended-item' });
-  const img = item.imageUrl
-    ? el('img', { class: 'item-image', src: hiResImg(item.imageUrl), alt: item.title, loading: 'lazy' })
-    : el('div', { class: 'item-image' });
-  card.appendChild(img);
+  card.appendChild(imageGallery([item.imageUrl, ...(item.additionalImages ?? [])], item.title));
   const body = el('div', { class: 'item-body' });
   body.appendChild(
     el('h2', { class: 'item-title' }, [
