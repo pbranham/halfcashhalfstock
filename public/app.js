@@ -508,13 +508,31 @@ function imageGallery(images, alt) {
   if (ordered.length > 1) {
     const prev = el('button', { class: 'gallery-nav gallery-prev', type: 'button', 'aria-label': 'Previous image', textContent: '‹' });
     const next = el('button', { class: 'gallery-nav gallery-next', type: 'button', 'aria-label': 'Next image', textContent: '›' });
-    const dots = el('div', { class: 'gallery-dots', 'aria-hidden': 'true' });
-    for (let i = 0; i < ordered.length; i++) {
-      dots.appendChild(el('span', i === 0 ? { class: 'is-active' } : {}));
-    }
     wrap.appendChild(prev);
     wrap.appendChild(next);
-    wrap.appendChild(dots);
+
+    // Dots are great up to ~8 images but bleed off narrow tiles once you
+    // get into 15+ photo listings. Past that threshold use a compact
+    // "i / N" text counter instead; same role, fixed footprint.
+    const DOT_THRESHOLD = 8;
+    let setActive;
+    if (ordered.length <= DOT_THRESHOLD) {
+      const dots = el('div', { class: 'gallery-dots', 'aria-hidden': 'true' });
+      for (let i = 0; i < ordered.length; i++) {
+        dots.appendChild(el('span', i === 0 ? { class: 'is-active' } : {}));
+      }
+      wrap.appendChild(dots);
+      setActive = (idx) => {
+        const spans = dots.children;
+        for (let i = 0; i < spans.length; i++) spans[i].classList.toggle('is-active', i === idx);
+      };
+    } else {
+      const counter = el('div', { class: 'gallery-counter', 'aria-hidden': 'true', textContent: `1 / ${ordered.length}` });
+      wrap.appendChild(counter);
+      setActive = (idx) => {
+        counter.textContent = `${idx + 1} / ${ordered.length}`;
+      };
+    }
 
     // Step by one image-width; smooth scroll picks up from CSS.
     const step = (dir) => {
@@ -524,12 +542,11 @@ function imageGallery(images, alt) {
     prev.addEventListener('click', (e) => { e.stopPropagation(); step(-1); });
     next.addEventListener('click', (e) => { e.stopPropagation(); step(1); });
 
-    // Update active dot as the user scrolls. scrollLeft / clientWidth gives
-    // the snapped index since each slide is the full track width.
+    // Update active indicator as the user scrolls. scrollLeft / clientWidth
+    // gives the snapped index since each slide is the full track width.
     track.addEventListener('scroll', () => {
       const idx = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
-      const spans = dots.children;
-      for (let i = 0; i < spans.length; i++) spans[i].classList.toggle('is-active', i === idx);
+      setActive(idx);
     }, { passive: true });
   }
   return wrap;

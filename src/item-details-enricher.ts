@@ -1,9 +1,16 @@
 import type { Pool } from 'pg';
 import type { Logger } from './log.js';
-import type { Listing } from './ebay/seller.js';
 import { fetchItemDetails } from './ebay/item-details.js';
 import type { EbayClient } from './ebay/client.js';
 import { readListingsMissingDetails, upsertItemDetails } from './db/persist.js';
+
+// The enricher only needs itemId + primary image URL (the latter for the
+// per-item details fetch's dedupe). Both active Listings and EndedListingRows
+// satisfy this shape, so the caller can pass either or both.
+export interface EnrichmentTarget {
+  itemId: string;
+  imageUrl: string | null;
+}
 
 export interface ItemDetailsEnricherOptions {
   pool: Pool;
@@ -28,33 +35,35 @@ export function createItemDetailsEnricher(opts: ItemDetailsEnricherOptions) {
   const staleAfterMs = opts.staleAfterMs ?? 7 * 24 * 60 * 60 * 1000;
   const concurrency = Math.max(1, opts.concurrency ?? 4);
 
-  // Best-effort, fire-and-forget. Given a snapshot's listings, fetch details
-  // for the ones missing them (or stale) and persist. Never throws — the
-  // caller (snapshot endpoint) doesn't await the result, so an error here
-  // would otherwise be an unhandledRejection.
-  return function enrich(listings: readonly Listing[]): void {
+  // Best-effort, fire-and-forget. Given some target listings (active or
+  // ended), fetch details for the ones missing them (or stale) and persist.
+  // Never throws — the caller (snapshot endpoint) doesn't await the result,
+  // so an error here would otherwise be an unhandledRejection.
+  return function enrich(targets: readonly EnrichmentTarget[]): void {
     if (inflight) return;
     inflight = (async () => {
       try {
-        const candidates = listings.map((l) => l.itemId);
-        const targets = await readListingsMissingDetails(opts.pool, candidates, staleAfterMs);
-        if (targets.length === 0) return;
+        const candidates = targets.map((t) => t.itemId);
+        const missingIds = await readListingsMissingDetails(opts.pool, candidates, staleAfterMs);
+        if (missingIds.length === 0) return;
 
-        // Index the source listings so we can pass the primary image URL
+        // Index the source targets so we can pass the primary image URL
         // through to the fetch (used for dedupe).
-        const byId = new Map(listings.map((l) => [l.itemId, l]));
+        const byId = new Map(targets.map((t) => [t.itemId, t]));
 
         let idx = 0;
         const worker = async (): Promise<void> => {
-          while (idx < targets.length) {
-            const itemId = targets[idx++]!;
+          while (idx < missingIds.length) {
+            const itemId = missingIds[idx++]!;
             const primary = byId.get(itemId)?.imageUrl ?? null;
             try {
               const details = await fetchItemDetails(opts.client, itemId, primary);
               if (details === null) {
-                // 404 from eBay — persist an empty details row so we don't
-                // re-attempt every snapshot. The staleness window still
-                // applies, so we'll re-check eventually.
+                // 404 from eBay (or 410 / similar terminal status) — persist
+                // an empty details row so we don't re-attempt every snapshot.
+                // The staleness window still applies, so we'll re-check
+                // eventually. Common for older ended auctions where eBay
+                // has dropped the per-item endpoint.
                 await upsertItemDetails(opts.pool, {
                   itemId,
                   additionalImages: [],

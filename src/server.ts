@@ -77,10 +77,11 @@ interface Deps {
   db?: Pool | null;
   tickerQueue?: TickerQueue | null;
   requestStats?: RequestStatsCollector | null;
-  // Fire-and-forget: kick off a Browse /item/{id} fetch for any listing in
-  // `listings` that's missing or has stale details (gallery + description).
-  // Doesn't block the response; results show up on subsequent snapshots.
-  enrichItemDetails?: (listings: readonly Listing[]) => void;
+  // Fire-and-forget: kick off a Browse /item/{id} fetch for any of the given
+  // items (active or ended) that's missing or has stale details (gallery +
+  // description). Doesn't block the response; results show up on subsequent
+  // snapshots.
+  enrichItemDetails?: (targets: readonly { itemId: string; imageUrl: string | null }[]) => void;
 }
 
 async function enrichWithBidHistory(deps: Deps, listings: Listing[]): Promise<Listing[]> {
@@ -135,7 +136,9 @@ function buildDeps(
     priceCache.get(symbol, PRICE_TTL_MS, () => priceProvider.getQuote(symbol));
 
   let fetchListings: () => Promise<Listing[]>;
-  let enrichItemDetails: ((listings: readonly Listing[]) => void) | undefined;
+  let enrichItemDetails:
+    | ((targets: readonly { itemId: string; imageUrl: string | null }[]) => void)
+    | undefined;
   if (hasEbayCredentials(config)) {
     const tokenProvider = new EbayAppTokenProvider({
       appId: config.EBAY_APP_ID!,
@@ -284,13 +287,16 @@ export function createApp(deps: Deps): express.Express {
 
       const snapshot = await snapshotCache.get(`snapshot:${symbol}:ed${endedDays}`, SNAPSHOT_TTL_MS, async () => {
         const [listings, quote] = await Promise.all([deps.fetchListings(), deps.fetchQuote(symbol)]);
-        // Best-effort gallery + description backfill for any listing in this
-        // snapshot whose details are missing or stale. Fire-and-forget;
-        // results show up on subsequent snapshots and the helper
-        // single-flights so repeat calls collapse to one pass.
-        deps.enrichItemDetails?.(listings);
         const enriched = await enrichWithBidHistory(deps, listings);
         const ended = deps.db ? await readEndedListings(deps.db, endedDays) : [];
+        // Best-effort gallery + description backfill for any item in this
+        // snapshot (active OR ended) whose details are missing or stale.
+        // Fire-and-forget; results show up on subsequent snapshots and the
+        // helper single-flights so repeat calls collapse to one pass. Ended
+        // items often 404 on eBay once they're past their visibility window
+        // — the enricher persists an empty row in that case so they don't
+        // re-attempt every snapshot.
+        deps.enrichItemDetails?.([...listings, ...ended]);
         // For each USD-denominated ended item, find the OHLC close at the
         // moment it ended. The result is fixed forever for any given
         // (itemId, ticker) pair, so consult the process-level cache first

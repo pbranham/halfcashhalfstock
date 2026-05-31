@@ -88,6 +88,26 @@ describe('createItemDetailsEnricher', () => {
     expect((client.get as ReturnType<typeof vi.fn>).mock.calls.some(([p]) => p === '/buy/browse/v1/item/c')).toBe(false);
   });
 
+  it('accepts EnrichmentTargets from any source shape (active or ended)', async () => {
+    // Caller passes a thin {itemId, imageUrl} shape — same call should work
+    // whether the source is an active Listing or an EndedListingRow. Both
+    // get fetched.
+    const { pool, log, updates } = makeMocks(['active-1', 'ended-1']);
+    const client = fakeClient({
+      'active-1': { additionalImages: [{ imageUrl: 'https://i.ebayimg.com/a/s-l500.jpg' }], description: '' },
+      'ended-1': { additionalImages: [{ imageUrl: 'https://i.ebayimg.com/e/s-l500.jpg' }], description: '' },
+    });
+    const enrich = createItemDetailsEnricher({ pool, client, log });
+
+    enrich([
+      { itemId: 'active-1', imageUrl: 'https://i.ebayimg.com/a/s-l140.jpg' },
+      { itemId: 'ended-1', imageUrl: null },
+    ]);
+    await vi.waitFor(() => expect(updates).toHaveLength(2));
+    const ids = updates.map((u) => u.itemId).sort();
+    expect(ids).toEqual(['active-1', 'ended-1']);
+  });
+
   it('persists an empty row on 404 so the missing item is not re-attempted', async () => {
     const { pool, log, updates } = makeMocks(['gone']);
     const client = fakeClient({ gone: '404' });

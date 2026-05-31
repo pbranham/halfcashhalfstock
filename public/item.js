@@ -93,15 +93,36 @@ function buildImageGallery(images, alt) {
     };
     const prev = mkBtn('gallery-prev', 'Previous image', '‹');
     const next = mkBtn('gallery-next', 'Next image', '›');
-    const dots = document.createElement('div');
-    dots.className = 'gallery-dots';
-    dots.setAttribute('aria-hidden', 'true');
-    for (let i = 0; i < ordered.length; i++) {
-      const d = document.createElement('span');
-      if (i === 0) d.className = 'is-active';
-      dots.appendChild(d);
+    wrap.append(prev, next);
+
+    // Dots above ~8 images bleed off narrow tiles; switch to an "i / N"
+    // counter past that threshold. Mirrors app.js's imageGallery().
+    const DOT_THRESHOLD = 8;
+    let setActive;
+    if (ordered.length <= DOT_THRESHOLD) {
+      const dots = document.createElement('div');
+      dots.className = 'gallery-dots';
+      dots.setAttribute('aria-hidden', 'true');
+      for (let i = 0; i < ordered.length; i++) {
+        const d = document.createElement('span');
+        if (i === 0) d.className = 'is-active';
+        dots.appendChild(d);
+      }
+      wrap.appendChild(dots);
+      setActive = (idx) => {
+        const spans = dots.children;
+        for (let i = 0; i < spans.length; i++) spans[i].classList.toggle('is-active', i === idx);
+      };
+    } else {
+      const counter = document.createElement('div');
+      counter.className = 'gallery-counter';
+      counter.setAttribute('aria-hidden', 'true');
+      counter.textContent = `1 / ${ordered.length}`;
+      wrap.appendChild(counter);
+      setActive = (idx) => {
+        counter.textContent = `${idx + 1} / ${ordered.length}`;
+      };
     }
-    wrap.append(prev, next, dots);
 
     const step = (dir) => {
       const w = track.clientWidth;
@@ -112,8 +133,7 @@ function buildImageGallery(images, alt) {
 
     track.addEventListener('scroll', () => {
       const idx = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
-      const spans = dots.children;
-      for (let i = 0; i < spans.length; i++) spans[i].classList.toggle('is-active', i === idx);
+      setActive(idx);
     }, { passive: true });
   }
   return wrap;
