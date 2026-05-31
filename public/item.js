@@ -258,7 +258,21 @@ function ebayBidIncrement(amount) {
 // Retracted bids: at the retraction timestamp we remove that bid from the
 // pool and recompute. If the retracted bidder was the leader, the visible
 // price typically drops to the new second-highest + increment.
-function buildChartPointsFromBids(bids, listing) {
+// The auction's starting price (floor) — the price a sole bidder wins at,
+// before any competition reveals itself. Derived from the listing snapshots:
+// the earliest 0-bid observation, falling back to the earliest snapshot.
+// Returns null when we have no snapshot to anchor on.
+function deriveStartingPrice(snapshots) {
+  if (!snapshots || snapshots.length === 0) return null;
+  const sorted = [...snapshots].sort(
+    (a, b) => new Date(a.observedAt).getTime() - new Date(b.observedAt).getTime(),
+  );
+  const base = sorted.find((s) => Number(s.currentBidCount) === 0) ?? sorted[0];
+  const p = Number(base.currentPriceUsd);
+  return Number.isFinite(p) ? p : null;
+}
+
+function buildChartPointsFromBids(bids, listing, startingPrice = null) {
   if (!bids || bids.length === 0) return { points: [], maxDots: [], retractionMarkers: [] };
 
   const events = [];
@@ -331,7 +345,15 @@ function buildChartPointsFromBids(bids, listing) {
     let visiblePrice = 0;
     let leaderPlacedAt = null;
     if (maxes.length === 1) {
-      visiblePrice = maxes[0].amount;
+      // A sole active bidder is winning at the FLOOR (the starting price),
+      // not their hidden max — eBay never reveals the max while it's
+      // unchallenged. Using the max here leaked it and flattened the chart
+      // to the top of the range. Never drop below where the price already
+      // climbed (covers a retraction leaving one bidder), and never exceed
+      // that bidder's own max.
+      const floor = startingPrice ?? maxes[0].amount;
+      const base = Number.isFinite(lastVisible) ? Math.max(floor, lastVisible) : floor;
+      visiblePrice = Math.min(base, maxes[0].amount);
       leaderPlacedAt = maxes[0].placedAt;
     } else if (maxes.length >= 2) {
       const [highest, second] = maxes;
@@ -557,7 +579,8 @@ function generateLogTimeLabels(tMin, tMax, mode) {
 }
 
 function renderChart(snapshots, listing, bids) {
-  let { points, maxDots, retractionMarkers } = buildChartPointsFromBids(bids, listing);
+  const startingPrice = deriveStartingPrice(snapshots);
+  let { points, maxDots, retractionMarkers } = buildChartPointsFromBids(bids, listing, startingPrice);
 
   if (points.length < 2 && snapshots && snapshots.length > 0) {
     points = snapshots.map((s) => ({
