@@ -669,6 +669,9 @@ main {
   height: 100%;
   object-fit: cover;
   scroll-snap-align: start;
+  /* Force the scroll to stop at each slide so a fast swipe can't fly past
+     several photos at once — one swipe advances exactly one image. */
+  scroll-snap-stop: always;
 }
 /* Prev/next buttons sit over the image edges. On touch devices they're
    always visible (you can't hover); on pointer devices they fade in on
@@ -761,6 +764,7 @@ main {
   height: 100%;
   object-fit: contain;
   scroll-snap-align: start;
+  scroll-snap-stop: always;
   user-select: none;
   -webkit-user-drag: none;
 }
