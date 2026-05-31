@@ -1,3 +1,5 @@
+import { openImageLightbox } from '/lightbox.js';
+
 const params = new URLSearchParams(window.location.search);
 const itemId = params.get('id') || '';
 
@@ -81,6 +83,15 @@ function buildImageGallery(images, alt) {
     track.appendChild(img);
   }
   wrap.appendChild(track);
+  // Click any image to open the full-size lightbox at the snapped index.
+  // See app.js imageGallery() for the same pattern.
+  track.style.cursor = 'zoom-in';
+  track.addEventListener('click', (e) => {
+    if (!(e.target instanceof HTMLImageElement)) return;
+    e.stopPropagation();
+    const idx = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+    openImageLightbox(ordered, idx, alt || '');
+  });
 
   if (ordered.length > 1) {
     const mkBtn = (cls, label, text) => {

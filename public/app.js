@@ -1,3 +1,5 @@
+import { openImageLightbox } from '/lightbox.js';
+
 const POLL_MS = 30_000;
 const QUICK_RETRY_MS = 4_000;
 const STALE_MS = 120_000;
@@ -503,6 +505,18 @@ function imageGallery(images, alt) {
   for (const src of ordered) {
     track.appendChild(el('img', { src, alt: alt ?? '', loading: 'lazy' }));
   }
+  // Clicking any image opens the full-size lightbox at that index. Delegated
+  // on the track so all <img> children share one listener and we can derive
+  // the index from the visually-snapped slide rather than the click target —
+  // a click that lands between snapped slides during a scroll still opens
+  // at "the slide the user is looking at".
+  track.style.cursor = 'zoom-in';
+  track.addEventListener('click', (e) => {
+    if (!(e.target instanceof HTMLImageElement)) return;
+    e.stopPropagation();
+    const idx = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+    openImageLightbox(ordered, idx, alt ?? '');
+  });
   wrap.appendChild(track);
 
   if (ordered.length > 1) {
