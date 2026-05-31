@@ -482,6 +482,12 @@ export interface ListingDetail {
   currency: string;
   firstSeenAt: string;
   lastSeenAt: string;
+  // Filled in by the background detail-enrichment pass. additionalImages
+  // EXCLUDES imageUrl; callers render [imageUrl, ...additionalImages].
+  // descriptionHtml is the raw eBay seller HTML; render only in a sandbox.
+  additionalImages: string[];
+  descriptionHtml: string | null;
+  detailsFetchedAt: string | null;
 }
 
 export async function readListingDetail(
@@ -502,9 +508,13 @@ export async function readListingDetail(
     currency: string;
     first_seen_at: Date;
     last_seen_at: Date;
+    additional_images: string[] | null;
+    description_html: string | null;
+    details_fetched_at: Date | null;
   }>(
     `SELECT item_id, seller_id, title, image_url, item_web_url, is_auction, ends_at, ended_at,
-            current_price_usd, current_bid_count, currency, first_seen_at, last_seen_at
+            current_price_usd, current_bid_count, currency, first_seen_at, last_seen_at,
+            additional_images, description_html, details_fetched_at
      FROM listings
      WHERE item_id = $1`,
     [itemId],
@@ -525,7 +535,72 @@ export async function readListingDetail(
     currency: row.currency,
     firstSeenAt: row.first_seen_at.toISOString(),
     lastSeenAt: row.last_seen_at.toISOString(),
+    additionalImages: Array.isArray(row.additional_images) ? row.additional_images : [],
+    descriptionHtml: row.description_html,
+    detailsFetchedAt: row.details_fetched_at ? row.details_fetched_at.toISOString() : null,
   };
+}
+
+// Per-item details fetched from Browse /item/{id}. additionalImages is the
+// gallery URLs only (caller renders [primary, ...additional]).
+export interface ItemDetails {
+  itemId: string;
+  additionalImages: string[];
+  descriptionHtml: string | null;
+}
+
+export async function upsertItemDetails(pool: Pool, details: ItemDetails): Promise<void> {
+  await pool.query(
+    `UPDATE listings
+     SET additional_images = $2::jsonb,
+         description_html = $3,
+         details_fetched_at = NOW()
+     WHERE item_id = $1`,
+    [details.itemId, JSON.stringify(details.additionalImages), details.descriptionHtml],
+  );
+}
+
+// itemIds that are present in `listings` but have either never had details
+// fetched (details_fetched_at IS NULL) or whose details are older than the
+// provided staleness window. Used by the background enrichment pass to pick
+// what to fetch next without touching anything fresh.
+export async function readListingsMissingDetails(
+  pool: Pool,
+  candidateItemIds: readonly string[],
+  staleAfterMs: number,
+): Promise<string[]> {
+  if (candidateItemIds.length === 0) return [];
+  const cutoff = new Date(Date.now() - staleAfterMs);
+  const res = await pool.query<{ item_id: string }>(
+    `SELECT item_id FROM listings
+     WHERE item_id = ANY($1::text[])
+       AND (details_fetched_at IS NULL OR details_fetched_at < $2)`,
+    [candidateItemIds, cutoff],
+  );
+  return res.rows.map((r) => r.item_id);
+}
+
+// Bulk-fetch the gallery URLs for a set of itemIds. Used by composeSnapshot
+// so each ListingView/EndedListingView can carry the seller's full gallery,
+// not just the one thumbnail from the seller search. Items missing details
+// simply aren't in the returned map.
+export async function readAdditionalImagesByItemId(
+  pool: Pool,
+  itemIds: readonly string[],
+): Promise<Map<string, string[]>> {
+  if (itemIds.length === 0) return new Map();
+  const res = await pool.query<{ item_id: string; additional_images: string[] | null }>(
+    `SELECT item_id, additional_images FROM listings
+     WHERE item_id = ANY($1::text[]) AND additional_images IS NOT NULL`,
+    [itemIds],
+  );
+  const out = new Map<string, string[]>();
+  for (const row of res.rows) {
+    if (Array.isArray(row.additional_images) && row.additional_images.length > 0) {
+      out.set(row.item_id, row.additional_images);
+    }
+  }
+  return out;
 }
 
 export interface ListingSnapshotRow {
