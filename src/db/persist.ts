@@ -288,7 +288,13 @@ export async function reconcileItemBids(
 export async function persistSnapshot(
   pool: Pool,
   inputs: readonly SnapshotPersistInput[],
-): Promise<{ listings: number; bids: number; removedBids: number; endedListings: number }> {
+): Promise<{
+  listings: number;
+  bids: number;
+  removedBids: number;
+  endedListings: number;
+  justEnded: string[];
+}> {
   let listingsTouched = 0;
   let bidsInserted = 0;
   for (const { listing, bids } of inputs) {
@@ -312,19 +318,43 @@ export async function persistSnapshot(
       bidsInserted += await insertBids(pool, listing.itemId, bids);
     }
   }
-  const endedListings = await markEndedListings(pool, inputs.map((i) => i.listing.itemId));
-  return { listings: listingsTouched, bids: bidsInserted, removedBids: 0, endedListings };
+  const notSeen = await markEndedListings(pool, inputs.map((i) => i.listing.itemId));
+  // Also stamp items past their advertised end time but still being returned
+  // by Browse search; their not-in-poll signal may not fire for several
+  // minutes after close. Union both sets so the caller can reconcile every
+  // newly-ended item in this cycle.
+  const pastEnd = await markPastEndDateAsEnded(pool);
+  const justEnded = Array.from(new Set([...notSeen.justEnded, ...pastEnd]));
+  return {
+    listings: listingsTouched,
+    bids: bidsInserted,
+    removedBids: 0,
+    endedListings: notSeen.count + pastEnd.length,
+    justEnded,
+  };
 }
 
-export async function markEndedListings(pool: Pool, currentItemIds: readonly string[]): Promise<number> {
-  if (currentItemIds.length === 0) return 0;
+export interface MarkEndedResult {
+  count: number;
+  // Item IDs that just transitioned to ended in this call. Callers can pipe
+  // them into reconcileFinalsForItems to immediately lock the authoritative
+  // final price/bid count via the Trading API, without waiting for any
+  // scheduled sweep.
+  justEnded: string[];
+}
+
+export async function markEndedListings(
+  pool: Pool,
+  currentItemIds: readonly string[],
+): Promise<MarkEndedResult> {
+  if (currentItemIds.length === 0) return { count: 0, justEnded: [] };
   // An item is considered ended if it's no longer in the active poll AND
   // either (a) its advertised end time has passed, or (b) we haven't seen
   // it in any poll for over an hour (safety net for items where ends_at
   // was never captured, or eBay's Browse API kept returning it briefly
   // past its end). The 1-hour buffer protects against brief upstream
   // outages flipping every item to ended.
-  const result = await pool.query(
+  const result = await pool.query<{ item_id: string }>(
     `UPDATE listings
      SET ended_at = COALESCE(ends_at, last_seen_at, NOW())
      WHERE ended_at IS NULL
@@ -332,10 +362,32 @@ export async function markEndedListings(pool: Pool, currentItemIds: readonly str
        AND (
          (ends_at IS NOT NULL AND ends_at < NOW())
          OR (last_seen_at < NOW() - INTERVAL '1 hour')
-       )`,
+       )
+     RETURNING item_id`,
     [Array.from(currentItemIds)],
   );
-  return result.rowCount ?? 0;
+  return {
+    count: result.rowCount ?? 0,
+    justEnded: result.rows.map((r) => r.item_id),
+  };
+}
+
+// Stamp ended_at on any listing whose advertised end time has passed but
+// which is somehow still missing the marker — covers items eBay keeps
+// returning in active search briefly past their close (so the
+// not-in-poll path in markEndedListings won't catch them yet). Returns the
+// itemIds it just stamped, same shape as markEndedListings so the caller
+// can union the two sets and reconcile both. Bounded by ends_at < NOW().
+export async function markPastEndDateAsEnded(pool: Pool): Promise<string[]> {
+  const result = await pool.query<{ item_id: string }>(
+    `UPDATE listings
+     SET ended_at = ends_at
+     WHERE ended_at IS NULL
+       AND ends_at IS NOT NULL
+       AND ends_at < NOW()
+     RETURNING item_id`,
+  );
+  return result.rows.map((r) => r.item_id);
 }
 
 export interface StuckListingRow {
@@ -379,6 +431,26 @@ export async function forceMarkEnded(pool: Pool, itemId: string): Promise<boolea
      WHERE item_id = $1
        AND ended_at IS NULL`,
     [itemId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+// Set the authoritative final price + bid count on an ended listing, sourced
+// from the Trading API GetItem SellingStatus. Only touches rows that are
+// already marked ended (ended_at IS NOT NULL) so this can never clobber the
+// live price of an auction still in the active poll. Returns true if a row
+// was updated.
+export async function updateEndedListingFinals(
+  pool: Pool,
+  itemId: string,
+  finalPriceUsd: number,
+  finalBidCount: number,
+): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE listings
+     SET current_price_usd = $2, current_bid_count = $3
+     WHERE item_id = $1 AND ended_at IS NOT NULL`,
+    [itemId, finalPriceUsd, finalBidCount],
   );
   return (result.rowCount ?? 0) > 0;
 }

@@ -37,7 +37,7 @@ https://halfcashhalfstock-dev.onrender.com (deploys from
 - Vanilla static frontend in `public/` — no bundler, no CDNs. Browser-native
   ESM modules (`<script type="module">`) for `app.js`/`item.js`; those import
   `carousel.js` + `lightbox.js`.
-- Vitest for tests (currently **155**). ESLint + Prettier for lint/format.
+- Vitest for tests (currently **162**). ESLint + Prettier for lint/format.
 - `fast-xml-parser` (Trading API XML); no HTML parser dep (regex in
   `viewbids.ts`).
 - Render hosts both web service and Postgres. Local dev works without DB
@@ -86,6 +86,7 @@ src/
   math.ts                    pure half/half split
   seller-poll.ts             createAdaptiveSellerFetch: sleep sellers with 0 listings
   item-details-enricher.ts   fire-and-forget gallery + description backfill
+  reconcile-finals.ts        reconcileFinalsForItems: GetItem → updateEndedListingFinals
   db/
     pool.ts                  pg.Pool factory
     migrate.ts               filesystem-driven migration runner (atomic per file)
@@ -182,6 +183,12 @@ Frontend behaviour:
   `localStorage.hchs.sellerFilter`. The active filter drives the active list,
   the ended list, both totals cards, and the "most recent bid" widget — all
   re-aggregated client-side from the filtered subset.
+- **0-bid ended auctions are hidden from the ended list** — they didn't
+  clear, so they're non-events that just clutter the display. The dollar
+  totals already exclude them server-side (`composeSnapshot`'s
+  `endedPriced` filter); the visible-list filter is in `renderFilteredView`
+  (`(i.finalBidCount ?? 0) > 0`). They're still in the snapshot payload
+  for any future "include unsold" toggle.
 - Per-card `@sellerId` chip next to the Auction/Ended tag with seller-specific
   colors (`.seller-badge-mine` / `.seller-badge-ryan`).
 - Sort selection is shared by active and ended lists. For ended, `price-low`
@@ -264,12 +271,73 @@ Frontend carousel:
   parent CSP doesn't restrict the iframe's own images/styles. CSP has
   explicit `frame-src 'self'` to permit mounting the about:srcdoc frame.
 
+## Final price/bid-count reconcile via GetItem (Trading API)
+
+**Distinct from the bid-history timeline below.** The dashboard's half/half
+math only needs the *final price* and *bid count*, not the per-bid timeline.
+Those two numbers are available authoritatively from the Trading API
+`GetItem` call (`SellingStatus.CurrentPrice` + `BidCount`) for ANY item in
+eBay's ~90-day window — own listings and others' — via `api.ebay.com`, which
+is **not** subject to the "Pardon Our Interruption" datacenter-IP challenge
+that blocks scraping the public viewbids page. So this path works
+server-side, no paste required.
+
+- `getItemSellingStatus(itemId, userToken)` in `src/ebay/trading.ts` —
+  GetItem XML call; returns `{ listingStatus, currentPrice, currencyId,
+  bidCount, ack, errorMessage }`. Does NOT return the bid timeline.
+- `reconcileFinalsForItems({ pool, userToken, itemIds, log, maxItems? })`
+  in `src/reconcile-finals.ts` — shared helper that calls GetItem for each
+  item, applies the eligibility guards (Completed/Ended, USD, finite price
+  > 0, Ack ≠ Failure), writes finals via `updateEndedListingFinals`, and
+  never throws. Returns a per-item outcome (`updated` / `no-op` / `skip` /
+  `error`). Used by both the post-close auto-pass (below) and the admin
+  audit action.
+- `updateEndedListingFinals(pool, itemId, priceUsd, bidCount)` in
+  `db/persist.ts` — writes the finals, but only onto rows already marked
+  ended (`ended_at IS NOT NULL`), so it can never clobber a live auction.
+- Admin action `reconcile_selling_status` (`{ itemId?, apply? }`) —
+  **DRY RUN by default**: reports DB-vs-eBay per ended item and writes
+  nothing. Re-run with `apply:true` to persist. Only acts when the item is
+  Completed/Ended, USD, price finite/>0, Ack≠Failure, and the value differs.
+  Capped at 60 items/run. Admin UI has "Dry run" + "Apply" buttons.
+- **Verified live** (PR #30): the dry-run reported every DB price already
+  matched eBay (`$X → $X` across 45 items), confirming GetItem works for
+  both own and others' listings. Bid counts diverged on heavy-bid items
+  (DB count from viewbids parse was ~15 short of eBay's badge count);
+  bid count is cosmetic vs the price math, so it's acceptable either
+  way — applying GetItem's count brings DB closer to eBay's display
+  without changing any dollar number.
+
+### Auto post-close reconcile
+
+Built on top of the same helper, fires inside the snapshot loader:
+
+- `persistSnapshot` now returns `{ ..., justEnded: string[] }` — the
+  itemIds it just stamped `ended_at` on this cycle. Two paths feed into
+  it: `markEndedListings` (item not in active poll AND past its end or
+  unseen for >1h) and `markPastEndDateAsEnded` (item still in Browse
+  search but its `ends_at` is in the past — covers eBay keeping ended
+  items active for several minutes post-close).
+- `enrichWithBidHistory` chains a `.then` after `persistSnapshot` that
+  calls `reconcileFinalsForItems` on `justEnded`. Fire-and-forget,
+  capped at 20 items/cycle, logged as `post-close reconcile`. So the
+  authoritative final price + bid count land on the row within **one
+  snapshot cycle** of the auction transitioning to ended — typically
+  30s of wall-clock time after the auction's actual end (since
+  `markPastEndDateAsEnded` fires the moment `ends_at < NOW()`, no
+  waiting for Browse to drop the item).
+
+This does NOT replace the viewbids paste flow for the *bid timeline* (the
+per-bidder chart on the item page) — only the final price/count the
+dashboard totals use.
+
 ## Bid-history reconciliation (PR #18 + #19)
 
 The eBay Trading API's `GetAllBidders` returns empty for non-sellers on
 ended auctions. The Shopping and Finding APIs are decommissioned (Feb 2025).
 Marketplace Insights is closed to new applicants. **The only complete public
-source of historical bid history is `https://www.ebay.com/bfl/viewbids/<id>?item=<id>&rt=nc`.**
+source of the per-bid timeline is `https://www.ebay.com/bfl/viewbids/<id>?item=<id>&rt=nc`** (see the GetItem section above for the simpler
+final-price-only path).
 
 Implementation:
 
@@ -440,7 +508,7 @@ Dashboard state lives in `localStorage`:
 - **Before committing**: `npm run build && npm test && npm run lint`
   (typecheck is part of build via `tsc`). All three should finish in ~5s
   combined.
-- **Vitest is fast** (~2s for 155 tests); run early when iterating.
+- **Vitest is fast** (~2s for 162 tests); run early when iterating.
 - **Don't paste large content into chat** — save to a file (e.g. `.tmp/x.html`,
   gitignored) and tell me the path. I'll Read just the lines I need.
 - **PRs are opened per coherent change**, not against one long-running

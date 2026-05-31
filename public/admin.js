@@ -35,6 +35,8 @@ const stuckList = document.getElementById('stuck-list');
 const recoveryResult = document.getElementById('recovery-result');
 const reconcileResult = document.getElementById('reconcile-result');
 const reconcileBidsBtn = document.getElementById('reconcile-bids-btn');
+const reconcileStatusDryBtn = document.getElementById('reconcile-status-dry-btn');
+const reconcileStatusApplyBtn = document.getElementById('reconcile-status-apply-btn');
 const backfillOhlcBtn = document.getElementById('backfill-ohlc-btn');
 const confirmModal = document.getElementById('confirm-modal');
 const confirmText = document.getElementById('confirm-text');
@@ -582,7 +584,7 @@ envFilter.addEventListener('change', loadDashboard);
 windowFilter.addEventListener('change', loadDashboard);
 autoRefreshToggle.addEventListener('change', startAutoRefresh);
 
-async function recoveryFetch(action) {
+async function recoveryFetch(action, extraBody = {}) {
   const token = getToken();
   if (!token) return;
   recoveryResult.hidden = true;
@@ -590,7 +592,7 @@ async function recoveryFetch(action) {
     const response = await fetch('/api/admin/cleanup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ action, ...extraBody }),
     });
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
@@ -615,6 +617,15 @@ async function recoveryFetch(action) {
         return `${r.ticker}: ${r.candles} candles fetched, ${r.inserted} inserted`;
       });
       recoveryResult.textContent = `Historical OHLC backfill (${data.range}):\n${lines.join('\n')}`;
+    } else if (action === 'reconcile_selling_status') {
+      const fmt = (n) => (n === null || n === undefined ? '—' : n);
+      const lines = (data.results ?? []).map((r) => {
+        if (r.error) return `${r.itemId}: error — ${r.error}`;
+        const flag = r.updated ? '✓ updated' : r.willUpdate ? '→ would update' : r.eligible ? 'match' : `skip (${r.listingStatus ?? r.ack ?? '?'}${r.currency && r.currency !== 'USD' ? ' ' + r.currency : ''})`;
+        return `${flag}  $${fmt(r.dbPrice)}→$${fmt(r.apiPrice)}  bids ${fmt(r.dbBidCount)}→${fmt(r.apiBidCount)}  ${r.title ?? r.itemId}`;
+      });
+      const header = `Reconcile final price/bids (${data.mode}) — scanned ${data.scanned}${data.truncated ? ' (capped)' : ''}, updated ${data.updated}:`;
+      recoveryResult.textContent = `${header}\n${lines.join('\n')}`;
     }
     recoveryResult.hidden = false;
   } catch (err) {
@@ -646,6 +657,14 @@ if (resetBackfillBtn) {
 }
 if (backfillOhlcBtn) {
   backfillOhlcBtn.addEventListener('click', () => recoveryFetch('backfill_ohlc_history'));
+}
+if (reconcileStatusDryBtn) {
+  reconcileStatusDryBtn.addEventListener('click', () => recoveryFetch('reconcile_selling_status'));
+}
+if (reconcileStatusApplyBtn) {
+  reconcileStatusApplyBtn.addEventListener('click', () => {
+    confirmAction('Write eBay\'s final price + bid count onto every ended listing where it differs from the DB? Run a Dry run first to preview.', () => recoveryFetch('reconcile_selling_status', { apply: true }));
+  });
 }
 if (inspectBtn) {
   inspectBtn.addEventListener('click', async () => {

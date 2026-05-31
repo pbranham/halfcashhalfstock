@@ -960,7 +960,13 @@ function renderFilteredView(snapshot, bidDiff) {
   if (!snapshot) return;
   const stockPrice = snapshot.stock?.price ?? 0;
   const filteredActive = filterBySeller(snapshot.items ?? []);
-  const filteredEnded = filterBySeller(snapshot.endedItems ?? []);
+  // 0-bid ended auctions are unsold listings — they didn't clear and they
+  // don't contribute to any of the dollar totals (composeSnapshot already
+  // excludes them). Hide them from the visible list too so the ended
+  // section doesn't get cluttered with non-events.
+  const filteredEnded = filterBySeller(snapshot.endedItems ?? []).filter(
+    (i) => (i.finalBidCount ?? 0) > 0,
+  );
   renderTotals(snapshot, aggregateActiveTotals(filteredActive, stockPrice));
   renderMostRecentBid(snapshot, filteredActive);
   renderItems(snapshot, filteredActive, bidDiff);
