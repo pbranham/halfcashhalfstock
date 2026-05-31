@@ -650,10 +650,19 @@ main {
   width: 100%;
   aspect-ratio: 4 / 3;
   background: var(--bg-elev);
+  /* Clip the track to the 4/3 box. Belt to the absolute-positioned track
+     below: even if a browser resolves the track height oddly, nothing
+     spills past the gallery frame. */
+  overflow: hidden;
 }
 .gallery-track {
-  width: 100%;
-  height: 100%;
+  /* Fill the aspect-ratio box exactly. Using absolute inset:0 (rather than
+     height:100%) so the track's height is always definite — height:100%
+     against an aspect-ratio parent doesn't resolve reliably across browsers,
+     which let portrait images render at their intrinsic (taller) height and
+     made some tiles' pictures taller than others. */
+  position: absolute;
+  inset: 0;
   display: flex;
   overflow-x: auto;
   scroll-snap-type: x mandatory;
