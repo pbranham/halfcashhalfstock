@@ -374,10 +374,26 @@ function renderLastUpdated(snapshot) {
   if (!el) return;
   const generated = snapshot?.generatedAt ? new Date(snapshot.generatedAt) : null;
   if (!generated) {
-    setText(el, '');
+    el.replaceChildren();
     return;
   }
-  setText(el, `Auctions updated ${formatClock(generated)}`);
+  // Three discrete spans so the mobile CSS can stack them onto their own
+  // lines (Auctions / updated at / 3:37 AM) while desktop renders them
+  // inline as a single sentence — text nodes between spans give the
+  // inline spacing for free.
+  const mk = (cls, text) => {
+    const s = document.createElement('span');
+    s.className = cls;
+    s.textContent = text;
+    return s;
+  };
+  el.replaceChildren(
+    mk('updated-headline', 'Auctions'),
+    document.createTextNode(' '),
+    mk('updated-verb', 'updated at'),
+    document.createTextNode(' '),
+    mk('updated-time', formatClock(generated)),
+  );
 }
 
 function renderDegradedBanner(snapshot) {

@@ -200,37 +200,52 @@ body {
 }
 
 @media (max-width: 720px) {
+  /* Keep the left / center / right structure intact on portrait — the
+     previous "brand | ticker / updated full-width" rearrangement was
+     visually disorganised. Each cell stacks its contents vertically
+     instead, so a narrow screen reads as three short columns. */
   .topbar {
-    grid-template-columns: 1fr 1fr;
-    grid-template-areas: 'brand ticker' 'updated updated';
-    gap: 6px 16px;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas: 'brand updated ticker';
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
   }
-  .brand { grid-area: brand; gap: 6px; }
-  .brand-word { font-size: 13px; }
-  .brand-icon { width: 44px; height: 25px; }
+
+  /* Brand: Half Cash / icon / Half Stock vertical. Smaller icon so the
+     stacked-column height stays reasonable. */
+  .brand {
+    grid-area: brand;
+    flex-direction: column;
+    gap: 2px;
+    align-items: center;
+  }
+  .brand-word { font-size: 12px; line-height: 1.1; }
+  .brand-icon { width: 36px; height: 21px; }
+
+  /* Updated: three-line stack. Spans were rendered with text nodes
+     between them so display:block here gives one line per span; desktop
+     keeps them inline. */
+  .last-updated {
+    grid-area: updated;
+    text-align: center;
+    line-height: 1.25;
+  }
+  .last-updated > span {
+    display: block;
+  }
+
+  /* Ticker: keep "$GME $21.18" as the inline headline; meta stays in its
+     existing vertical-column form below. Discard the temporary horizontal
+     meta + bullet rule from the previous attempt. */
   .ticker {
     grid-area: ticker;
-    /* Stack quote on top, meta line below so the meta has the full ticker
-       cell width instead of being squeezed beside the price. */
     flex-direction: column;
     align-items: flex-end;
     gap: 2px;
   }
-  /* Lay status + timestamp inline with a bullet separator. Each piece is
-     short enough on its own that the full meta line ("MARKET CLOSED ·
-     FRI 4:00 PM") fits comfortably in a ~150px-wide ticker cell. The
-     separator only shows when both children are present — :empty on
-     ticker-status hides it, and the ::after rides along. */
-  .ticker-meta {
-    flex-direction: row;
-    gap: 6px;
-  }
-  .ticker-status:not(:empty)::after {
-    content: ' ·';
-    opacity: 0.6;
-    margin-left: 2px;
-  }
-  .last-updated { grid-area: updated; text-align: left; }
+  .ticker-price { font-size: 17px; }
+  .ticker-meta { flex-direction: column; }
 }
 
 main {
