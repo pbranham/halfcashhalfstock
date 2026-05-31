@@ -137,6 +137,16 @@ body {
   justify-self: end;
 }
 
+/* Symbol + price form a single inline block; the meta column (status +
+   timestamp) sits beside it. The wrapper exists so on narrow phones we
+   can stack `quote` and `meta` vertically instead of cramming all four
+   pieces onto one flex row that wraps mid-word ("FRI 4:00 / PM"). */
+.ticker-quote {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
 .ticker-symbol {
   color: var(--fg-muted);
   font-size: 12px;
@@ -170,6 +180,11 @@ body {
 .ticker-status,
 .ticker-as-of {
   display: block;
+  /* Don't break "MARKET CLOSED" into "MARKET / CLOSED" or "FRI 4:00 PM"
+     into "FRI 4:00 / PM" if the column happens to be narrow — better to
+     overflow predictably (which won't happen at our current widths since
+     the mobile rule below moves meta to its own row). */
+  white-space: nowrap;
 }
 .ticker-status:empty,
 .ticker-as-of:empty {
@@ -193,7 +208,28 @@ body {
   .brand { grid-area: brand; gap: 6px; }
   .brand-word { font-size: 13px; }
   .brand-icon { width: 44px; height: 25px; }
-  .ticker { grid-area: ticker; }
+  .ticker {
+    grid-area: ticker;
+    /* Stack quote on top, meta line below so the meta has the full ticker
+       cell width instead of being squeezed beside the price. */
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+  }
+  /* Lay status + timestamp inline with a bullet separator. Each piece is
+     short enough on its own that the full meta line ("MARKET CLOSED ·
+     FRI 4:00 PM") fits comfortably in a ~150px-wide ticker cell. The
+     separator only shows when both children are present — :empty on
+     ticker-status hides it, and the ::after rides along. */
+  .ticker-meta {
+    flex-direction: row;
+    gap: 6px;
+  }
+  .ticker-status:not(:empty)::after {
+    content: ' ·';
+    opacity: 0.6;
+    margin-left: 2px;
+  }
   .last-updated { grid-area: updated; text-align: left; }
 }
 
