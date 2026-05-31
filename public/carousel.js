@@ -90,7 +90,18 @@ export function attachCyclingCarousel(track, opts) {
   };
 
   let currentReal = Math.max(0, Math.min(startIndex, images.length - 1));
-  const snapTo = (pos) => { track.scrollLeft = pos * track.clientWidth; };
+  // `.gallery-track` has CSS `scroll-behavior: smooth`, which applies to
+  // *all* programmatic scroll-position assignments — including the silent
+  // warp from clone to real position. If we don't disable it for snapTo,
+  // the warp animates smoothly all the way across the track, looking like
+  // the carousel "flies through" every slide after a wrap-around. Toggle
+  // scroll-behavior to auto for the assignment and restore immediately.
+  const snapTo = (pos) => {
+    const prev = track.style.scrollBehavior;
+    track.style.scrollBehavior = 'auto';
+    track.scrollLeft = pos * track.clientWidth;
+    track.style.scrollBehavior = prev;
+  };
   const animateTo = (pos) => { track.scrollTo({ left: pos * track.clientWidth, behavior: 'smooth' }); };
 
   const writeCounter = () => {
