@@ -38,6 +38,7 @@ import { listSellerActiveItems, type Listing } from './ebay/seller.js';
 import { createAdaptiveSellerFetch } from './seller-poll.js';
 import { createItemDetailsEnricher } from './item-details-enricher.js';
 import { reconcileFinalsForItems } from './reconcile-finals.js';
+import { startBackgroundListingPoll } from './listing-poll.js';
 import { fetchBidHistory } from './ebay/bid-history.js';
 import { normalizeTradingItemId } from './ebay/trading.js';
 import { parseViewbids, ViewbidsParseError } from './ebay/viewbids.js';
@@ -1300,8 +1301,32 @@ async function main(): Promise<void> {
     log.info('listening', { port: config.PORT, sellerIds: config.sellerIds });
   });
 
+  // Always-on background poll: refresh listings every 30s independent of any
+  // HTTP request, so bid changes and auction-end transitions (with the
+  // auto-reconcile chained off persistSnapshot) land in the DB even at 3am
+  // with nobody on the dashboard. Dev and prod share the same database, so
+  // we gate to prod only — a second instance polling would double upstream
+  // calls without adding coverage.
+  let stopBackgroundPoll: (() => void) | null = null;
+  if (db && config.APP_ENVIRONMENT === 'prod') {
+    stopBackgroundPoll = startBackgroundListingPoll({
+      fetchListings: deps.fetchListings,
+      // enrichWithBidHistory triggers persistSnapshot fire-and-forget, which
+      // returns justEnded[] → reconcileFinalsForItems via the existing chain
+      // in that helper. The background loop just kicks the chain; nothing
+      // duplicated, no extra wiring needed.
+      process: (listings) => enrichWithBidHistory(deps, listings),
+      log,
+    });
+  } else {
+    log.info('background listing poll disabled', {
+      reason: !db ? 'no database' : `env=${config.APP_ENVIRONMENT}`,
+    });
+  }
+
   const shutdown = (signal: string): void => {
     log.info('shutting down', { signal });
+    if (stopBackgroundPoll) stopBackgroundPoll();
     if (tickerQueue) tickerQueue.stop();
     if (requestStats) requestStats.stop();
     if (backfillInterval) clearInterval(backfillInterval);
