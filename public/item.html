@@ -38,14 +38,18 @@
       </section>
 
       <section class="item-section" id="chart-section" hidden>
-        <h3>Price &amp; bid count over time</h3>
+        <h3>Price over time</h3>
         <p class="chart-source" id="chart-source" hidden></p>
+        <div class="chart-zoom" role="group" aria-label="Chart time scale">
+          <button class="chart-zoom-btn is-active" data-zoom="full" type="button">Full auction</button>
+          <button class="chart-zoom-btn" data-zoom="start" type="button" title="Stretch the opening hours — where hype-driven auctions do their price discovery">Opening rush</button>
+          <button class="chart-zoom-btn" data-zoom="snipe" type="button" title="Stretch the final minutes — where last-seconds bidding wars are decided">Snipe zoom</button>
+        </div>
         <div class="chart-legend" id="chart-legend">
           <span><span class="swatch line-bid"></span>Current bid (USD)</span>
           <span data-legend="bid"><span class="swatch dot-active"></span>Bid</span>
           <span data-legend="proxy"><span class="swatch dot-proxy"></span>Proxy defense</span>
           <span><span class="swatch volume-bars"></span>Volume</span>
-          <span><span class="swatch cumulative-line"></span>Cumulative bids</span>
         </div>
         <p class="legend-note" id="legend-note" hidden>
           Hollow dots mark proxy defense: the leader&rsquo;s hidden maximum automatically held off a rising bid.

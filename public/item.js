@@ -479,42 +479,42 @@ let chartState = null;
 // this is not the same as the auction's scheduled end timestamp; we use
 // the data's tMax so the chart doesn't squash all activity to the left
 // edge while waiting out unused future time.
-const Y_SCALES = ['linear', 'log'];
-const X_SCALES = ['linear', 'log-start', 'log-end'];
-// Short directional labels for the in-SVG axis annotations. The arrows
-// indicate which end of the time range the log scale stretches.
-const X_SCALE_LABELS = {
-  linear: 'linear',
-  'log-start': 'log →',
-  'log-end': '← log',
-};
-const chartScale = {
-  y: Y_SCALES.includes(localStorage.getItem('hchs.chart.yScale'))
-    ? localStorage.getItem('hchs.chart.yScale')
-    : 'linear',
-  x: X_SCALES.includes(localStorage.getItem('hchs.chart.xScale'))
-    ? localStorage.getItem('hchs.chart.xScale')
-    : 'linear',
-};
-function persistChartScale(key, value) {
+// Three time lenses, exposed as a visible segmented control (the old
+// click-the-axis-band cycling had zero discoverability):
+//   'full'  — linear time across the whole auction.
+//   'start' — log of time-since-start, expanding the opening hours.
+//             Hype-driven auctions (Ryan's run is the house example) do
+//             their price discovery in an opening frenzy — this is the
+//             lens that shows it.
+//   'snipe' — log of time-until-end, expanding the final minutes —
+//             the lens for traditional last-seconds bidding wars.
+// The y axis is always linear: a single auction spans ~1.5 orders of
+// magnitude at most, where log-y is either indistinguishable from linear
+// or actively compresses the late-bidding drama.
+const CHART_ZOOMS = ['full', 'start', 'snipe'];
+let chartZoom = CHART_ZOOMS.includes(localStorage.getItem('hchs.chart.zoom'))
+  ? localStorage.getItem('hchs.chart.zoom')
+  : 'full';
+function setChartZoom(mode) {
+  if (!CHART_ZOOMS.includes(mode) || mode === chartZoom) return;
+  chartZoom = mode;
   try {
-    localStorage.setItem(key, value);
+    localStorage.setItem('hchs.chart.zoom', mode);
   } catch (_e) {
     /* storage disabled — non-fatal */
   }
-}
-function cycleYScale() {
-  const idx = Y_SCALES.indexOf(chartScale.y);
-  chartScale.y = Y_SCALES[(idx + 1) % Y_SCALES.length];
-  persistChartScale('hchs.chart.yScale', chartScale.y);
+  syncZoomButtons();
   drawChart();
 }
-function cycleXScale() {
-  const idx = X_SCALES.indexOf(chartScale.x);
-  chartScale.x = X_SCALES[(idx + 1) % X_SCALES.length];
-  persistChartScale('hchs.chart.xScale', chartScale.x);
-  drawChart();
+function syncZoomButtons() {
+  document.querySelectorAll('.chart-zoom-btn').forEach((b) => {
+    b.classList.toggle('is-active', b.dataset.zoom === chartZoom);
+  });
 }
+document.querySelectorAll('.chart-zoom-btn').forEach((b) => {
+  b.addEventListener('click', () => setChartZoom(b.dataset.zoom));
+});
+syncZoomButtons();
 
 // Picks an x-axis time step from a fixed ladder so labels stay readable
 // regardless of chart width. Targets ~5 labels on narrow screens (mobile),
@@ -605,12 +605,10 @@ function computeVolumeBuckets(placementTimestamps, tMin, tMax, chartWidth) {
   return { bucketMs, buckets };
 }
 
-// Log-scale x-axis labels: pick durations from a human ladder (1m, 10m,
-// 1h, 1d, 1w) that fall inside the chart's time range, plus an explicit
-// "start" / "end" anchor at the appropriate boundary. The same ladder
-// serves both log-start and log-end modes — the duration values are
-// offset from tMin (log-start) or tMax (log-end) when their tick
-// positions get computed by the caller's xFor.
+// Log-lens x-axis labels: durations from a human ladder (1m, 10m, 1h, …)
+// that fall inside the chart's range, anchored at the stretched end.
+// 'start' mode reads "start · 1m · 10m · 1h …" (time since the auction
+// opened); 'snipe' mode reads "… 1h · 10m · 1m · end" (time remaining).
 function generateLogTimeLabels(tMin, tMax, mode) {
   const range = tMax - tMin;
   const minuteMs = 60_000;
@@ -627,14 +625,13 @@ function generateLogTimeLabels(tMin, tMax, mode) {
   const labels = [];
   for (const tick of ladder) {
     if (tick.ms >= range) break;
-    if (mode === 'log-start') {
+    if (mode === 'start') {
       labels.push({ t: tMin + tick.ms, primary: tick.label, isDayBoundary: false });
     } else {
-      // log-end: time-until-end. Prepend so labels read left-to-right.
       labels.unshift({ t: tMax - tick.ms, primary: tick.label, isDayBoundary: false });
     }
   }
-  if (mode === 'log-start') {
+  if (mode === 'start') {
     labels.unshift({ t: tMin, primary: 'start', isDayBoundary: false });
   } else {
     labels.push({ t: tMax, primary: 'end', isDayBoundary: false });
@@ -754,10 +751,14 @@ function drawChart() {
   if (!chartState) return;
   const { points, maxDots = [], retractionMarkers = [], placements: rawPlacements = [], listing, chartMode = 'maxbids' } = chartState;
   const W = chartWrap.clientWidth || 900;
-  // Bump H + PAD.bottom from the original 280/36 to make room below the
-  // x-axis tick labels for the time-mode label without clipping.
   const H = 296;
-  const PAD = { top: 16, right: 56, bottom: 52, left: 68 };
+  // The right margin shrank from 56 to 14 when the bid-count axis was cut
+  // (Phase 3) — the freed width all goes to the plot. Below 500px the
+  // dollar tick labels move INSIDE the plot (standard mobile-finance
+  // pattern), collapsing the left margin too: on a 375px phone this takes
+  // the plot from ~64% to ~93% of the viewport width.
+  const compact = W < 500;
+  const PAD = { top: 16, right: 14, bottom: 36, left: compact ? 12 : 68 };
   const innerW = W - PAD.left - PAD.right;
   const innerH = H - PAD.top - PAD.bottom;
 
@@ -772,32 +773,25 @@ function drawChart() {
   ];
   const priceMin = Math.min(...allPrices);
   const priceMax = Math.max(...allPrices);
-  const countMin = Math.min(...points.map((p) => p.count));
-  const countMax = Math.max(...points.map((p) => p.count));
 
   const priceRange = priceMax - priceMin || 1;
-  const countRange = countMax - countMin || 1;
   const tRange = tMax - tMin || 1;
 
-  // Y price: linear or log10. Clamp inputs to 0.01 to avoid log(0) when
-  // the chart spans values that include or approach zero.
-  const LOG_FLOOR = 0.01;
-  const logMin = Math.log10(Math.max(LOG_FLOOR, priceMin));
-  const logMax = Math.log10(Math.max(LOG_FLOOR, priceMax));
-  const logRange = logMax - logMin || 1;
-
-  // X time: linear, log-time-since-start, or log-time-until-end. The
-  // "+1" inside log10 keeps the function defined at the endpoint where
-  // the elapsed-or-remaining time is zero.
+  // X time: linear across the whole auction ('full'), log of
+  // time-since-start ('start' — expands the opening frenzy where
+  // hype-driven auctions do their price discovery), or log of
+  // time-until-end ('snipe' — expands the final minutes where
+  // traditional bidding wars are decided). The "+1" inside log10 keeps
+  // the function defined where elapsed-or-remaining time is zero.
   const logTRange = Math.log10(Math.max(1, tRange + 1));
   const xFor = (() => {
-    if (chartScale.x === 'log-start') {
+    if (chartZoom === 'start') {
       return (t) => {
         const v = Math.log10(Math.max(1, t - tMin + 1));
         return PAD.left + (v / logTRange) * innerW;
       };
     }
-    if (chartScale.x === 'log-end') {
+    if (chartZoom === 'snipe') {
       return (t) => {
         const v = Math.log10(Math.max(1, tMax - t + 1));
         return PAD.left + innerW - (v / logTRange) * innerW;
@@ -805,17 +799,7 @@ function drawChart() {
     }
     return (t) => PAD.left + ((t - tMin) / tRange) * innerW;
   })();
-  const yPriceFor = chartScale.y === 'log'
-    ? (p) => PAD.top + innerH - ((Math.log10(Math.max(LOG_FLOOR, p)) - logMin) / logRange) * innerH
-    : (p) => PAD.top + innerH - ((p - priceMin) / priceRange) * innerH;
-  // Bid count occupies only the bottom slice of the chart height so the
-  // secondary axis doesn't visually compete with the price line. Without
-  // this cap, both series converged in the top-right corner — busy and
-  // misleading. 40% leaves the count area as a "shadow" at the bottom
-  // while preserving the rising-step signal.
-  const COUNT_AXIS_FRACTION = 0.4;
-  const countAxisH = innerH * COUNT_AXIS_FRACTION;
-  const yCountFor = (c) => PAD.top + innerH - ((c - countMin) / countRange) * countAxisH;
+  const yPriceFor = (p) => PAD.top + innerH - ((p - priceMin) / priceRange) * innerH;
 
   // Sampled mode draws a STEP path (the price holds at the last observed
   // value until the next poll sees a change) — drawing diagonals between
@@ -873,23 +857,9 @@ function drawChart() {
     return `<rect x="${x1.toFixed(1)}" y="${y.toFixed(1)}" width="${width.toFixed(1)}" height="${height.toFixed(1)}" fill="#ffb74d" opacity="0.28" />`;
   }).join('');
 
-  // Cumulative count: step path (no area fill).
-  const countLineSegments = [];
-  for (let i = 0; i < points.length; i++) {
-    const x = xFor(points[i].t).toFixed(1);
-    const y = yCountFor(points[i].count).toFixed(1);
-    if (i === 0) {
-      countLineSegments.push(`M ${x} ${y}`);
-    } else {
-      const prevY = yCountFor(points[i - 1].count).toFixed(1);
-      countLineSegments.push(`L ${x} ${prevY}`, `L ${x} ${y}`);
-    }
-  }
-  const countLinePath = countLineSegments.join(' ');
-
-  const timeLabels = chartScale.x === 'linear'
+  const timeLabels = chartZoom === 'full'
     ? generateTimeLabels(tMin, tMax, W)
-    : generateLogTimeLabels(tMin, tMax, chartScale.x);
+    : generateLogTimeLabels(tMin, tMax, chartZoom);
 
   const gridLines = timeLabels
     .filter((l) => l.t > tMin && l.t < tMax)
@@ -902,62 +872,22 @@ function drawChart() {
   const xAxisLabels = timeLabels.map((l) => {
     const x = xFor(l.t);
     const clampedX = Math.max(PAD.left + 4, Math.min(W - PAD.right - 4, x));
-    return `<text x="${clampedX.toFixed(1)}" y="${H - 28}" text-anchor="middle" font-size="12" font-weight="500" fill="currentColor" opacity="0.85">${escapeHtml(l.primary)}</text>`;
+    return `<text x="${clampedX.toFixed(1)}" y="${H - 14}" text-anchor="middle" font-size="12" font-weight="500" fill="currentColor" opacity="0.85">${escapeHtml(l.primary)}</text>`;
   }).join('');
 
-  // Linear Y ticks: just min/mid/max. Log Y ticks: powers of 10 within
-  // range plus the actual max so the top of the data is anchored.
-  const yTickValues = (() => {
-    if (chartScale.y !== 'log') {
-      return [priceMin, priceMin + priceRange / 2, priceMax];
-    }
-    const ticks = [];
-    const lo = Math.floor(Math.log10(Math.max(LOG_FLOOR, priceMin)));
-    const hi = Math.ceil(Math.log10(Math.max(LOG_FLOOR, priceMax)));
-    for (let exp = lo; exp <= hi; exp++) {
-      const v = Math.pow(10, exp);
-      if (v >= priceMin * 0.99 && v <= priceMax * 1.01) ticks.push(v);
-    }
-    if (ticks.length === 0 || ticks[ticks.length - 1] < priceMax * 0.95) {
-      ticks.push(priceMax);
-    }
-    return ticks;
-  })();
-  const yLeftLabels = yTickValues.map((p) => {
+  // Y ticks: min / mid / max. On desktop they sit in the left margin;
+  // in compact mode (no margin) they move inside the plot, left-aligned
+  // and nudged off the tick line — the standard mobile-finance pattern.
+  const yTickValues = [priceMin, priceMin + priceRange / 2, priceMax];
+  const yLeftLabels = yTickValues.map((p, i) => {
     const y = yPriceFor(p);
+    if (compact) {
+      // Shift the min label up and the max label down so neither rides
+      // the plot edge; the text floats over the plot background.
+      const dy = i === 0 ? -4 : i === yTickValues.length - 1 ? 12 : 4;
+      return `<text x="${PAD.left + 4}" y="${(y + dy).toFixed(1)}" text-anchor="start" font-size="11" font-weight="500" fill="#5cdb95" opacity="0.9">${fmtUsd(p)}</text>`;
+    }
     return `<text x="${PAD.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="12" font-weight="500" fill="#5cdb95" opacity="0.95">${fmtUsd(p)}</text>`;
-  }).join('');
-
-  // Y-axis click target + mode badge. Transparent rect catches clicks
-  // anywhere in the left label band so any axis label is hittable; the
-  // small "linear"/"log" text at the top signals the current mode and
-  // hints the band is interactive.
-  // Axis-mode labels live next to their respective axes inside the SVG.
-  // Each is paired with a transparent click rectangle covering the full
-  // margin (left strip for Y, bottom strip for X) so the tap target is
-  // forgiving on mobile. The mode-label text uses opacity for "subtle but
-  // present"; cursor: pointer signals the band is interactive.
-  //
-  // Y label is rotated -90° on the far left of the SVG, in the empty
-  // column to the left of the dollar tick labels (which sit at
-  // x = PAD.left - 8). The rotated text occupies a narrow vertical
-  // ribbon centered around x = 12, so there's no overlap with the
-  // dollar values regardless of how wide they get.
-  const yCenterY = (PAD.top + innerH / 2).toFixed(1);
-  const yScaleBadge = `
-    <rect class="chart-y-hit" x="0" y="${PAD.top}" width="${PAD.left}" height="${innerH}" fill="transparent" style="cursor: pointer;" />
-    <text class="chart-y-mode" x="12" y="${yCenterY}" text-anchor="middle" transform="rotate(-90 12 ${yCenterY})" font-size="11" fill="currentColor" opacity="0.55" style="pointer-events: none;">$: ${chartScale.y}</text>
-  `;
-  // X label sits below the x-axis tick labels in the extra PAD.bottom
-  // we added. Centered horizontally so it feels like a true axis title.
-  const xScaleBadge = `
-    <rect class="chart-x-hit" x="${PAD.left}" y="${PAD.top + innerH}" width="${innerW}" height="${PAD.bottom}" fill="transparent" style="cursor: pointer;" />
-    <text class="chart-x-mode" x="${(PAD.left + innerW / 2).toFixed(1)}" y="${(H - 8).toFixed(1)}" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.55" style="pointer-events: none;">time: ${X_SCALE_LABELS[chartScale.x]}</text>
-  `;
-
-  const yRightLabels = [countMin, countMin + countRange / 2, countMax].map((c) => {
-    const y = yCountFor(c);
-    return `<text x="${W - PAD.right + 8}" y="${(y + 4).toFixed(1)}" text-anchor="start" font-size="12" font-weight="500" fill="#ffb74d" opacity="0.95">${fmtCount(Math.round(c))}</text>`;
   }).join('');
 
   // Sampled-mode markers are hollow: each is "the price we observed at a
@@ -1005,7 +935,6 @@ function drawChart() {
     <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
       <rect x="${PAD.left}" y="${PAD.top}" width="${innerW}" height="${innerH}" fill="rgba(255,255,255,0.02)" />
       ${volumeBars}
-      <path d="${countLinePath}" stroke="#fff176" stroke-width="1.3" fill="none" opacity="0.85" />
       ${gridLines}
       ${maxDotMarkers}
       ${retractionMarkerSvg}
@@ -1014,25 +943,16 @@ function drawChart() {
       ${dots}
       <line class="chart-guide" x1="0" y1="${PAD.top}" x2="0" y2="${PAD.top + innerH}" stroke="#fff" stroke-width="1" stroke-dasharray="3,3" opacity="0" pointer-events="none" />
       <circle class="chart-marker-price" cx="0" cy="0" r="6" fill="#5cdb95" stroke="#0c0e14" stroke-width="2" opacity="0" pointer-events="none" />
-      <circle class="chart-marker-count" cx="0" cy="0" r="5" fill="#ffd54f" stroke="#0c0e14" stroke-width="2" opacity="0" pointer-events="none" />
       <rect class="chart-hit" x="${PAD.left}" y="${PAD.top}" width="${innerW}" height="${innerH}" fill="transparent" />
       ${xAxisLabels}
       ${yLeftLabels}
-      ${yRightLabels}
-      ${yScaleBadge}
-      ${xScaleBadge}
     </svg>
   `;
 
   const svg = chartWrap.querySelector('svg');
   const guide = svg.querySelector('.chart-guide');
   const markerPrice = svg.querySelector('.chart-marker-price');
-  const markerCount = svg.querySelector('.chart-marker-count');
   const hitArea = svg.querySelector('.chart-hit');
-  const yHit = svg.querySelector('.chart-y-hit');
-  if (yHit) yHit.addEventListener('click', cycleYScale);
-  const xHit = svg.querySelector('.chart-x-hit');
-  if (xHit) xHit.addEventListener('click', cycleXScale);
 
   const updateFromX = (clientX) => {
     const rect = svg.getBoundingClientRect();
@@ -1055,33 +975,56 @@ function drawChart() {
     markerPrice.setAttribute('cx', px);
     markerPrice.setAttribute('cy', yPriceFor(p.price));
     markerPrice.setAttribute('opacity', '1');
-    markerCount.setAttribute('cx', px);
-    markerCount.setAttribute('cy', yCountFor(p.count));
-    markerCount.setAttribute('opacity', '1');
     chartHelp.textContent = `${fmtTime(new Date(p.t).toISOString())} — ${fmtUsd(p.price)} · ${fmtCount(p.count)} bids`;
   };
 
   const resetSelection = () => {
     guide.setAttribute('opacity', '0');
     markerPrice.setAttribute('opacity', '0');
-    markerCount.setAttribute('opacity', '0');
     chartHelp.textContent = defaultChartHelp(points);
   };
 
   hitArea.style.cursor = 'crosshair';
   hitArea.addEventListener('mousemove', (e) => updateFromX(e.clientX));
+  // Touch scrubbing with scroll-intent gating. The old handlers called
+  // preventDefault() unconditionally, which trapped vertical scrolling —
+  // on a phone the chart is full-width, so the page couldn't be scrolled
+  // past it at all. Now: a tap shows the readout immediately (no
+  // preventDefault — scrolling stays possible); on the first move we
+  // decide intent once: mostly-horizontal → scrub mode (preventDefault +
+  // track the finger), mostly-vertical → hands off, the browser scrolls.
+  let touchStart = null; // {x, y} of touchstart, null when not deciding
+  let scrubbing = false;
   hitArea.addEventListener('touchstart', (e) => {
-    if (e.touches[0]) {
-      updateFromX(e.touches[0].clientX);
-      e.preventDefault();
-    }
-  }, { passive: false });
+    const t = e.touches[0];
+    if (!t) return;
+    touchStart = { x: t.clientX, y: t.clientY };
+    scrubbing = false;
+    updateFromX(t.clientX);
+  }, { passive: true });
   hitArea.addEventListener('touchmove', (e) => {
-    if (e.touches[0]) {
-      updateFromX(e.touches[0].clientX);
+    const t = e.touches[0];
+    if (!t) return;
+    if (!scrubbing && touchStart) {
+      const dx = Math.abs(t.clientX - touchStart.x);
+      const dy = Math.abs(t.clientY - touchStart.y);
+      if (dx < 8 && dy < 8) return; // not enough movement to judge yet
+      if (dx > dy) {
+        scrubbing = true;
+      } else {
+        touchStart = null; // vertical intent — let the page scroll
+        return;
+      }
+    }
+    if (scrubbing) {
+      updateFromX(t.clientX);
       e.preventDefault();
     }
   }, { passive: false });
+  hitArea.addEventListener('touchend', () => {
+    touchStart = null;
+    scrubbing = false;
+  }, { passive: true });
 
   chartWrap.querySelectorAll('.chart-dot').forEach((dot) => {
     dot.style.cursor = 'pointer';
@@ -1096,9 +1039,6 @@ function drawChart() {
       markerPrice.setAttribute('cx', px);
       markerPrice.setAttribute('cy', yPriceFor(p.price));
       markerPrice.setAttribute('opacity', '1');
-      markerCount.setAttribute('cx', px);
-      markerCount.setAttribute('cy', yCountFor(p.count));
-      markerCount.setAttribute('opacity', '1');
       chartHelp.textContent = `${fmtTime(new Date(p.t).toISOString())} — ${fmtUsd(p.price)} · ${fmtCount(p.count)} bids`;
     });
   });

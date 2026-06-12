@@ -261,11 +261,31 @@
   border-radius: 0;
 }
 
-.chart-legend .cumulative-line {
-  width: 14px;
-  height: 2px;
-  background: #fff176;
-  opacity: 0.85;
+/* Segmented control for the chart's time lens. Visible and labeled —
+   replaces the old invisible click-the-axis-band cycling. */
+.chart-zoom {
+  display: inline-flex;
+  gap: 0;
+  margin-bottom: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.chart-zoom-btn {
+  background: var(--bg-elev);
+  border: 0;
+  color: var(--fg-muted);
+  padding: 0.4rem 0.9rem;
+  font-size: 0.8rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+.chart-zoom-btn + .chart-zoom-btn {
+  border-left: 1px solid var(--border);
+}
+.chart-zoom-btn.is-active {
+  background: var(--accent-soft);
+  color: var(--fg);
 }
 
 .chart-help {
@@ -273,7 +293,15 @@
   color: var(--fg-muted);
   margin: 0.4rem 0 0;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  min-height: 1em;
+  /* Reserve the line(s) the scrub readout occupies so scrubbing never
+     reflows the content under the user's finger. Phones wrap the
+     readout to two lines, so reserve two there. */
+  min-height: 1.3em;
+}
+@media (max-width: 500px) {
+  .chart-help {
+    min-height: 2.6em;
+  }
 }
 
 .data-table {

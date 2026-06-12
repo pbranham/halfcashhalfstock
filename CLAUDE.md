@@ -468,6 +468,24 @@ Implementation:
   nothing for other sellers, so their bid rows can only be pastes). The
   one shape not caught: a seller-view paste (unmasked names, own item,
   no retractions) — re-import those individually.
+- **Chart shape (post-Phase 3)**: ONE y axis (price, always linear) +
+  three encodings max — price line/dots, muted volume buckets, proxy-
+  defense dots (+ rare retraction markers). The cumulative bid-count
+  line, its right axis, and y-log were CUT (count was redundant with the
+  volume bars and its second axis invited meaningless comparisons; log-y
+  does nothing at auction price ranges). Time lens is a visible
+  three-state segmented control, persisted as `hchs.chart.zoom`:
+  `[Full auction]` (linear) / `[Opening rush]` (log time-since-start —
+  expands the opening hours; hype-driven runs like Ryan's did their
+  price discovery in an opening frenzy, NOT at the end — owner-confirmed
+  use case, keep it) / `[Snipe zoom]` (log
+  time-until-end — expands the final minutes for traditional bidding
+  wars). Below 500px the dollar labels move inside the plot and both
+  margins collapse (~93% of viewport is plot). Touch scrubbing is
+  scroll-intent-gated: horizontal drag scrubs, vertical drag scrolls the
+  page (the old handlers preventDefault'd everything and trapped
+  scrolling). The scrub readout has a reserved min-height so scrubbing
+  never reflows content under the finger.
 
 If a paste parse-fails, get the diagnostics from the admin UI result — do
 NOT have the user paste the full HTML into Claude chat. The diagnostics
@@ -592,6 +610,9 @@ Dashboard state lives in `localStorage`:
 - `hchs.viewMode` — `list` / `grid-sm` / `grid-md` / `grid-lg`
 - `hchs.sort` — one of the five sort modes
 - `hchs.aboutOpen` — `1` / `0` for the collapsible intro
+- `hchs.chart.zoom` — item-page chart time lens: `full` / `start` /
+  `snipe` (the old `hchs.chart.yScale` / `hchs.chart.xScale` keys are
+  dead — y-log was cut in Phase 3; orphaned values are ignored)
 - `ticker` — the custom ticker selected in the input
 - `theme` — `dark` / `light` override (icon-toggle)
 
