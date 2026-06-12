@@ -243,3 +243,137 @@ function escapeXml(str: string): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
 }
+
+// --- GetFeedback: buyer feedback entries with per-item linkage ---
+//
+// Returns the feedback a user has RECEIVED, one detail entry per feedback
+// event, each carrying the numeric ItemID it was left on — the same mapping
+// the public profile page shows, but structured and via api.ebay.com (no
+// datacenter-IP challenge). With no userId, returns the token owner's
+// feedback (complete detail guaranteed). With a userId, requests another
+// account's public feedback — whether eBay returns full detail rows for
+// arbitrary users is unverified; callers should treat empty results for
+// non-owner users as "API said no", not an error.
+
+export interface FeedbackEntry {
+  // Numeric item id (Trading form). Callers map to the canonical
+  // v1|<n>|0 listings key themselves.
+  itemId: string;
+  commentingUser: string;
+  commentType: string; // Positive | Neutral | Negative | Withdrawn
+  commentText: string | null;
+  commentTime: string | null; // ISO
+  // Role of the feedback RECIPIENT in the transaction. 'Seller' = this is
+  // feedback a buyer left for the seller — the kind we preserve.
+  role: string | null;
+}
+
+export interface FeedbackPage {
+  entries: FeedbackEntry[];
+  totalPages: number;
+  ack: string | null;
+  errorMessage: string | null;
+}
+
+interface FeedbackDetailNode {
+  CommentingUser?: string;
+  CommentText?: string;
+  CommentTime?: string;
+  CommentType?: string;
+  ItemID?: string | number;
+  Role?: string;
+}
+
+interface ParsedFeedbackResponse {
+  GetFeedbackResponse?: {
+    Ack?: string;
+    Errors?: ErrorNode | ErrorNode[];
+    FeedbackDetailArray?: {
+      FeedbackDetail?: FeedbackDetailNode | FeedbackDetailNode[];
+    };
+    PaginationResult?: {
+      TotalNumberOfPages?: number | string;
+    };
+  };
+}
+
+export async function getFeedbackPage(
+  userToken: string,
+  options: { userId?: string; page?: number } = {},
+): Promise<FeedbackPage> {
+  const page = options.page ?? 1;
+  const userIdXml = options.userId ? `\n  <UserID>${escapeXml(options.userId)}</UserID>` : '';
+  const requestBody = `<?xml version="1.0" encoding="UTF-8"?>
+<GetFeedbackRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <RequesterCredentials>
+    <eBayAuthToken>${escapeXml(userToken)}</eBayAuthToken>
+  </RequesterCredentials>${userIdXml}
+  <DetailLevel>ReturnAll</DetailLevel>
+  <FeedbackType>FeedbackReceivedAsSeller</FeedbackType>
+  <Pagination>
+    <EntriesPerPage>200</EntriesPerPage>
+    <PageNumber>${page}</PageNumber>
+  </Pagination>
+</GetFeedbackRequest>`;
+
+  const res = await fetch('https://api.ebay.com/ws/api.dll', {
+    method: 'POST',
+    headers: {
+      'X-EBAY-API-CALL-NAME': 'GetFeedback',
+      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+      'X-EBAY-API-SITEID': '0',
+      'Content-Type': 'text/xml',
+    },
+    body: requestBody,
+  });
+
+  if (!res.ok) {
+    throw new Error(`eBay Trading API error: ${res.status} ${res.statusText}`);
+  }
+
+  const xml = await res.text();
+  const parsed = parser.parse(xml) as ParsedFeedbackResponse;
+  const resp = parsed?.GetFeedbackResponse;
+
+  const detailList = resp?.FeedbackDetailArray?.FeedbackDetail ?? [];
+  const details: FeedbackDetailNode[] = Array.isArray(detailList)
+    ? detailList
+    : detailList
+      ? [detailList]
+      : [];
+
+  const entries: FeedbackEntry[] = details
+    .filter((d): d is FeedbackDetailNode & { ItemID: string | number; CommentingUser: string } =>
+      Boolean(d.ItemID !== undefined && d.CommentingUser),
+    )
+    .map((d) => ({
+      itemId: String(d.ItemID),
+      commentingUser: String(d.CommentingUser),
+      commentType: d.CommentType ?? 'Unknown',
+      commentText: typeof d.CommentText === 'string' && d.CommentText.length > 0 ? String(d.CommentText) : null,
+      commentTime: toIsoOrNull(d.CommentTime),
+      role: d.Role ?? null,
+    }));
+
+  const totalPagesRaw = resp?.PaginationResult?.TotalNumberOfPages;
+  const totalPages = typeof totalPagesRaw === 'number'
+    ? totalPagesRaw
+    : typeof totalPagesRaw === 'string' && Number.isFinite(Number(totalPagesRaw))
+      ? Number(totalPagesRaw)
+      : 1;
+
+  return {
+    entries,
+    totalPages,
+    ack: resp?.Ack ?? null,
+    errorMessage: extractFirstError(resp?.Errors),
+  };
+}
+
+// Invalid date strings must not throw mid-parse — a malformed CommentTime
+// just yields null and the sweep skips that entry.
+function toIsoOrNull(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}

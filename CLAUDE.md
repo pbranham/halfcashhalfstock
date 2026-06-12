@@ -33,11 +33,11 @@ https://halfcashhalfstock-dev.onrender.com (deploys from
 - Express + Helmet (strict CSP, no inline scripts; explicit `frame-src 'self'`
   for the description iframe) + express-rate-limit.
 - Postgres via `pg` Pool. Migrations in `migrations/NNN_*.sql` run sequentially
-  on startup by `src/db/migrate.ts`; latest is `016_listings_bids_imported_at`.
+  on startup by `src/db/migrate.ts`; latest is `017_feedback`.
 - Vanilla static frontend in `public/` — no bundler, no CDNs. Browser-native
   ESM modules (`<script type="module">`) for `app.js`/`item.js`; those import
   `carousel.js` + `lightbox.js`.
-- Vitest for tests (currently **167**). ESLint + Prettier for lint/format.
+- Vitest for tests (currently **177**). ESLint + Prettier for lint/format.
 - `fast-xml-parser` (Trading API XML); no HTML parser dep (regex in
   `viewbids.ts`).
 - Render hosts both web service and Postgres. Local dev works without DB
@@ -88,6 +88,7 @@ src/
   item-details-enricher.ts   fire-and-forget gallery + description backfill
   reconcile-finals.ts        reconcileFinalsForItems: GetItem → updateEndedListingFinals
   listing-poll.ts            startBackgroundListingPoll: always-on 30s loop (prod only)
+  feedback-sweep.ts          hourly GetFeedback sweep → feedback table (prod only)
   db/
     pool.ts                  pg.Pool factory
     migrate.ts               filesystem-driven migration runner (atomic per file)
@@ -97,7 +98,7 @@ src/
     client.ts                generic Browse API HTTP wrapper
     seller.ts                listSellerActiveItems → normalized Listing[]; upgradeEbayImageUrl
     item-details.ts          fetchItemDetails → gallery + description per item
-    trading.ts               GetAllBidders + GetItem XML clients
+    trading.ts               GetAllBidders + GetItem + GetFeedback XML clients
     bid-history.ts           fetchBidHistory: DB-first, Trading API fallback, DB final fallback
     viewbids.ts              public bid-history page scraper + parser (current path)
   prices/
@@ -345,6 +346,38 @@ This does NOT replace the viewbids paste flow for the *bid timeline* (the
 per-bidder chart on the item page) — only the final price/count the
 dashboard totals use.
 
+## Buyer feedback capture (Phase 2.5)
+
+eBay's profile pages only link feedback to items for a limited window
+(~90 days). The hourly sweep preserves the record permanently:
+
+- `getFeedbackPage(userToken, {userId?, page?})` in `src/ebay/trading.ts`
+  wraps Trading `GetFeedback` (`FeedbackReceivedAsSeller`, 200/page).
+  Detail entries carry numeric ItemID + CommentText + CommentType + Role.
+  Without `userId` it returns the TOKEN OWNER's feedback (full detail
+  guaranteed); with `userId` it requests another account's public
+  feedback — whether eBay returns full detail rows for arbitrary users is
+  UNVERIFIED; the sweep treats empty results as "API said no", not error.
+- `sweepFeedbackOnce` (`src/feedback-sweep.ts`): per configured seller
+  (first = token owner, no UserID; rest by UserID), paginate (cap 5
+  pages), keep entries with Role=Seller + a comment time, map numeric
+  ItemID → canonical `v1|<n>|0` via `readNumericToCanonicalIdMap`, and
+  idempotently insert (`upsertFeedback`, unique on
+  item/commenter/time). Feedback for untracked items is dropped.
+- `startFeedbackSweep`: hourly loop, same shape as the listing poll
+  (prod-gated — shared DB, immediate first tick, single-flight, stop fn).
+  ~48 Trading calls/day for two sellers, against the separate Trading
+  quota (~5,000/day), so negligible.
+- Admin action `sweep_feedback` (dry-run default + `apply:true`) with
+  Dry run / Apply buttons — the dry run shows per-seller fetch/map counts
+  plus a sample, which is how the Ryan-via-UserID question gets answered
+  empirically on first use.
+- `/api/item` includes `feedback[]` (commenters masked at the boundary,
+  same policy as bidders). Item page renders a "Buyer feedback" section
+  (hidden when empty) with +/○/− icons and a positive/neutral/negative
+  summary count in the header.
+- Storage: `feedback` table (migration `017`), canonical item_id.
+
 ## Bid-history reconciliation (PR #18 + #19)
 
 The eBay Trading API's `GetAllBidders` returns empty for non-sellers on
@@ -553,7 +586,7 @@ Dashboard state lives in `localStorage`:
 - **Before committing**: `npm run build && npm test && npm run lint`
   (typecheck is part of build via `tsc`). All three should finish in ~5s
   combined.
-- **Vitest is fast** (~2s for 167 tests); run early when iterating.
+- **Vitest is fast** (~2s for 177 tests); run early when iterating.
 - **Don't paste large content into chat** — save to a file (e.g. `.tmp/x.html`,
   gitignored) and tell me the path. I'll Read just the lines I need.
 - **PRs are opened per coherent change**, not against one long-running

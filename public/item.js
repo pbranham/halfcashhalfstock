@@ -1136,6 +1136,46 @@ function renderBids(bids) {
   });
 }
 
+// Buyer feedback preserved from eBay's profile (captured by the hourly
+// GetFeedback sweep before the ~90-day item linkage ages out). Hidden
+// entirely when nothing has been captured for this item.
+function renderFeedback(feedback) {
+  const section = document.getElementById('feedback-section');
+  const list = document.getElementById('feedback-list');
+  const summary = document.getElementById('feedback-summary');
+  if (!section || !list) return;
+  if (!feedback || feedback.length === 0) {
+    section.hidden = true;
+    return;
+  }
+  const counts = { Positive: 0, Neutral: 0, Negative: 0 };
+  for (const f of feedback) {
+    if (counts[f.commentType] !== undefined) counts[f.commentType] += 1;
+  }
+  if (summary) {
+    const parts = [];
+    if (counts.Positive) parts.push(`${counts.Positive} positive`);
+    if (counts.Neutral) parts.push(`${counts.Neutral} neutral`);
+    if (counts.Negative) parts.push(`${counts.Negative} negative`);
+    summary.textContent = parts.join(' · ');
+  }
+  list.innerHTML = feedback.map((f) => {
+    const cls = f.commentType === 'Positive' ? 'fb-positive' : f.commentType === 'Negative' ? 'fb-negative' : 'fb-neutral';
+    const icon = f.commentType === 'Positive' ? '＋' : f.commentType === 'Negative' ? '－' : '○';
+    const when = f.commentTime
+      ? new Date(f.commentTime).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+      : '';
+    return `<li class="feedback-entry ${cls}">
+      <span class="fb-icon" aria-hidden="true">${icon}</span>
+      <div class="fb-body">
+        <p class="fb-text">${escapeHtml(f.commentText || '(no comment text)')}</p>
+        <p class="fb-meta">${escapeHtml(f.commentingUser)}${when ? ' · ' + escapeHtml(when) : ''}</p>
+      </div>
+    </li>`;
+  }).join('');
+  section.hidden = false;
+}
+
 function renderSnapshots(snapshots) {
   if (!snapshots || snapshots.length === 0) {
     snapshotsSection.hidden = true;
@@ -1237,6 +1277,7 @@ async function load() {
     renderDescription(data.listing.descriptionHtml);
     renderChart(data.snapshots, data.listing, data.bids);
     renderBids(data.bids);
+    renderFeedback(data.feedback);
     renderSnapshots(data.snapshots);
     maybeShowAdminSection();
   } catch (err) {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getItemBidHistory, getItemSellingStatus } from '../src/ebay/trading.js';
+import { getFeedbackPage, getItemBidHistory, getItemSellingStatus } from '../src/ebay/trading.js';
 
 const GET_ALL_BIDDERS_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <GetAllBiddersResponse>
@@ -96,5 +96,92 @@ describe('getItemSellingStatus', () => {
     expect(ss.errorMessage).toContain('invalid or no longer available');
     expect(ss.currentPrice).toBe(0);
     expect(ss.bidCount).toBe(0);
+  });
+});
+
+const GET_FEEDBACK_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<GetFeedbackResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+  <Ack>Success</Ack>
+  <FeedbackDetailArray>
+    <FeedbackDetail>
+      <CommentingUser>happybuyer42</CommentingUser>
+      <CommentText>Fast shipping, item exactly as described!</CommentText>
+      <CommentTime>2026-06-01T15:30:00.000Z</CommentTime>
+      <CommentType>Positive</CommentType>
+      <ItemID>206299188399</ItemID>
+      <Role>Seller</Role>
+    </FeedbackDetail>
+    <FeedbackDetail>
+      <CommentingUser>grumpy_user</CommentingUser>
+      <CommentTime>2026-06-02T10:00:00.000Z</CommentTime>
+      <CommentType>Neutral</CommentType>
+      <ItemID>336571088511</ItemID>
+      <Role>Seller</Role>
+    </FeedbackDetail>
+  </FeedbackDetailArray>
+  <PaginationResult>
+    <TotalNumberOfPages>1</TotalNumberOfPages>
+  </PaginationResult>
+</GetFeedbackResponse>`;
+
+const GET_FEEDBACK_FAILURE_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<GetFeedbackResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+  <Ack>Failure</Ack>
+  <Errors><ShortMessage>Invalid user.</ShortMessage></Errors>
+</GetFeedbackResponse>`;
+
+describe('getFeedbackPage', () => {
+  it('parses detail entries with item linkage; missing text becomes null', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(GET_FEEDBACK_XML, { status: 200 }));
+
+    const page = await getFeedbackPage('tok');
+
+    const requestInit = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect((requestInit?.headers as Record<string, string>)['X-EBAY-API-CALL-NAME']).toBe('GetFeedback');
+    // No userId → no UserID element (token owner's own feedback).
+    expect(String(requestInit?.body)).not.toContain('<UserID>');
+    expect(String(requestInit?.body)).toContain('<FeedbackType>FeedbackReceivedAsSeller</FeedbackType>');
+
+    expect(page.totalPages).toBe(1);
+    expect(page.entries).toEqual([
+      {
+        itemId: '206299188399',
+        commentingUser: 'happybuyer42',
+        commentType: 'Positive',
+        commentText: 'Fast shipping, item exactly as described!',
+        commentTime: '2026-06-01T15:30:00.000Z',
+        role: 'Seller',
+      },
+      {
+        itemId: '336571088511',
+        commentingUser: 'grumpy_user',
+        commentType: 'Neutral',
+        commentText: null,
+        commentTime: '2026-06-02T10:00:00.000Z',
+        role: 'Seller',
+      },
+    ]);
+  });
+
+  it('includes UserID in the request when querying another seller', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(GET_FEEDBACK_XML, { status: 200 }));
+    await getFeedbackPage('tok', { userId: 'ryan_5050', page: 2 });
+    const body = String((fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined)?.body);
+    expect(body).toContain('<UserID>ryan_5050</UserID>');
+    expect(body).toContain('<PageNumber>2</PageNumber>');
+  });
+
+  it('surfaces Ack=Failure with the error message and no entries', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(GET_FEEDBACK_FAILURE_XML, { status: 200 }),
+    );
+    const page = await getFeedbackPage('tok', { userId: 'nobody' });
+    expect(page.ack).toBe('Failure');
+    expect(page.errorMessage).toContain('Invalid user');
+    expect(page.entries).toEqual([]);
   });
 });

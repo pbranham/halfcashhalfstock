@@ -25,6 +25,7 @@ import {
   readAdditionalImagesByItemId,
   readBidsForItem,
   readEndedListings,
+  readFeedbackForItem,
   readListingDetail,
   readListingSnapshots,
   readOhlcStats,
@@ -40,6 +41,7 @@ import { createAdaptiveSellerFetch } from './seller-poll.js';
 import { createItemDetailsEnricher } from './item-details-enricher.js';
 import { reconcileFinalsForItems } from './reconcile-finals.js';
 import { startBackgroundListingPoll } from './listing-poll.js';
+import { startFeedbackSweep, sweepFeedbackOnce } from './feedback-sweep.js';
 import { fetchBidHistory } from './ebay/bid-history.js';
 import { normalizeTradingItemId } from './ebay/trading.js';
 import { parseViewbids, ViewbidsParseError } from './ebay/viewbids.js';
@@ -489,10 +491,11 @@ export function createApp(deps: Deps): express.Express {
       return;
     }
     try {
-      const [listing, bids, snapshots] = await Promise.all([
+      const [listing, bids, snapshots, feedback] = await Promise.all([
         readListingDetail(deps.db, itemId),
         readBidsForItem(deps.db, itemId),
         readListingSnapshots(deps.db, itemId),
+        readFeedbackForItem(deps.db, itemId),
       ]);
       if (!listing) {
         res.status(404).json({ error: 'not_found', detail: 'item not seen by this server' });
@@ -500,12 +503,14 @@ export function createApp(deps: Deps): express.Express {
       }
       // Mask bidder usernames at the API boundary. When we're the seller,
       // Trading API returns full IDs; eBay's own public bid-history page
-      // shows them masked, so the public dashboard does the same.
+      // shows them masked, so the public dashboard does the same. Feedback
+      // commenters get the same treatment.
       const maskedBids = bids.map((b) => ({ ...b, bidder: maskBidder(b.bidder) }));
+      const maskedFeedback = feedback.map((f) => ({ ...f, commentingUser: maskBidder(f.commentingUser) }));
       res
         .status(200)
         .set('Cache-Control', 'public, max-age=15')
-        .json({ listing, bids: maskedBids, snapshots, asOf: new Date().toISOString() });
+        .json({ listing, bids: maskedBids, snapshots, feedback: maskedFeedback, asOf: new Date().toISOString() });
     } catch (err) {
       next(err);
     }
@@ -993,6 +998,38 @@ export function createApp(deps: Deps): express.Express {
         return;
       }
 
+      if (action === 'sweep_feedback') {
+        // Manual run of the hourly buyer-feedback sweep. DRY RUN by default:
+        // fetches + maps but writes nothing, and returns a sample so the
+        // first run can verify what GetFeedback actually returns (especially
+        // for non-owner sellers, where detail visibility is unconfirmed).
+        // body.apply === true persists.
+        const userToken = resolveEbayTradingUserToken(deps.config);
+        if (!userToken) {
+          res.status(503).json({
+            error: 'sweep_unavailable',
+            detail: 'EBAY_USER_TOKEN must be set',
+          });
+          return;
+        }
+        const apply = body?.apply === true;
+        const { results, sample } = await sweepFeedbackOnce({
+          pool: deps.db,
+          userToken,
+          sellerIds: deps.config.sellerIds,
+          log: deps.log,
+          persist: apply,
+        });
+        res.status(200).json({
+          action: 'sweep_feedback',
+          mode: apply ? 'applied' : 'dry-run',
+          results,
+          // Commenters masked even in admin output — consistent boundary.
+          sample: sample.map((f) => ({ ...f, commentingUser: maskBidder(f.commentingUser) })),
+        });
+        return;
+      }
+
       if (action === 'reconcile_selling_status') {
         // Pull authoritative final price + bid count for ended auctions from
         // the Trading API (GetItem SellingStatus). Works for any item in
@@ -1284,9 +1321,29 @@ async function main(): Promise<void> {
     });
   }
 
+  // Hourly buyer-feedback sweep (GetFeedback): preserves per-item feedback
+  // before eBay's ~90-day profile linkage ages out. Same prod-only gate as
+  // the listing poll (shared DB). ~48 Trading calls/day for two sellers —
+  // negligible against the separate 5,000/day Trading quota.
+  let stopFeedbackSweep: (() => void) | null = null;
+  const feedbackToken = resolveEbayTradingUserToken(config);
+  if (db && feedbackToken && config.APP_ENVIRONMENT === 'prod') {
+    stopFeedbackSweep = startFeedbackSweep({
+      pool: db,
+      userToken: feedbackToken,
+      sellerIds: config.sellerIds,
+      log,
+    });
+  } else {
+    log.info('feedback sweep disabled', {
+      reason: !db ? 'no database' : !feedbackToken ? 'no EBAY_USER_TOKEN' : `env=${config.APP_ENVIRONMENT}`,
+    });
+  }
+
   const shutdown = (signal: string): void => {
     log.info('shutting down', { signal });
     if (stopBackgroundPoll) stopBackgroundPoll();
+    if (stopFeedbackSweep) stopFeedbackSweep();
     if (tickerQueue) tickerQueue.stop();
     if (requestStats) requestStats.stop();
     server.close(() => {
