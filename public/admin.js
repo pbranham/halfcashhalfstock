@@ -35,6 +35,8 @@ const reconcileResult = document.getElementById('reconcile-result');
 const reconcileBidsBtn = document.getElementById('reconcile-bids-btn');
 const reconcileStatusDryBtn = document.getElementById('reconcile-status-dry-btn');
 const reconcileStatusApplyBtn = document.getElementById('reconcile-status-apply-btn');
+const stampImportsDryBtn = document.getElementById('stamp-imports-dry-btn');
+const stampImportsApplyBtn = document.getElementById('stamp-imports-apply-btn');
 const backfillOhlcBtn = document.getElementById('backfill-ohlc-btn');
 const confirmModal = document.getElementById('confirm-modal');
 const confirmText = document.getElementById('confirm-text');
@@ -611,6 +613,10 @@ async function recoveryFetch(action, extraBody = {}) {
         return `${r.ticker}: ${r.candles} candles fetched, ${r.inserted} inserted`;
       });
       recoveryResult.textContent = `Historical OHLC backfill (${data.range}):\n${lines.join('\n')}`;
+    } else if (action === 'backfill_import_stamps') {
+      const lines = (data.items ?? []).map((r) => `${r.sellerId}  ${r.itemId}  (last bid seen ${new Date(r.latestBidAt).toLocaleDateString()})`);
+      const header = `Stamp paste-imported items (${data.mode}) — ${data.count} item${data.count === 1 ? '' : 's'}:`;
+      recoveryResult.textContent = `${header}\n${lines.join('\n') || '(none — nothing to stamp)'}`;
     } else if (action === 'reconcile_selling_status') {
       const fmt = (n) => (n === null || n === undefined ? '—' : n);
       const lines = (data.results ?? []).map((r) => {
@@ -646,6 +652,14 @@ if (backfillOhlcBtn) {
 }
 if (reconcileStatusDryBtn) {
   reconcileStatusDryBtn.addEventListener('click', () => recoveryFetch('reconcile_selling_status'));
+}
+if (stampImportsDryBtn) {
+  stampImportsDryBtn.addEventListener('click', () => recoveryFetch('backfill_import_stamps'));
+}
+if (stampImportsApplyBtn) {
+  stampImportsApplyBtn.addEventListener('click', () => {
+    confirmAction('Stamp "complete bid history" on every listed item? Run the Dry run first to see which items qualify.', () => recoveryFetch('backfill_import_stamps', { apply: true }));
+  });
 }
 if (reconcileStatusApplyBtn) {
   reconcileStatusApplyBtn.addEventListener('click', () => {

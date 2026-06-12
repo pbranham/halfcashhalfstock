@@ -418,6 +418,17 @@ Implementation:
   segment; bid-based charts keep direct segments and solid dots. The
   item page shows ONE bids card (eBay's count primary, "<N> tracked
   here" as a `<details>` disclosure when ours differs).
+- **Stamp backfill** (admin action `backfill_import_stamps`, dry-run by
+  default + `apply:true`): items paste-imported BEFORE migration 016 have
+  a null stamp and would mislabel as "built from each bidder's highest
+  bid". `backfillBidsImportedStamps` stamps them retroactively on three
+  signals, any one conclusive: masked bidder rows (`%*%` — public
+  viewbids masks names, Trading stores real ones), retraction rows
+  (`removed_at` — only the paste import writes those), or seller ≠ the
+  Trading-token account (`config.sellerIds[0]` — GetAllBidders returns
+  nothing for other sellers, so their bid rows can only be pastes). The
+  one shape not caught: a seller-view paste (unmasked names, own item,
+  no retractions) — re-import those individually.
 
 If a paste parse-fails, get the diagnostics from the admin UI result — do
 NOT have the user paste the full HTML into Claude chat. The diagnostics

@@ -459,6 +459,54 @@ export async function updateEndedListingFinals(
   return (result.rowCount ?? 0) > 0;
 }
 
+// One-time backfill: items whose bid rows predate the bids_imported_at
+// stamp (migration 016) but were demonstrably paste-imported. Three
+// independent signals, any one is conclusive:
+//   1. Any bid row with a masked bidder ("3***2") — eBay's public viewbids
+//      page masks bidder names; the Trading API stores real usernames.
+//   2. Any retraction row (removed_at set) — only the paste import writes
+//      retractions; the live Trading path append-only inserts active bids.
+//   3. Bids exist on a listing whose seller is NOT the Trading-token
+//      account — GetAllBidders returns nothing for other sellers' items,
+//      so a paste is the only way those rows can exist.
+// A seller-view paste (unmasked names, own listing, no retractions) is the
+// one shape NOT caught — the dry run shows what will be stamped, and the
+// odd missed item is fixed by simply re-importing it. The stamp uses each
+// item's latest bid observed_at so it reflects when the import happened.
+export async function backfillBidsImportedStamps(
+  pool: Pool,
+  tradingSellerIds: readonly string[],
+  apply: boolean,
+): Promise<{ itemId: string; sellerId: string; latestBidAt: string }[]> {
+  const select = `
+    SELECT l.item_id, l.seller_id, MAX(b.observed_at) AS latest
+    FROM listings l
+    JOIN bids b ON b.item_id = l.item_id
+    WHERE l.bids_imported_at IS NULL
+    GROUP BY l.item_id, l.seller_id
+    HAVING bool_or(b.bidder LIKE '%*%')
+        OR bool_or(b.removed_at IS NOT NULL)
+        OR NOT (l.seller_id = ANY($1::text[]))`;
+  const res = await pool.query<{ item_id: string; seller_id: string; latest: Date }>(
+    select,
+    [Array.from(tradingSellerIds)],
+  );
+  if (apply && res.rows.length > 0) {
+    await pool.query(
+      `UPDATE listings l
+       SET bids_imported_at = sub.latest
+       FROM (${select}) AS sub(item_id, seller_id, latest)
+       WHERE l.item_id = sub.item_id`,
+      [Array.from(tradingSellerIds)],
+    );
+  }
+  return res.rows.map((r) => ({
+    itemId: r.item_id,
+    sellerId: r.seller_id,
+    latestBidAt: r.latest.toISOString(),
+  }));
+}
+
 export interface EndedListingRow {
   itemId: string;
   sellerId: string;
