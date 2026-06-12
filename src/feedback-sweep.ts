@@ -107,6 +107,13 @@ function toRow(e: FeedbackEntry, idMap: Map<string, string>): FeedbackRow | null
 // database — a second sweeper would double Trading calls without adding
 // coverage). Mirrors startBackgroundListingPoll: immediate first tick,
 // single-flight, survives tick errors, returns a stop function.
+// Heartbeat for /api/health — last completed sweep tick (ms epoch), null
+// if the sweep has never run in this process.
+let lastSweepAt: number | null = null;
+export function getFeedbackSweepHeartbeat(): number | null {
+  return lastSweepAt;
+}
+
 export function startFeedbackSweep(opts: {
   pool: Pool;
   userToken: string;
@@ -137,6 +144,7 @@ export function startFeedbackSweep(opts: {
       const message = err instanceof Error ? err.message : String(err);
       log.warn('feedback sweep cycle failed', { error: message });
     } finally {
+      lastSweepAt = Date.now();
       inflight = false;
     }
   };
