@@ -243,6 +243,29 @@ For an auction that ended during market hours, finer-grain candles (if still
 within retention) give a more accurate price; for older auctions only the
 daily close at market open exists, which is good enough for the visualization.
 
+## The Imaginary Brokerage (Phase 4)
+
+Dashboard section between Totals and the most-recent-bid widget — the
+site's core hypothetical, resolved: if every winning buyer had really
+paid half in stock at the close-of-auction price, here's how that stock
+is doing today.
+
+- Pure frontend transform of data already on the snapshot:
+  `aggregateBrokerage(endedItems, livePrice)` in `app.js` marks each sold
+  item's `endTimeSplit` (shares + stock-half dollars at its end-time
+  close) to the live price. No server changes, no new data.
+- Respects the seller filter + selected ticker like everything else in
+  `renderFilteredView`. Hidden entirely when no sold item has an
+  end-time close or the price feed is down (no dashes-on-display).
+- Four stat cards (Shares held / Cost basis / Worth today / Unrealized
+  P&L with ▲/▼ + % in `.pnl-up`/`.pnl-down` colors) reusing the
+  `.totals` card grid; a native `<details>` "Statement (N positions)"
+  expands the per-item rows (title links to the item page; shares @
+  close, cost, now, ±). Items lacking an end-time close are counted in
+  a footnote, mirroring the ended-totals "Missing end-time price"
+  pattern. Head-to-head seller comparison was considered and CUT at the
+  owner's request — don't add it back.
+
 ## Per-item gallery + description (PR #26)
 
 Each listing can carry up to 24 gallery images + an HTML description that

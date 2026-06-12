@@ -356,6 +356,85 @@ main {
   margin-top: 2px;
 }
 
+/* --- The Imaginary Brokerage --- */
+.brokerage {
+  margin-bottom: 24px;
+}
+/* The stat grid reuses .totals styling; kill its trailing margin here —
+   the section owns its own spacing. */
+.brokerage .totals {
+  margin-bottom: 10px;
+}
+.brokerage-tagline {
+  color: var(--fg-muted);
+  font-size: 13px;
+  margin: -6px 0 12px;
+}
+.pnl-up {
+  color: var(--accent);
+}
+.pnl-down {
+  color: #ff7a7a;
+}
+.brokerage-statement summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+  font-size: 13px;
+  list-style: none;
+  width: fit-content;
+}
+.brokerage-statement summary::before {
+  content: '\25b8 ';
+}
+.brokerage-statement[open] summary::before {
+  content: '\25be ';
+}
+.brokerage-statement summary::-webkit-details-marker {
+  display: none;
+}
+.brokerage-table {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+}
+.brokerage-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 16px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.brokerage-row:last-child {
+  border-bottom: 0;
+}
+.brokerage-item {
+  flex: 1 1 240px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.brokerage-item:hover {
+  text-decoration: underline;
+}
+.brokerage-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.brokerage-footnote {
+  color: var(--fg-muted);
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+
 .most-recent-bid {
   background: var(--bg-card);
   border: 1px solid var(--border);
