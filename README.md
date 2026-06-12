@@ -65,7 +65,20 @@ are open.
 Set `EBAY_DEV_ID` (from the same Production keyset page) and an Auth'n'Auth
 user token (`EBAY_USER_TOKEN`, or `EBAY_USER_TOKEN_FILE` pointing at a JSON
 file). When present, the snapshot includes the timestamp of the most recent
-bid on each auction and a `lastBid` summary across all auctions.
+bid on each auction and a `lastBid` summary across all auctions, ended
+auctions get their final price/bid count reconciled automatically via
+GetItem, and buyer feedback is captured hourly via GetFeedback.
+
+Two eBay-imposed time limits worth knowing:
+
+- **User tokens expire after ~18 months**, silently — the API keeps
+  answering, just with `Ack=Failure` on every call. `/api/health` flags a
+  suspect token after 5 consecutive failures (`tradingAuth: suspect`);
+  mint a fresh token from the developer portal when it does.
+- **Ended items leave eBay's ~90-day window**: GetItem and the public
+  bid-history page both stop working for older items. Everything this app
+  captures (finals, bid timelines, feedback) is persisted in Postgres
+  before that window closes and survives it.
 
 ### Finnhub (recommended, free)
 

@@ -25,6 +25,14 @@ export interface BackgroundListingPollOptions {
 // seller, well under the 5,000/day free-tier cap. Single-flight protection
 // on the underlying listings cache (DbBackedCache + adaptive-seller fetch)
 // means an in-flight snapshot request can't double-poll alongside this.
+// Heartbeat for /api/health: when the poll last completed a tick (ms epoch),
+// or null if it has never run in this process (e.g. dev, where the poll is
+// disabled because prod owns the shared DB).
+let lastTickAt: number | null = null;
+export function getListingPollHeartbeat(): number | null {
+  return lastTickAt;
+}
+
 export function startBackgroundListingPoll(
   opts: BackgroundListingPollOptions,
 ): () => void {
@@ -43,6 +51,7 @@ export function startBackgroundListingPoll(
       const message = err instanceof Error ? err.message : String(err);
       log.warn('background poll cycle failed', { error: message });
     } finally {
+      lastTickAt = Date.now();
       inflight = false;
     }
   };

@@ -39,9 +39,9 @@ import { EbayClient } from './ebay/client.js';
 import { listSellerActiveItems, type Listing } from './ebay/seller.js';
 import { createAdaptiveSellerFetch } from './seller-poll.js';
 import { createItemDetailsEnricher } from './item-details-enricher.js';
-import { reconcileFinalsForItems } from './reconcile-finals.js';
-import { startBackgroundListingPoll } from './listing-poll.js';
-import { startFeedbackSweep, sweepFeedbackOnce } from './feedback-sweep.js';
+import { reconcileFinalsForItems, getTradingAuthFailureStreak } from './reconcile-finals.js';
+import { startBackgroundListingPoll, getListingPollHeartbeat } from './listing-poll.js';
+import { startFeedbackSweep, sweepFeedbackOnce, getFeedbackSweepHeartbeat } from './feedback-sweep.js';
 import { fetchBidHistory } from './ebay/bid-history.js';
 import { normalizeTradingItemId } from './ebay/trading.js';
 import { parseViewbids, ViewbidsParseError } from './ebay/viewbids.js';
@@ -284,6 +284,70 @@ export function createApp(deps: Deps): express.Express {
 
   app.get('/healthz', (_req: Request, res: Response) => {
     res.status(200).type('text/plain').send('ok');
+  });
+
+  // Operational health, one level deeper than /healthz's bare liveness:
+  // can we reach the DB, are the caches serving live data, are the
+  // background loops ticking (prod only — 'not-running' is normal on
+  // dev), and does the Trading token look alive. Unauthenticated by
+  // design so Render/uptime monitors can point at it; exposes no data,
+  // only component states.
+  app.get('/api/health', async (_req: Request, res: Response) => {
+    const checks: Record<string, unknown> = {};
+    let status: 'ok' | 'degraded' | 'error' = 'ok';
+    const degrade = () => {
+      if (status === 'ok') status = 'degraded';
+    };
+
+    if (deps.db) {
+      try {
+        await deps.db.query('SELECT 1');
+        checks.db = 'ok';
+      } catch {
+        checks.db = 'error';
+        status = 'error';
+      }
+    } else {
+      checks.db = 'not-configured';
+    }
+
+    const cacheDegraded = deps.dataDegraded?.() ?? false;
+    checks.liveData = cacheDegraded ? 'degraded (serving stale cache)' : 'ok';
+    if (cacheDegraded) degrade();
+
+    // Background loops: 'not-running' is the normal state everywhere
+    // except prod. 'stalled' (ran before, then went silent well past its
+    // cadence) is the failure worth flagging.
+    const pollHb = getListingPollHeartbeat();
+    if (pollHb === null) {
+      checks.listingPoll = 'not-running';
+    } else {
+      const ageS = Math.round((Date.now() - pollHb) / 1000);
+      checks.listingPoll = ageS > 150 ? `stalled (last tick ${ageS}s ago)` : 'ok';
+      if (ageS > 150) degrade();
+    }
+    const sweepHb = getFeedbackSweepHeartbeat();
+    if (sweepHb === null) {
+      checks.feedbackSweep = 'not-running';
+    } else {
+      const ageS = Math.round((Date.now() - sweepHb) / 1000);
+      checks.feedbackSweep = ageS > 2 * 3600 + 300 ? `stalled (last tick ${ageS}s ago)` : 'ok';
+      if (ageS > 2 * 3600 + 300) degrade();
+    }
+
+    const authStreak = getTradingAuthFailureStreak();
+    if (authStreak >= 5) {
+      checks.tradingAuth = `suspect — ${authStreak} consecutive Ack=Failure responses (EBAY_USER_TOKEN may be expired; tokens last ~18 months)`;
+      degrade();
+    } else {
+      checks.tradingAuth = 'ok';
+    }
+
+    res.status(status === 'error' ? 503 : 200).json({
+      status,
+      checks,
+      asOf: new Date().toISOString(),
+    });
   });
 
   const snapshotCache = new TtlCache<Snapshot>();
