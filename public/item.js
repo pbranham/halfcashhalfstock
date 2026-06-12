@@ -192,23 +192,42 @@ function renderCurrentState(listing, bids) {
     .reduce((max, b) => (b.bidAmountUsd > max ? b.bidAmountUsd : max), 0);
   const highestEver = bids.reduce((max, b) => (b.bidAmountUsd > max ? b.bidAmountUsd : max), 0);
 
+  // ONE bids card, eBay's count as the headline (it's what the listing
+  // page shows, and post-close it's reconciled straight from eBay). When
+  // our individually-tracked bids differ, that becomes a sub-line with a
+  // native <details> explaining why the two numbers can disagree —
+  // replacing the old pair of silently-contradicting cards ("Bid count"
+  // next to "Active bids tracked").
+  const ebayCount = listing.currentBidCount;
+  const showTracked = activeBids > 0 && activeBids !== ebayCount;
+  const bidsSubline = showTracked
+    ? `<details class="stat-disclosure">
+         <summary>${fmtCount(activeBids)} tracked here</summary>
+         <p>eBay counts every bid ever placed, including automatic proxy
+         bids and retracted bids. We track the individual bids we&rsquo;ve
+         seen, so the two numbers can differ.</p>
+       </details>`
+    : '';
+  // Removed-bids card only earns its grid cell when there's something
+  // to report.
+  const removedCard = removedBids > 0
+    ? `<div class="stat-card">
+         <div class="stat-label">Removed bids</div>
+         <div class="stat-value">${fmtCount(removedBids)}</div>
+       </div>`
+    : '';
+
   currentState.innerHTML = `
     <div class="stat-card">
       <div class="stat-label">Current price</div>
       <div class="stat-value">${fmtUsd(listing.currentPriceUsd)}</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Bid count</div>
-      <div class="stat-value">${fmtCount(listing.currentBidCount)}</div>
+      <div class="stat-label">Bids</div>
+      <div class="stat-value">${fmtCount(ebayCount)}</div>
+      ${bidsSubline}
     </div>
-    <div class="stat-card">
-      <div class="stat-label">Active bids tracked</div>
-      <div class="stat-value">${fmtCount(activeBids)}</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Removed bids</div>
-      <div class="stat-value">${fmtCount(removedBids)}</div>
-    </div>
+    ${removedCard}
     <div class="stat-card">
       <div class="stat-label">Highest active bid</div>
       <div class="stat-value">${fmtUsd(highestActive)}</div>
@@ -599,6 +618,39 @@ function generateLogTimeLabels(tMin, tMax, mode) {
   return labels;
 }
 
+// One quiet line above the legend saying what the chart is actually made
+// of — plain language, no jargon. Also trims the legend to match: the
+// bid/proxy dot entries only appear when bid-level data exists, and the
+// proxy-defense explainer only when defense dots are actually drawn.
+function renderChartSourceNote(chartMode, listing, maxDots) {
+  const sourceEl = document.getElementById('chart-source');
+  const legendEl = document.getElementById('chart-legend');
+  const noteEl = document.getElementById('legend-note');
+  if (!sourceEl) return;
+  let text = '';
+  if (chartMode === 'complete') {
+    const when = new Date(listing.bidsImportedAt);
+    const dateStr = when.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    text = `Complete bid history from eBay · imported ${dateStr}`;
+  } else if (chartMode === 'maxbids') {
+    text = 'Built from each bidder’s highest bid — the steps between bids are estimated';
+  } else {
+    text = 'Price checked every 30 seconds — bids may have landed between checks';
+  }
+  sourceEl.textContent = text;
+  sourceEl.hidden = false;
+
+  const hasBidData = chartMode !== 'sampled';
+  const hasProxyDots = (maxDots?.length ?? 0) > 0;
+  if (legendEl) {
+    const bidEntry = legendEl.querySelector('[data-legend="bid"]');
+    const proxyEntry = legendEl.querySelector('[data-legend="proxy"]');
+    if (bidEntry) bidEntry.hidden = !hasBidData;
+    if (proxyEntry) proxyEntry.hidden = !hasProxyDots;
+  }
+  if (noteEl) noteEl.hidden = !hasProxyDots;
+}
+
 function renderChart(snapshots, listing, bids) {
   const firstBidTime = bids && bids.length > 0
     ? bids.reduce((min, b) => (b.bidTime < min ? b.bidTime : min), bids[0].bidTime)
@@ -606,7 +658,16 @@ function renderChart(snapshots, listing, bids) {
   const startingPrice = deriveStartingPrice(snapshots, firstBidTime);
   let { points, maxDots, retractionMarkers } = buildChartPointsFromBids(bids, listing, startingPrice);
 
+  // What the line is actually made of, in plain language. 'complete' =
+  // a viewbids timeline was imported (eBay's own bid history page — the
+  // source of truth, overwrites anything sampled). 'maxbids' = only the
+  // per-bidder max bids from the Trading API; the visible-price steps
+  // between them are derived. 'sampled' = no bid-level data at all, just
+  // our 30-second listing polls.
+  let chartMode = listing.bidsImportedAt ? 'complete' : 'maxbids';
+
   if (points.length < 2 && snapshots && snapshots.length > 0) {
+    chartMode = 'sampled';
     points = snapshots.map((s) => ({
       t: new Date(s.observedAt).getTime(),
       price: Number(s.currentPriceUsd),
@@ -614,7 +675,10 @@ function renderChart(snapshots, listing, bids) {
     }));
     const last = points[points.length - 1];
     if (last && (last.price !== listing.currentPriceUsd || last.count !== listing.currentBidCount)) {
-      points.push({ t: Date.now(), price: listing.currentPriceUsd, count: listing.currentBidCount });
+      // The jump from the last real observation to "now" is an
+      // interpolation, not an observation — drawChart renders this final
+      // segment dashed.
+      points.push({ t: Date.now(), price: listing.currentPriceUsd, count: listing.currentBidCount, bridge: true });
     }
     // No bid-level data → no max dots or retraction markers to draw.
     maxDots = [];
@@ -622,17 +686,24 @@ function renderChart(snapshots, listing, bids) {
   }
 
   if (points.length < 2) {
+    // No chart → no source note either (a label above an apology line
+    // just reads as clutter).
+    const sourceEl = document.getElementById('chart-source');
+    if (sourceEl) sourceEl.hidden = true;
     chartWrap.innerHTML = '<p style="opacity: 0.6;">Need at least 2 observations to chart.</p>';
     chartSection.hidden = false;
     chartState = null;
     return;
   }
 
+  renderChartSourceNote(chartMode, listing, maxDots);
+
   chartState = {
     points,
     maxDots,
     retractionMarkers,
     listing,
+    chartMode,
     // Bid PLACEMENT timestamps (no retractions) for the volume-bar
     // histogram. Stored as a precomputed array so drawChart can re-bucket
     // on scale toggles / resizes without re-walking the bids array.
@@ -657,7 +728,7 @@ function defaultChartHelp(points) {
 
 function drawChart() {
   if (!chartState) return;
-  const { points, maxDots = [], retractionMarkers = [], placements: rawPlacements = [], listing } = chartState;
+  const { points, maxDots = [], retractionMarkers = [], placements: rawPlacements = [], listing, chartMode = 'maxbids' } = chartState;
   const W = chartWrap.clientWidth || 900;
   // Bump H + PAD.bottom from the original 280/36 to make room below the
   // x-axis tick labels for the time-mode label without clipping.
@@ -722,7 +793,38 @@ function drawChart() {
   const countAxisH = innerH * COUNT_AXIS_FRACTION;
   const yCountFor = (c) => PAD.top + innerH - ((c - countMin) / countRange) * countAxisH;
 
-  const pricePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(p.t).toFixed(1)} ${yPriceFor(p.price).toFixed(1)}`).join(' ');
+  // Sampled mode draws a STEP path (the price holds at the last observed
+  // value until the next poll sees a change) — drawing diagonals between
+  // 30s samples would imply movement we never observed. Bid-based modes
+  // keep the direct segments. A trailing `bridge` point (the jump from
+  // the last real observation to "now") is excluded from the solid path
+  // and drawn as a separate dashed segment: it's interpolation.
+  const isSampled = chartMode === 'sampled';
+  const hasBridge = points[points.length - 1]?.bridge === true;
+  const solidPoints = hasBridge ? points.slice(0, -1) : points;
+  const buildPricePath = (pts, step) => {
+    let d = '';
+    for (let i = 0; i < pts.length; i++) {
+      const x = xFor(pts[i].t).toFixed(1);
+      const y = yPriceFor(pts[i].price).toFixed(1);
+      if (i === 0) {
+        d += `M ${x} ${y}`;
+      } else if (step) {
+        const yPrev = yPriceFor(pts[i - 1].price).toFixed(1);
+        d += ` L ${x} ${yPrev} L ${x} ${y}`;
+      } else {
+        d += ` L ${x} ${y}`;
+      }
+    }
+    return d;
+  };
+  const pricePath = buildPricePath(solidPoints, isSampled);
+  let bridgePath = '';
+  if (hasBridge && solidPoints.length > 0) {
+    const a = solidPoints[solidPoints.length - 1];
+    const b = points[points.length - 1];
+    bridgePath = `M ${xFor(a.t).toFixed(1)} ${yPriceFor(a.price).toFixed(1)} L ${xFor(b.t).toFixed(1)} ${yPriceFor(b.price).toFixed(1)}`;
+  }
 
   // Volume histogram + cumulative line, stock-chart style. Volume bars
   // bin actual bid PLACEMENT events (retractions don't count as new
@@ -834,9 +936,17 @@ function drawChart() {
     return `<text x="${W - PAD.right + 8}" y="${(y + 4).toFixed(1)}" text-anchor="start" font-size="12" font-weight="500" fill="#ffb74d" opacity="0.95">${fmtCount(Math.round(c))}</text>`;
   }).join('');
 
-  const dots = points.map((p, i) => `
-    <circle class="chart-dot" data-idx="${i}" cx="${xFor(p.t).toFixed(1)}" cy="${yPriceFor(p.price).toFixed(1)}" r="3.5" fill="#5cdb95" />
-  `).join('');
+  // Sampled-mode markers are hollow: each is "the price we observed at a
+  // poll", not "a bid happened here". Solid dots stay reserved for actual
+  // bid events in the bid-based modes.
+  const dots = points.map((p, i) => {
+    const cx = xFor(p.t).toFixed(1);
+    const cy = yPriceFor(p.price).toFixed(1);
+    if (isSampled) {
+      return `<circle class="chart-dot" data-idx="${i}" cx="${cx}" cy="${cy}" r="3" fill="var(--bg-card, #1d2130)" stroke="#5cdb95" stroke-width="1.4" />`;
+    }
+    return `<circle class="chart-dot" data-idx="${i}" cx="${cx}" cy="${cy}" r="3.5" fill="#5cdb95" />`;
+  }).join('');
 
   // Hollow circles stacked at the bidder's max-placement timestamp,
   // one per proxy-defense level their max was forced to. Drawn BEFORE
@@ -876,6 +986,7 @@ function drawChart() {
       ${maxDotMarkers}
       ${retractionMarkerSvg}
       <path d="${pricePath}" stroke="#5cdb95" stroke-width="2" fill="none" />
+      ${bridgePath ? `<path d="${bridgePath}" stroke="#5cdb95" stroke-width="2" fill="none" stroke-dasharray="5,4" opacity="0.7" />` : ''}
       ${dots}
       <line class="chart-guide" x1="0" y1="${PAD.top}" x2="0" y2="${PAD.top + innerH}" stroke="#fff" stroke-width="1" stroke-dasharray="3,3" opacity="0" pointer-events="none" />
       <circle class="chart-marker-price" cx="0" cy="0" r="6" fill="#5cdb95" stroke="#0c0e14" stroke-width="2" opacity="0" pointer-events="none" />

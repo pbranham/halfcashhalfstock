@@ -164,6 +164,50 @@
   touch-action: pan-y;
 }
 
+/* One quiet sentence above the legend saying what the chart's line is
+   actually made of (complete import / per-bidder maxes / 30s sampling).
+   Muted on purpose — it should inform, not shout. */
+.chart-source {
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+  margin: -0.35rem 0 0.6rem;
+}
+
+/* Shown only when proxy-defense dots are actually drawn. */
+.legend-note {
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  opacity: 0.85;
+  margin: -0.25rem 0 0.5rem;
+}
+
+/* Sub-line inside a stat card: "12 tracked here" expands to a short
+   explanation of why eBay's count and ours can differ. Native
+   <details> — works on touch, no JS. */
+.stat-disclosure {
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+}
+.stat-disclosure summary {
+  cursor: pointer;
+  list-style: none;
+}
+.stat-disclosure summary::after {
+  content: ' ⓘ';
+  opacity: 0.7;
+}
+.stat-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+.stat-disclosure[open] summary::after {
+  content: ' ▾';
+}
+.stat-disclosure p {
+  margin: 0.35rem 0 0;
+  line-height: 1.45;
+}
+
 .chart-legend {
   display: flex;
   gap: 1rem;

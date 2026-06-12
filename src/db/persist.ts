@@ -263,9 +263,13 @@ export async function reconcileItemBids(
       retractedInserted = rIns.rowCount ?? 0;
     }
 
+    // bids_imported_at marks "a complete viewbids timeline was imported for
+    // this item" — the item page's data-source label keys off it. (This
+    // statement previously stamped the vestigial last_backfilled_at column
+    // from the removed GetAllBidders backfill system.)
     await client.query(
       `UPDATE listings
-       SET current_price_usd = $2, current_bid_count = $3, last_backfilled_at = NOW()
+       SET current_price_usd = $2, current_bid_count = $3, bids_imported_at = NOW()
        WHERE item_id = $1`,
       [itemId, finalPriceUsd, bidCount],
     );
@@ -560,6 +564,10 @@ export interface ListingDetail {
   additionalImages: string[];
   descriptionHtml: string | null;
   detailsFetchedAt: string | null;
+  // When a complete viewbids timeline was last imported for this item
+  // (null = the bids table only holds Trading-API max bids, if anything).
+  // Drives the item page's chart data-source label.
+  bidsImportedAt: string | null;
 }
 
 export async function readListingDetail(
@@ -583,10 +591,11 @@ export async function readListingDetail(
     additional_images: string[] | null;
     description_html: string | null;
     details_fetched_at: Date | null;
+    bids_imported_at: Date | null;
   }>(
     `SELECT item_id, seller_id, title, image_url, item_web_url, is_auction, ends_at, ended_at,
             current_price_usd, current_bid_count, currency, first_seen_at, last_seen_at,
-            additional_images, description_html, details_fetched_at
+            additional_images, description_html, details_fetched_at, bids_imported_at
      FROM listings
      WHERE item_id = $1`,
     [itemId],
@@ -610,6 +619,7 @@ export async function readListingDetail(
     additionalImages: Array.isArray(row.additional_images) ? row.additional_images : [],
     descriptionHtml: row.description_html,
     detailsFetchedAt: row.details_fetched_at ? row.details_fetched_at.toISOString() : null,
+    bidsImportedAt: row.bids_imported_at ? row.bids_imported_at.toISOString() : null,
   };
 }
 

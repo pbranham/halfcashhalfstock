@@ -33,7 +33,7 @@ https://halfcashhalfstock-dev.onrender.com (deploys from
 - Express + Helmet (strict CSP, no inline scripts; explicit `frame-src 'self'`
   for the description iframe) + express-rate-limit.
 - Postgres via `pg` Pool. Migrations in `migrations/NNN_*.sql` run sequentially
-  on startup by `src/db/migrate.ts`; latest is `015_listing_item_details`.
+  on startup by `src/db/migrate.ts`; latest is `016_listings_bids_imported_at`.
 - Vanilla static frontend in `public/` — no bundler, no CDNs. Browser-native
   ESM modules (`<script type="module">`) for `app.js`/`item.js`; those import
   `carousel.js` + `lightbox.js`.
@@ -405,6 +405,19 @@ Implementation:
   `hasAdminToken()`. Useful for fixing a live auction's bid history without
   waiting for it to end. After a successful import the page data reloads so
   the bid table refreshes inline.
+- **Source tracking** (migration `016`): `reconcileItemBids` stamps
+  `listings.bids_imported_at = NOW()` — the only durable signal that a
+  complete viewbids timeline exists for an item (paste-import rows and
+  Trading-API max-bid rows are indistinguishable in the `bids` table).
+  Surfaced as `bidsImportedAt` on `/api/item`; the item chart's
+  data-source line keys off it (three layperson tiers: "Complete bid
+  history from eBay · imported <date>" / "Built from each bidder's
+  highest bid — the steps between bids are estimated" / "Price checked
+  every 30 seconds — bids may have landed between checks"). Sampled
+  charts draw a STEP path with hollow markers + a dashed bridge-to-now
+  segment; bid-based charts keep direct segments and solid dots. The
+  item page shows ONE bids card (eBay's count primary, "<N> tracked
+  here" as a `<details>` disclosure when ours differs).
 
 If a paste parse-fails, get the diagnostics from the admin UI result — do
 NOT have the user paste the full HTML into Claude chat. The diagnostics

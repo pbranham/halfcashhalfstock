@@ -141,7 +141,9 @@ describe('reconcileItemBids', () => {
     expect(sqls[0]).toBe('BEGIN');
     expect(sqls.some((s) => /^DELETE FROM bids/.test(s))).toBe(true);
     expect(sqls.some((s) => /^INSERT INTO bids/.test(s))).toBe(true);
-    expect(sqls.some((s) => /UPDATE listings/.test(s) && /last_backfilled_at = NOW\(\)/.test(s))).toBe(true);
+    // The import stamp is the only durable signal that a complete viewbids
+    // timeline exists for this item — the chart's source label keys off it.
+    expect(sqls.some((s) => /UPDATE listings/.test(s) && /bids_imported_at = NOW\(\)/.test(s))).toBe(true);
     expect(sqls[sqls.length - 1]).toBe('COMMIT');
     expect(client.release).toHaveBeenCalledOnce();
   });
