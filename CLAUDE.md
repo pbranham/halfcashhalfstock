@@ -377,7 +377,11 @@ eBay's profile pages only link feedback to items for a limited window
 - `/api/item` includes `feedback[]` (commenters masked at the boundary,
   same policy as bidders). Item page renders a "Buyer feedback" section
   (hidden when empty) with +/○/− icons and a positive/neutral/negative
-  summary count in the header.
+  summary count in the header. It sits ABOVE the stats section. The
+  stats section itself is ended-aware: heading "Final result" (vs
+  "Current state"), label "Final price", and the two highest-bid cards
+  collapse away for ended items unless highest-tracked genuinely exceeds
+  the final price (then one neutral "Highest bid tracked" card).
 - Storage: `feedback` table (migration `017`), canonical item_id.
 
 ## Bid-history reconciliation (PR #18 + #19)
@@ -522,6 +526,14 @@ for ended-auction bid recovery as a non-seller:
   returns candles before relying on it. If Finnhub becomes chronically
   flaky, add a real server-to-server provider (Alpha Vantage / IEX Cloud)
   rather than fight Yahoo's crumb.
+- **Feedback photos**: NOT in the Trading `GetFeedback` response — verified
+  live (Jun 2026) against real feedback; the complete field set is
+  CommentText/Time/Type, CommentingUser(+Score), FeedbackID,
+  FeedbackRatingStar, ItemID, ItemPrice, ItemTitle, OrderLineItemID, Role,
+  TransactionID. No REST feedback API exists. The photos live only on the
+  JS-rendered profile page (datacenter-IP blocked, and view-source paste
+  wouldn't contain them since they load via XHR). Text-only archival is
+  the ceiling.
 - **Push notifications for bid events**: eBay's Platform Notifications API
   doesn't emit bid-by-bid events for *anyone's* listings (own or other
   sellers'). The supported events are mostly listing-lifecycle +

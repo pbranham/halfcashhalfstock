@@ -185,12 +185,18 @@ function renderDescription(descriptionHtml) {
 }
 
 function renderCurrentState(listing, bids) {
+  const ended = Boolean(listing.endedAt);
   const activeBids = bids.filter((b) => !b.removedAt).length;
   const removedBids = bids.filter((b) => b.removedAt).length;
   const highestActive = bids
     .filter((b) => !b.removedAt)
     .reduce((max, b) => (b.bidAmountUsd > max ? b.bidAmountUsd : max), 0);
   const highestEver = bids.reduce((max, b) => (b.bidAmountUsd > max ? b.bidAmountUsd : max), 0);
+
+  // Ended auctions get "Final result" — calling reconciled, immutable
+  // numbers "current state" reads wrong once the hammer is down.
+  const heading = document.getElementById('current-heading');
+  if (heading) heading.textContent = ended ? 'Final result' : 'Current state';
 
   // ONE bids card, eBay's count as the headline (it's what the listing
   // page shows, and post-close it's reconciled straight from eBay). When
@@ -217,9 +223,34 @@ function renderCurrentState(listing, bids) {
        </div>`
     : '';
 
+  // For an ended auction the final price, highest active bid, and highest
+  // ever seen are almost always the same number — three cards repeating
+  // one fact. Show just Final price + Bids, and only resurrect a highest-
+  // bid card when it genuinely differs (winner's hidden max from Trading
+  // data, or a retracted bid above the final). Neutral label — the cause
+  // can be either, so don't claim one.
+  let highCards = '';
+  if (!ended) {
+    highCards = `
+    <div class="stat-card">
+      <div class="stat-label">Highest active bid</div>
+      <div class="stat-value">${fmtUsd(highestActive)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Highest ever seen</div>
+      <div class="stat-value">${fmtUsd(highestEver)}</div>
+    </div>`;
+  } else if (highestEver > listing.currentPriceUsd + 0.005) {
+    highCards = `
+    <div class="stat-card">
+      <div class="stat-label">Highest bid tracked</div>
+      <div class="stat-value">${fmtUsd(highestEver)}</div>
+    </div>`;
+  }
+
   currentState.innerHTML = `
     <div class="stat-card">
-      <div class="stat-label">Current price</div>
+      <div class="stat-label">${ended ? 'Final price' : 'Current price'}</div>
       <div class="stat-value">${fmtUsd(listing.currentPriceUsd)}</div>
     </div>
     <div class="stat-card">
@@ -228,14 +259,7 @@ function renderCurrentState(listing, bids) {
       ${bidsSubline}
     </div>
     ${removedCard}
-    <div class="stat-card">
-      <div class="stat-label">Highest active bid</div>
-      <div class="stat-value">${fmtUsd(highestActive)}</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Highest ever seen</div>
-      <div class="stat-value">${fmtUsd(highestEver)}</div>
-    </div>
+    ${highCards}
   `;
   currentSection.hidden = false;
 }
