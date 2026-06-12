@@ -37,7 +37,7 @@ https://halfcashhalfstock-dev.onrender.com (deploys from
 - Vanilla static frontend in `public/` — no bundler, no CDNs. Browser-native
   ESM modules (`<script type="module">`) for `app.js`/`item.js`; those import
   `carousel.js` + `lightbox.js`.
-- Vitest for tests (currently **166**). ESLint + Prettier for lint/format.
+- Vitest for tests (currently **167**). ESLint + Prettier for lint/format.
 - `fast-xml-parser` (Trading API XML); no HTML parser dep (regex in
   `viewbids.ts`).
 - Render hosts both web service and Postgres. Local dev works without DB
@@ -97,12 +97,12 @@ src/
     client.ts                generic Browse API HTTP wrapper
     seller.ts                listSellerActiveItems → normalized Listing[]; upgradeEbayImageUrl
     item-details.ts          fetchItemDetails → gallery + description per item
-    trading.ts               GetAllBidders XML client (see "Dead code" below)
+    trading.ts               GetAllBidders + GetItem XML clients
     bid-history.ts           fetchBidHistory: DB-first, Trading API fallback, DB final fallback
-    backfill.ts              backfillEndedListings — DEAD for our use case (see below)
     viewbids.ts              public bid-history page scraper + parser (current path)
   prices/
-    finnhub.ts, yahoo.ts, provider.ts, types.ts   chained provider (Yahoo effectively retired)
+    finnhub.ts, provider.ts, types.ts   Finnhub-only quote chain
+    yahoo.ts                 getHistoricalCandles ONLY (quote endpoint dead; see "Dead code")
 public/
   index.html  app.js         dashboard (active + recently ended)
   item.html   item.js        per-item audit page (gallery + description iframe)
@@ -440,22 +440,29 @@ Stale ⚠ is on `.ticker-meta::before` so it surfaces in both market-open
 Don't propose these — we already tried them and confirmed they don't work
 for ended-auction bid recovery as a non-seller:
 
-- `src/ebay/backfill.ts` and the `backfill_ended_now` / `rebackfill_one` /
-  `reset_backfill_attempts` admin actions. They call `GetAllBidders` which
-  returns empty offers for non-sellers on ended items (confirmed via eBay
-  KB articles). Left in place for diagnostic value via `inspect_bid_history`.
+- **GetAllBidders for ended-auction bid recovery**: returns empty offers
+  for non-sellers on ended items (confirmed via eBay KB articles). The
+  backfill machinery built on it (`src/ebay/backfill.ts`, a 60s loop in
+  `main()`, the `backfill_ended_now` / `rebackfill_one` /
+  `reset_backfill_attempts` admin actions, the listings
+  `last_backfilled_at` / `backfill_attempts` columns) was REMOVED in the
+  Phase-1 cleanup — it burned one useless Trading call per minute forever.
+  The DB columns remain (harmless); `inspect_bid_history` remains for
+  diagnostics; `getItemBidHistory` in trading.ts remains because the live
+  enrichment path still uses it for the seller's own active auctions.
 - Shopping API (`GetItemDetails`): decommissioned 2025-02-05.
 - Finding API (`findCompletedItems`): decommissioned 2025-02-05.
 - Marketplace Insights API: closed to new applicants.
 - Browse API for ended listings: stops returning them after a few hours.
-- **Yahoo Finance unofficial endpoint** (`prices/yahoo.ts`): started 401-ing
-  in mid-2026 — Yahoo now requires a "crumb" CSRF token via a cookie/header
-  pair. We decided not to chase the crumb because Finnhub + the DbBackedCache
-  stale-fallback handle Finnhub's sporadic 429s adequately. Yahoo is still
-  wired in the provider chain but contributes only log noise; planned
-  removal pending. If Finnhub becomes chronically flaky, swap to a real
-  server-to-server provider (Alpha Vantage / IEX Cloud) rather than fight
-  Yahoo.
+- **Yahoo Finance unofficial QUOTE endpoint** (`prices/yahoo.ts`): started
+  401-ing in mid-2026 — Yahoo now requires a "crumb" CSRF token via a
+  cookie/header pair. Removed from the live-quote chain in the Phase-1
+  cleanup (it only ever added a guaranteed-failure hop after every Finnhub
+  429). `YahooProvider.getHistoricalCandles` is NOT removed — the
+  `backfill_ohlc_history` admin action still uses it; verify it still
+  returns candles before relying on it. If Finnhub becomes chronically
+  flaky, add a real server-to-server provider (Alpha Vantage / IEX Cloud)
+  rather than fight Yahoo's crumb.
 - **Push notifications for bid events**: eBay's Platform Notifications API
   doesn't emit bid-by-bid events for *anyone's* listings (own or other
   sellers'). The supported events are mostly listing-lifecycle +
@@ -522,7 +529,7 @@ Dashboard state lives in `localStorage`:
 - **Before committing**: `npm run build && npm test && npm run lint`
   (typecheck is part of build via `tsc`). All three should finish in ~5s
   combined.
-- **Vitest is fast** (~2s for 166 tests); run early when iterating.
+- **Vitest is fast** (~2s for 167 tests); run early when iterating.
 - **Don't paste large content into chat** — save to a file (e.g. `.tmp/x.html`,
   gitignored) and tell me the path. I'll Read just the lines I need.
 - **PRs are opened per coherent change**, not against one long-running
@@ -537,9 +544,10 @@ Dashboard state lives in `localStorage`:
 - `EBAY_SELLER_IDS` — comma-separated list of sellers to poll. Defaults to
   `boilerpaulie,ryan_5050`. Legacy `EBAY_SELLER_ID` (single value) is
   accepted as a fallback when `EBAY_SELLER_IDS` is unset.
-- `FINNHUB_API_KEY` — stock prices. Yahoo is in the provider chain but
-  currently 401s (see "Dead code"); we don't actually fall back to it.
-  The DbBackedCache + stale-fallback handles sporadic Finnhub 429s.
+- `FINNHUB_API_KEY` — stock prices; the SOLE live-quote provider (Yahoo
+  was cut from the chain — see "Dead code"). Without the key, startup
+  still works: a stub provider fails every quote and the DbBackedCache /
+  degraded banner take over. Stale-fallback covers sporadic Finnhub 429s.
 - `LOGO_DEV_TOKEN` — logo.dev publishable token for ticker logos. Server
   proxies `/api/ticker-logo?symbol=…` with a 24h in-memory cache so the
   token never appears in client-visible URLs.

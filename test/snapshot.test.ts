@@ -264,6 +264,39 @@ describe('composeSnapshot', () => {
     expect(snapshot.endedTotals.pricedAtEndCount).toBe(1);
   });
 
+  it('normalizes corrupt end-time closes (zero/negative/NaN) to null on BOTH fields', () => {
+    const endedRow = (itemId: string) => ({
+      itemId,
+      sellerId: 'boilerpaulie',
+      title: 'Ended item',
+      imageUrl: null,
+      itemWebUrl: null,
+      isAuction: true,
+      endsAt: null,
+      endedAt: '2026-05-06T01:00:00.000Z',
+      finalPriceUsd: 100,
+      finalBidCount: 2,
+      currency: 'USD',
+    });
+    const snapshot = composeSnapshot(
+      [],
+      QUOTE,
+      [endedRow('v1|zero'), endedRow('v1|neg'), endedRow('v1|nan')],
+      new Map([
+        ['v1|zero', 0],
+        ['v1|neg', -3],
+        ['v1|nan', Number.NaN],
+      ]),
+    );
+    for (const item of snapshot.endedItems) {
+      // endTimePriceUsd must agree with endTimeSplit — a corrupt close is
+      // not a price, so neither field may surface it.
+      expect(item.endTimePriceUsd).toBeNull();
+      expect(item.endTimeSplit).toBeNull();
+    }
+    expect(snapshot.endedTotals.pricedAtEndCount).toBe(0);
+  });
+
   it('drops items from splitAtEnd when their end-time close is missing', () => {
     const snapshot = composeSnapshot(
       [],

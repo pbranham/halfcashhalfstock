@@ -259,17 +259,28 @@ function ebayBidIncrement(amount) {
 // pool and recompute. If the retracted bidder was the leader, the visible
 // price typically drops to the new second-highest + increment.
 // The auction's starting price (floor) — the price a sole bidder wins at,
-// before any competition reveals itself. Derived from the listing snapshots:
-// the earliest 0-bid observation, falling back to the earliest snapshot.
-// Returns null when we have no snapshot to anchor on.
-function deriveStartingPrice(snapshots) {
+// before any competition reveals itself. Only two kinds of snapshot can
+// honestly anchor it: one observed with zero bids, or one observed before
+// the first bid was placed (the price cannot have moved yet). Anything
+// later reflects bidding, and for items we only started tracking after
+// they ended (pasted historicals), the earliest snapshot IS the final
+// price — using it as the floor was the bug this guard fixes. Returns
+// null when no honest anchor exists; callers must treat that as
+// "starting price unknown", never substitute another number.
+function deriveStartingPrice(snapshots, firstBidTime = null) {
   if (!snapshots || snapshots.length === 0) return null;
-  const sorted = [...snapshots].sort(
+  const firstBidMs = firstBidTime ? new Date(firstBidTime).getTime() : NaN;
+  const candidates = snapshots.filter((s) => {
+    if (Number(s.currentBidCount) === 0) return true;
+    const t = new Date(s.observedAt).getTime();
+    return Number.isFinite(firstBidMs) && t < firstBidMs;
+  });
+  if (candidates.length === 0) return null;
+  candidates.sort(
     (a, b) => new Date(a.observedAt).getTime() - new Date(b.observedAt).getTime(),
   );
-  const base = sorted.find((s) => Number(s.currentBidCount) === 0) ?? sorted[0];
-  const p = Number(base.currentPriceUsd);
-  return Number.isFinite(p) ? p : null;
+  const p = Number(candidates[0].currentPriceUsd);
+  return Number.isFinite(p) && p > 0 ? p : null;
 }
 
 function buildChartPointsFromBids(bids, listing, startingPrice = null) {
@@ -347,14 +358,22 @@ function buildChartPointsFromBids(bids, listing, startingPrice = null) {
     if (maxes.length === 1) {
       // A sole active bidder is winning at the FLOOR (the starting price),
       // not their hidden max — eBay never reveals the max while it's
-      // unchallenged. Using the max here leaked it and flattened the chart
-      // to the top of the range. Never drop below where the price already
-      // climbed (covers a retraction leaving one bidder), and never exceed
-      // that bidder's own max.
-      const floor = startingPrice ?? maxes[0].amount;
-      const base = Number.isFinite(lastVisible) ? Math.max(floor, lastVisible) : floor;
-      visiblePrice = Math.min(base, maxes[0].amount);
-      leaderPlacedAt = maxes[0].placedAt;
+      // unchallenged. Never drop below where the price already climbed
+      // (covers a retraction leaving one bidder), and never exceed that
+      // bidder's own max. When NO honest floor exists (no usable snapshot
+      // AND no price established yet), the visible price is simply
+      // unknowable — plotting the max would leak it, plotting anything
+      // else would be invention. Emit a gap (null) instead; the line
+      // starts once a second bidder makes the price observable.
+      const sole = maxes[0];
+      leaderPlacedAt = sole.placedAt;
+      if (Number.isFinite(lastVisible)) {
+        visiblePrice = Math.min(Math.max(startingPrice ?? 0, lastVisible), sole.amount);
+      } else if (startingPrice !== null) {
+        visiblePrice = Math.min(startingPrice, sole.amount);
+      } else {
+        visiblePrice = null;
+      }
     } else if (maxes.length >= 2) {
       const [highest, second] = maxes;
       visiblePrice = Math.min(highest.amount, second.amount + ebayBidIncrement(second.amount));
@@ -363,6 +382,7 @@ function buildChartPointsFromBids(bids, listing, startingPrice = null) {
 
     const leader = maxes[0]?.bidder ?? null;
     if (
+      visiblePrice !== null &&
       leader &&
       leaderPlacedAt &&
       (leader !== lastLeader ||
@@ -374,9 +394,10 @@ function buildChartPointsFromBids(bids, listing, startingPrice = null) {
     }
     lastLeader = leader;
     lastLeaderPlacedAt = leaderPlacedAt;
-    lastVisible = visiblePrice;
-
-    points.push({ t: event.time, price: visiblePrice, count: activeCount });
+    if (visiblePrice !== null) {
+      lastVisible = visiblePrice;
+      points.push({ t: event.time, price: visiblePrice, count: activeCount });
+    }
   }
 
   // Retraction markers: one per retracted bid. The renderer draws a
@@ -579,7 +600,10 @@ function generateLogTimeLabels(tMin, tMax, mode) {
 }
 
 function renderChart(snapshots, listing, bids) {
-  const startingPrice = deriveStartingPrice(snapshots);
+  const firstBidTime = bids && bids.length > 0
+    ? bids.reduce((min, b) => (b.bidTime < min ? b.bidTime : min), bids[0].bidTime)
+    : null;
+  const startingPrice = deriveStartingPrice(snapshots, firstBidTime);
   let { points, maxDots, retractionMarkers } = buildChartPointsFromBids(bids, listing, startingPrice);
 
   if (points.length < 2 && snapshots && snapshots.length > 0) {
@@ -1024,7 +1048,6 @@ function renderSnapshots(snapshots) {
 const ADMIN_TOKEN_KEY = 'hchs.admin.token';
 const adminSection = document.getElementById('admin-section');
 const inspectBtn = document.getElementById('inspect-btn');
-const rebackfillBtn = document.getElementById('rebackfill-btn');
 const adminOutput = document.getElementById('admin-output');
 
 function hasAdminToken() {
@@ -1056,7 +1079,6 @@ async function adminRequest(action, extraBody = {}) {
 }
 
 if (inspectBtn) inspectBtn.addEventListener('click', () => adminRequest('inspect_bid_history'));
-if (rebackfillBtn) rebackfillBtn.addEventListener('click', () => adminRequest('rebackfill_one'));
 
 const importBtn = document.getElementById('import-btn');
 const importHtml = document.getElementById('import-html');
