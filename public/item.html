@@ -46,18 +46,20 @@
             <button class="chart-zoom-btn" data-zoom="snipe" type="button" title="Stretch the final minutes — where last-seconds bidding wars are decided">Snipe zoom</button>
           </div>
         </div>
-        <p class="chart-source" id="chart-source" hidden></p>
-        <div class="chart-legend" id="chart-legend">
-          <span><span class="swatch line-bid"></span>Current bid (USD)</span>
-          <span data-legend="bid"><span class="swatch dot-active"></span>Bid</span>
-          <span data-legend="proxy"><span class="swatch dot-proxy"></span>Proxy defense</span>
-          <span><span class="swatch volume-bars"></span>Volume</span>
+        <div id="chart-wrap" class="chart-wrap"></div>
+        <p class="chart-help" id="chart-help">Hover or tap a point for details.</p>
+        <div class="chart-caption" id="chart-caption">
+          <div class="chart-legend" id="chart-legend">
+            <span><span class="swatch line-bid"></span>Current bid (USD)</span>
+            <span data-legend="bid"><span class="swatch dot-active"></span>Bid</span>
+            <span data-legend="proxy"><span class="swatch dot-proxy"></span>Proxy defense<button class="legend-info" id="legend-info" type="button" aria-expanded="false" aria-controls="legend-note" title="What is proxy defense?">?</button></span>
+            <span><span class="swatch volume-bars"></span>Volume</span>
+          </div>
+          <p class="chart-source" id="chart-source" hidden></p>
         </div>
         <p class="legend-note" id="legend-note" hidden>
           Hollow dots mark proxy defense: the leader&rsquo;s hidden maximum automatically held off a rising bid.
         </p>
-        <div id="chart-wrap" class="chart-wrap"></div>
-        <p class="chart-help" id="chart-help">Hover or tap a point for details.</p>
       </section>
 
       <section class="item-section" id="description-section" hidden>

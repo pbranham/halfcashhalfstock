@@ -164,21 +164,48 @@
   touch-action: pan-y;
 }
 
-/* One quiet sentence above the legend saying what the chart's line is
-   actually made of (complete import / per-bidder maxes / 30s sampling).
-   Muted on purpose — it should inform, not shout. */
-.chart-source {
-  font-size: 0.8rem;
+/* Caption row under the chart: legend on the left, data-source note on
+   the right, one shared muted type scale. The chart itself is the hero —
+   reference material reads as a figure caption, not a preamble. */
+.chart-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem 1rem;
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
   color: var(--fg-muted);
-  margin: -0.35rem 0 0.6rem;
+}
+.chart-caption .chart-source {
+  margin: 0 0 0 auto;
+  font-size: inherit;
+  color: inherit;
 }
 
-/* Shown only when proxy-defense dots are actually drawn. */
+/* What-is-proxy-defense disclosure, revealed by the ? chip in the legend. */
 .legend-note {
   font-size: 0.72rem;
   color: var(--fg-muted);
   opacity: 0.85;
-  margin: -0.25rem 0 0.5rem;
+  margin: 0.35rem 0 0;
+}
+.legend-info {
+  margin-left: 0.35rem;
+  width: 1.05rem;
+  height: 1.05rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-elev);
+  color: var(--fg-muted);
+  font-size: 0.65rem;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: 1px;
+}
+.legend-info[aria-expanded='true'] {
+  color: var(--fg);
+  border-color: var(--accent);
 }
 
 /* Sub-line inside a stat card: "12 tracked here" expands to a short
@@ -210,11 +237,10 @@
 
 .chart-legend {
   display: flex;
-  gap: 1rem;
+  gap: 0.3rem 1rem;
   flex-wrap: wrap;
-  font-size: 0.75rem;
-  margin-bottom: 0.5rem;
-  color: var(--fg-muted);
+  font-size: inherit;
+  color: inherit;
 }
 
 .chart-legend .swatch {

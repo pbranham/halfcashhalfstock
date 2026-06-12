@@ -646,7 +646,7 @@ function generateLogTimeLabels(tMin, tMax, mode) {
 function renderChartSourceNote(chartMode, listing, maxDots) {
   const sourceEl = document.getElementById('chart-source');
   const legendEl = document.getElementById('chart-legend');
-  const noteEl = document.getElementById('legend-note');
+  const captionEl = document.getElementById('chart-caption');
   if (!sourceEl) return;
   let text = '';
   if (chartMode === 'complete') {
@@ -660,6 +660,7 @@ function renderChartSourceNote(chartMode, listing, maxDots) {
   }
   sourceEl.textContent = text;
   sourceEl.hidden = false;
+  if (captionEl) captionEl.hidden = false;
 
   const hasBidData = chartMode !== 'sampled';
   const hasProxyDots = (maxDots?.length ?? 0) > 0;
@@ -669,7 +670,29 @@ function renderChartSourceNote(chartMode, listing, maxDots) {
     if (bidEntry) bidEntry.hidden = !hasBidData;
     if (proxyEntry) proxyEntry.hidden = !hasProxyDots;
   }
-  if (noteEl) noteEl.hidden = !hasProxyDots;
+  // The proxy explainer is opt-in via the ? chip — no standing sentence.
+  // When there are no proxy dots, the chip's entry is hidden above and any
+  // open note collapses with it.
+  if (!hasProxyDots) {
+    const noteEl = document.getElementById('legend-note');
+    const infoBtn = document.getElementById('legend-info');
+    if (noteEl) noteEl.hidden = true;
+    if (infoBtn) infoBtn.setAttribute('aria-expanded', 'false');
+  }
+}
+
+// ?-chip in the legend toggles the proxy-defense explainer. Bound once —
+// the elements are static HTML.
+{
+  const infoBtn = document.getElementById('legend-info');
+  const noteEl = document.getElementById('legend-note');
+  if (infoBtn && noteEl) {
+    infoBtn.addEventListener('click', () => {
+      const open = noteEl.hidden;
+      noteEl.hidden = !open;
+      infoBtn.setAttribute('aria-expanded', String(open));
+    });
+  }
 }
 
 function renderChart(snapshots, listing, bids) {
@@ -707,10 +730,12 @@ function renderChart(snapshots, listing, bids) {
   }
 
   if (points.length < 2) {
-    // No chart → no source note and no time-lens control either (chrome
-    // above an apology line just reads as clutter).
-    const sourceEl = document.getElementById('chart-source');
-    if (sourceEl) sourceEl.hidden = true;
+    // No chart → no caption, no time-lens control (chrome around an
+    // apology line just reads as clutter).
+    const captionEl = document.getElementById('chart-caption');
+    if (captionEl) captionEl.hidden = true;
+    const noteEl = document.getElementById('legend-note');
+    if (noteEl) noteEl.hidden = true;
     const zoomEl = document.querySelector('.chart-zoom');
     if (zoomEl) zoomEl.hidden = true;
     chartWrap.innerHTML = '<p style="opacity: 0.6;">Need at least 2 observations to chart.</p>';
