@@ -278,6 +278,128 @@ function aggregateEndedTotals(items, stockPrice) {
   };
 }
 
+// --- The Imaginary Brokerage ---
+// The site's core hypothetical, resolved: if every winning buyer had really
+// paid half in stock at the close-of-auction price, here's how that stock
+// is doing today. Pure transform of data already on the snapshot — each
+// sold item's endTimeSplit (shares + stock-half dollars at its end-time
+// close) marked to the live price.
+function aggregateBrokerage(endedItems, livePrice) {
+  const sold = endedItems.filter((i) => (i.finalBidCount ?? 0) > 0);
+  const positions = sold
+    .filter((i) => i.endTimeSplit && Number.isFinite(i.endTimeSplit.shares))
+    .map((i) => {
+      const shares = i.endTimeSplit.shares;
+      const costBasis = i.endTimeSplit.stockUsd;
+      const worthNow = livePrice > 0 ? shares * livePrice : null;
+      return {
+        itemId: i.itemId,
+        title: i.title,
+        endedAt: i.endedAt,
+        shares,
+        closePrice: i.endTimePriceUsd,
+        costBasis,
+        worthNow,
+        pnl: worthNow !== null ? worthNow - costBasis : null,
+      };
+    })
+    .sort((a, b) => (a.endedAt < b.endedAt ? 1 : -1));
+  const shares = positions.reduce((sum, p) => sum + p.shares, 0);
+  const costBasis = positions.reduce((sum, p) => sum + p.costBasis, 0);
+  const worthNow = livePrice > 0 ? shares * livePrice : null;
+  return {
+    positions,
+    excludedCount: sold.length - positions.length,
+    shares,
+    costBasis,
+    worthNow,
+    pnl: worthNow !== null ? worthNow - costBasis : null,
+    pnlPct: worthNow !== null && costBasis > 0 ? ((worthNow - costBasis) / costBasis) * 100 : null,
+  };
+}
+
+function pnlNode(pnl, pct) {
+  const up = pnl >= 0;
+  const cls = up ? 'pnl-up' : 'pnl-down';
+  const arrow = up ? '\u25b2' : '\u25bc';
+  const pctStr = pct !== null && Number.isFinite(pct) ? ` (${up ? '+' : ''}${pct.toFixed(1)}%)` : '';
+  return el('span', { class: cls, textContent: `${arrow} ${up ? '+' : '\u2212'}${usd.format(Math.abs(pnl))}${pctStr}` });
+}
+
+function renderBrokerage(snapshot, filteredEnded, livePrice) {
+  const section = document.getElementById('brokerage-section');
+  if (!section) return;
+  const b = aggregateBrokerage(filteredEnded, livePrice);
+  // Nothing sold with an end-time price yet (or price feed down) — the
+  // hypothetical has nothing to say; hide rather than show dashes.
+  if (b.positions.length === 0 || b.worthNow === null) {
+    section.hidden = true;
+    return;
+  }
+  const symbol = snapshot.stock?.symbol ?? activeSymbol;
+
+  setText(
+    document.getElementById('brokerage-tagline'),
+    `If every buyer had really paid half in $${symbol} stock, here\u2019s how their shares are doing:`,
+  );
+
+  const stats = document.getElementById('brokerage-stats');
+  stats.replaceChildren();
+  const cards = [
+    { label: 'Shares held', value: sharesValue(b.shares) },
+    { label: 'Cost basis', value: usd.format(b.costBasis) },
+    { label: 'Worth today', value: usd.format(b.worthNow) },
+    { label: 'Unrealized P&L', value: pnlNode(b.pnl, b.pnlPct) },
+  ];
+  for (const stat of cards) {
+    const valueEl = el('div', { class: 'stat-value' });
+    if (typeof stat.value === 'string') valueEl.textContent = stat.value;
+    else valueEl.appendChild(stat.value);
+    stats.appendChild(
+      el('div', { class: 'stat' }, [
+        el('div', { class: 'stat-label', textContent: stat.label }),
+        valueEl,
+      ]),
+    );
+  }
+
+  setText(
+    document.getElementById('brokerage-summary'),
+    `Statement (${b.positions.length} position${b.positions.length === 1 ? '' : 's'})`,
+  );
+
+  const table = document.getElementById('brokerage-table');
+  table.replaceChildren();
+  for (const p of b.positions) {
+    const row = el('div', { class: 'brokerage-row' });
+    row.appendChild(
+      el('a', {
+        class: 'brokerage-item',
+        href: `/item.html?id=${encodeURIComponent(p.itemId)}`,
+        textContent: p.title,
+      }),
+    );
+    const detail = el('div', { class: 'brokerage-detail' });
+    const closeStr = p.closePrice !== null ? ` @ ${usd.format(p.closePrice)}` : '';
+    detail.appendChild(el('span', { textContent: `${sharesCompact.format(p.shares)} sh${closeStr}` }));
+    detail.appendChild(el('span', { textContent: `cost ${usd.format(p.costBasis)}` }));
+    detail.appendChild(el('span', { textContent: `now ${usd.format(p.worthNow)}` }));
+    detail.appendChild(pnlNode(p.pnl, p.costBasis > 0 ? (p.pnl / p.costBasis) * 100 : null));
+    row.appendChild(detail);
+    table.appendChild(row);
+  }
+
+  const footnote = document.getElementById('brokerage-footnote');
+  if (b.excludedCount > 0) {
+    setText(footnote, `${b.excludedCount} sold item${b.excludedCount === 1 ? '' : 's'} excluded \u2014 no stock price on record for the moment the auction ended.`);
+    footnote.hidden = false;
+  } else {
+    footnote.hidden = true;
+  }
+
+  section.hidden = false;
+}
+
 function setText(el, text) {
   if (el) el.textContent = text;
 }
@@ -968,6 +1090,7 @@ function renderFilteredView(snapshot, bidDiff) {
     (i) => (i.finalBidCount ?? 0) > 0,
   );
   renderTotals(snapshot, aggregateActiveTotals(filteredActive, stockPrice));
+  renderBrokerage(snapshot, filteredEnded, stockPrice);
   renderMostRecentBid(snapshot, filteredActive);
   renderItems(snapshot, filteredActive, bidDiff);
   renderEndedSection(snapshot, filteredEnded, aggregateEndedTotals(filteredEnded, stockPrice));
