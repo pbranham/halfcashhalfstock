@@ -948,3 +948,80 @@ export async function purgeOldOhlcData(pool: Pool): Promise<number> {
   );
   return result.rowCount ?? 0;
 }
+
+// --- Buyer feedback (migration 017) ---
+
+export interface FeedbackRow {
+  // CANONICAL listings.item_id (v1|<n>|0) — mapped before insert.
+  itemId: string;
+  commentingUser: string;
+  commentType: string;
+  commentText: string | null;
+  commentTime: string; // ISO; rows without a time are skipped upstream
+}
+
+// Idempotent: the unique (item_id, commenting_user, comment_time) key makes
+// hourly re-sweeps free. Returns the number of NEW rows inserted.
+export async function upsertFeedback(
+  pool: Pool,
+  rows: readonly FeedbackRow[],
+): Promise<number> {
+  if (rows.length === 0) return 0;
+  const values: unknown[] = [];
+  const placeholders = rows
+    .map((r, i) => {
+      const base = i * 5;
+      values.push(r.itemId, r.commentingUser, r.commentType, r.commentText, r.commentTime);
+      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`;
+    })
+    .join(', ');
+  const res = await pool.query(
+    `INSERT INTO feedback (item_id, commenting_user, comment_type, comment_text, comment_time)
+     VALUES ${placeholders}
+     ON CONFLICT (item_id, commenting_user, comment_time) DO NOTHING`,
+    values,
+  );
+  return res.rowCount ?? 0;
+}
+
+export async function readFeedbackForItem(
+  pool: Pool,
+  itemId: string,
+): Promise<FeedbackRow[]> {
+  const res = await pool.query<{
+    item_id: string;
+    commenting_user: string;
+    comment_type: string;
+    comment_text: string | null;
+    comment_time: Date;
+  }>(
+    `SELECT item_id, commenting_user, comment_type, comment_text, comment_time
+     FROM feedback
+     WHERE item_id = $1
+     ORDER BY comment_time DESC`,
+    [itemId],
+  );
+  return res.rows.map((r) => ({
+    itemId: r.item_id,
+    commentingUser: r.commenting_user,
+    commentType: r.comment_type,
+    commentText: r.comment_text,
+    commentTime: r.comment_time.toISOString(),
+  }));
+}
+
+// Map from the numeric Trading-API item id ("206299188399") to our canonical
+// listings key ("v1|206299188399|0"). GetFeedback returns the numeric form;
+// everything else in the DB keys on the canonical form.
+export async function readNumericToCanonicalIdMap(
+  pool: Pool,
+): Promise<Map<string, string>> {
+  const res = await pool.query<{ item_id: string }>(`SELECT item_id FROM listings`);
+  const map = new Map<string, string>();
+  for (const row of res.rows) {
+    const parts = row.item_id.split('|');
+    const numeric = parts.length >= 2 && parts[1] ? parts[1] : row.item_id;
+    map.set(numeric, row.item_id);
+  }
+  return map;
+}

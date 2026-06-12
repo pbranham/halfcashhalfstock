@@ -37,6 +37,8 @@ const reconcileStatusDryBtn = document.getElementById('reconcile-status-dry-btn'
 const reconcileStatusApplyBtn = document.getElementById('reconcile-status-apply-btn');
 const stampImportsDryBtn = document.getElementById('stamp-imports-dry-btn');
 const stampImportsApplyBtn = document.getElementById('stamp-imports-apply-btn');
+const sweepFeedbackDryBtn = document.getElementById('sweep-feedback-dry-btn');
+const sweepFeedbackApplyBtn = document.getElementById('sweep-feedback-apply-btn');
 const backfillOhlcBtn = document.getElementById('backfill-ohlc-btn');
 const confirmModal = document.getElementById('confirm-modal');
 const confirmText = document.getElementById('confirm-text');
@@ -617,6 +619,16 @@ async function recoveryFetch(action, extraBody = {}) {
       const lines = (data.items ?? []).map((r) => `${r.sellerId}  ${r.itemId}  (last bid seen ${new Date(r.latestBidAt).toLocaleDateString()})`);
       const header = `Stamp paste-imported items (${data.mode}) — ${data.count} item${data.count === 1 ? '' : 's'}:`;
       recoveryResult.textContent = `${header}\n${lines.join('\n') || '(none — nothing to stamp)'}`;
+    } else if (action === 'sweep_feedback') {
+      const perSeller = (data.results ?? []).map((r) => {
+        const err = r.error ? `  ERROR: ${r.error}` : '';
+        return `${r.seller}: fetched ${r.fetched}, mapped to tracked items ${r.mapped}, saved ${r.inserted}${err}`;
+      });
+      const sampleLines = (data.sample ?? []).slice(0, 15).map((f) => {
+        const icon = f.commentType === 'Positive' ? '+' : f.commentType === 'Negative' ? '−' : '○';
+        return `  ${icon} ${f.commentingUser} on ${f.itemId}: ${(f.commentText || '(no text)').slice(0, 70)}`;
+      });
+      recoveryResult.textContent = `Feedback sweep (${data.mode}):\n${perSeller.join('\n')}\n${sampleLines.length ? '\nSample:\n' + sampleLines.join('\n') : ''}`;
     } else if (action === 'reconcile_selling_status') {
       const fmt = (n) => (n === null || n === undefined ? '—' : n);
       const lines = (data.results ?? []).map((r) => {
@@ -660,6 +672,12 @@ if (stampImportsApplyBtn) {
   stampImportsApplyBtn.addEventListener('click', () => {
     confirmAction('Stamp "complete bid history" on every listed item? Run the Dry run first to see which items qualify.', () => recoveryFetch('backfill_import_stamps', { apply: true }));
   });
+}
+if (sweepFeedbackDryBtn) {
+  sweepFeedbackDryBtn.addEventListener('click', () => recoveryFetch('sweep_feedback'));
+}
+if (sweepFeedbackApplyBtn) {
+  sweepFeedbackApplyBtn.addEventListener('click', () => recoveryFetch('sweep_feedback', { apply: true }));
 }
 if (reconcileStatusApplyBtn) {
   reconcileStatusApplyBtn.addEventListener('click', () => {

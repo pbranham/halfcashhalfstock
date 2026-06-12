@@ -436,3 +436,46 @@
   outline: none;
   border-color: var(--accent);
 }
+
+/* Buyer feedback list — one entry per preserved comment. The type icon is
+   the only color signal: green plus / muted circle / red minus, matching
+   eBay's own feedback semantics without shouting. */
+.feedback-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.feedback-entry {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+}
+.fb-icon {
+  flex: 0 0 auto;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 0.85rem;
+  font-weight: 700;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+}
+.fb-positive .fb-icon { color: var(--accent); }
+.fb-negative .fb-icon { color: #ff9090; }
+.fb-neutral .fb-icon { color: var(--fg-muted); }
+.fb-body { min-width: 0; }
+.fb-text {
+  margin: 0;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.fb-meta {
+  margin: 0.15rem 0 0;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+}

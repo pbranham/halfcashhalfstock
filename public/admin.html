@@ -165,6 +165,13 @@
               </div>
             </div>
             <div class="maintenance-row">
+              <span>Fetch buyer feedback from eBay (GetFeedback). Dry run shows what maps to tracked items; Apply saves it. Also runs hourly on prod automatically.</span>
+              <div class="row-actions">
+                <button id="sweep-feedback-dry-btn" type="button" class="admin-btn">Dry run</button>
+                <button id="sweep-feedback-apply-btn" type="button" class="admin-btn admin-btn-primary">Apply</button>
+              </div>
+            </div>
+            <div class="maintenance-row">
               <span>Backfill EBAY/GME daily closes (90d) for end-time pricing of ended auctions</span>
               <div class="row-actions">
                 <button id="backfill-ohlc-btn" type="button" class="admin-btn admin-btn-primary">Backfill prices</button>
