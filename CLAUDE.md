@@ -354,10 +354,12 @@ eBay's profile pages only link feedback to items for a limited window
 - `getFeedbackPage(userToken, {userId?, page?})` in `src/ebay/trading.ts`
   wraps Trading `GetFeedback` (`FeedbackReceivedAsSeller`, 200/page).
   Detail entries carry numeric ItemID + CommentText + CommentType + Role.
-  Without `userId` it returns the TOKEN OWNER's feedback (full detail
-  guaranteed); with `userId` it requests another account's public
-  feedback — whether eBay returns full detail rows for arbitrary users is
-  UNVERIFIED; the sweep treats empty results as "API said no", not error.
+  Without `userId` it returns the TOKEN OWNER's feedback; with `userId`
+  it returns another account's public feedback. **Verified live (first
+  dry run, Jun 2026): full detail rows — comment text + item linkage —
+  DO come through for other users via UserID** (ryan_5050: 30 fetched,
+  30 mapped). The sweep still treats an empty result as an outcome, not
+  an error, in case eBay tightens this later.
 - `sweepFeedbackOnce` (`src/feedback-sweep.ts`): per configured seller
   (first = token owner, no UserID; rest by UserID), paginate (cap 5
   pages), keep entries with Role=Seller + a comment time, map numeric
