@@ -50,7 +50,6 @@ import { composeSnapshot, type Snapshot } from './snapshot.js';
 import { maskBidder } from './anon.js';
 import { TickerQueue } from './ticker-queue.js';
 import { RequestStatsCollector } from './request-stats.js';
-import { backfillEndedListings } from './ebay/backfill.js';
 
 const LISTINGS_TTL_MS = 30_000;
 const PRICE_TTL_MS = 30_000;
@@ -141,11 +140,26 @@ async function enrichWithBidHistory(deps: Deps, listings: Listing[]): Promise<Li
 }
 
 function buildPriceProvider(config: Config, log: Logger): PriceProvider {
+  // Finnhub is the sole live-quote source. Yahoo was removed from the chain
+  // in mid-2026: its unofficial quote endpoint now 401s (crumb/CSRF gate),
+  // so it only ever added a guaranteed-failure hop + log noise after every
+  // Finnhub 429. The DbBackedCache stale-fallback covers transient Finnhub
+  // failures. YahooProvider itself survives for getHistoricalCandles, which
+  // the backfill_ohlc_history admin action still uses.
   const providers: PriceProvider[] = [];
   if (config.FINNHUB_API_KEY) {
     providers.push(new FinnhubProvider({ apiKey: config.FINNHUB_API_KEY }));
   }
-  providers.push(new YahooProvider());
+  if (providers.length === 0) {
+    // No key configured (e.g. bare local dev). Keep startup alive; every
+    // quote attempt fails and the DB cache / degraded banner take over —
+    // the same graceful degradation the app has always promised.
+    log.warn('no price provider configured (set FINNHUB_API_KEY); live quotes disabled');
+    providers.push({
+      name: 'none',
+      getQuote: () => Promise.reject(new Error('no price provider configured')),
+    });
+  }
   return new ChainedPriceProvider(providers, { logger: log.child({ component: 'price' }) });
 }
 
@@ -843,25 +857,6 @@ export function createApp(deps: Deps): express.Express {
         return;
       }
 
-      if (action === 'backfill_ended_now') {
-        const userToken = resolveEbayTradingUserToken(deps.config);
-        if (!deps.config.EBAY_DEV_ID || !userToken) {
-          res.status(503).json({
-            error: 'backfill_unavailable',
-            detail: 'EBAY_DEV_ID and EBAY_USER_TOKEN must be set',
-          });
-          return;
-        }
-        const result = await backfillEndedListings(
-          deps.db,
-          deps.config.EBAY_DEV_ID,
-          userToken,
-          deps.log,
-        );
-        res.status(200).json({ action: 'backfill_ended_now', ...result });
-        return;
-      }
-
       if (action === 'list_stuck_listings') {
         const stuck = await readStuckListings(deps.db);
         res.status(200).json({ action: 'list_stuck_listings', count: stuck.length, items: stuck });
@@ -876,26 +871,6 @@ export function createApp(deps: Deps): express.Express {
         }
         const marked = await forceMarkEnded(deps.db, itemId);
         res.status(200).json({ action: 'force_mark_ended', itemId, marked });
-        return;
-      }
-
-      if (action === 'rebackfill_one') {
-        const itemId = (body?.itemId ?? '').trim();
-        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
-          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
-          return;
-        }
-        const userToken = resolveEbayTradingUserToken(deps.config);
-        if (!deps.config.EBAY_DEV_ID || !userToken) {
-          res.status(503).json({ error: 'rebackfill_unavailable', detail: 'Trading API not configured' });
-          return;
-        }
-        await deps.db.query(
-          `UPDATE listings SET last_backfilled_at = NULL, backfill_attempts = 0 WHERE item_id = $1`,
-          [itemId],
-        );
-        const result = await backfillEndedListings(deps.db, deps.config.EBAY_DEV_ID, userToken, deps.log);
-        res.status(200).json({ action: 'rebackfill_one', itemId, ...result });
         return;
       }
 
@@ -920,11 +895,8 @@ export function createApp(deps: Deps): express.Express {
             current_price_usd: string;
             current_bid_count: number;
             ended_at: Date | null;
-            last_backfilled_at: Date | null;
-            backfill_attempts: number;
           }>(
-            `SELECT current_price_usd, current_bid_count, ended_at,
-                    last_backfilled_at, backfill_attempts
+            `SELECT current_price_usd, current_bid_count, ended_at
              FROM listings WHERE item_id = $1`,
             [itemId],
           );
@@ -948,8 +920,6 @@ export function createApp(deps: Deps): express.Express {
               currentPriceUsd: dbRow ? Number(dbRow.current_price_usd) : null,
               currentBidCount: dbRow?.current_bid_count ?? null,
               endedAt: dbRow?.ended_at ? dbRow.ended_at.toISOString() : null,
-              lastBackfilledAt: dbRow?.last_backfilled_at ? dbRow.last_backfilled_at.toISOString() : null,
-              backfillAttempts: dbRow?.backfill_attempts ?? null,
               totalBidRows: Number(dbBids.rows[0]?.count ?? '0'),
             },
           });
@@ -961,19 +931,6 @@ export function createApp(deps: Deps): express.Express {
             error: message,
           });
         }
-        return;
-      }
-
-      if (action === 'reset_backfill_attempts') {
-        const result = await deps.db.query(
-          `UPDATE listings
-           SET backfill_attempts = 0, last_backfilled_at = NULL
-           WHERE ended_at IS NOT NULL`,
-        );
-        res.status(200).json({
-          action: 'reset_backfill_attempts',
-          reset: result.rowCount ?? 0,
-        });
         return;
       }
 
@@ -1278,23 +1235,6 @@ async function main(): Promise<void> {
     });
   }
 
-  let backfillInterval: NodeJS.Timeout | null = null;
-  const backfillUserToken = resolveEbayTradingUserToken(config);
-  if (db && config.EBAY_DEV_ID && backfillUserToken) {
-    const devIdLocal = config.EBAY_DEV_ID;
-    const tokenLocal = backfillUserToken;
-    const dbLocal = db;
-    const runBackfill = (): void => {
-      backfillEndedListings(dbLocal, devIdLocal, tokenLocal, log).catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        log.error('backfill loop error', { error: message });
-      });
-    };
-    backfillInterval = setInterval(runBackfill, 60_000);
-    backfillInterval.unref();
-    runBackfill();
-  }
-
   const deps = buildDeps(config, log, db, tickerQueue, requestStats);
   const app = createApp(deps);
   const server = app.listen(config.PORT, () => {
@@ -1329,7 +1269,6 @@ async function main(): Promise<void> {
     if (stopBackgroundPoll) stopBackgroundPoll();
     if (tickerQueue) tickerQueue.stop();
     if (requestStats) requestStats.stop();
-    if (backfillInterval) clearInterval(backfillInterval);
     server.close(() => {
       if (db) {
         db.end().finally(() => process.exit(0));

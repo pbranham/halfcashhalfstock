@@ -146,7 +146,13 @@ export function composeSnapshot(
 
   const endedItems: EndedListingView[] = ended.map((e) => {
     const isUsd = e.currency === 'USD';
-    const endTimeClose = endTimeClosesByItemId.get(e.itemId) ?? null;
+    // A zero/negative/non-finite "close" is corrupt OHLC data, not a price.
+    // Normalize it to null here so endTimePriceUsd and endTimeSplit can
+    // never disagree (previously the split guarded > 0 but the raw price
+    // field still surfaced the bad value to the frontend).
+    const rawClose = endTimeClosesByItemId.get(e.itemId) ?? null;
+    const endTimeClose =
+      rawClose !== null && Number.isFinite(rawClose) && rawClose > 0 ? rawClose : null;
     return {
       itemId: e.itemId,
       sellerId: e.sellerId,
@@ -163,7 +169,7 @@ export function composeSnapshot(
       split: isUsd && isSplittablePrice(e.finalPriceUsd) ? splitHalfCashHalfStock(e.finalPriceUsd, stock.price) : null,
       endTimePriceUsd: endTimeClose,
       endTimeSplit:
-        isUsd && isSplittablePrice(e.finalPriceUsd) && endTimeClose !== null && endTimeClose > 0
+        isUsd && isSplittablePrice(e.finalPriceUsd) && endTimeClose !== null
           ? splitHalfCashHalfStock(e.finalPriceUsd, endTimeClose)
           : null,
     };
