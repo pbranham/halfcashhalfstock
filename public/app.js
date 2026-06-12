@@ -1252,19 +1252,27 @@ if (tickerInput) {
   });
 }
 
-// Sort button wiring — restore the persisted active button on load, then
-// listen for clicks. The is-active class on the default button in HTML
-// (ending-soonest) is overwritten here on every load.
+// Sort wiring — pills on desktop, a <select> on phones (five pills ate
+// two rows of a narrow screen). Both controls drive the same state and
+// stay in sync; CSS decides which is visible.
+function applySort(mode) {
+  if (!SORT_MODES.includes(mode) || mode === currentSort) return;
+  currentSort = mode;
+  saveSort(currentSort);
+  syncSortControls();
+  if (lastSnapshot) renderFilteredView(lastSnapshot, new Map()); // re-sort active + ended; no bid flash
+}
+function syncSortControls() {
+  document.querySelectorAll('.sort-btn').forEach((b) => b.classList.toggle('is-active', b.dataset.sort === currentSort));
+  const sel = document.getElementById('sort-select');
+  if (sel) sel.value = currentSort;
+}
 document.querySelectorAll('.sort-btn').forEach((btn) => {
-  btn.classList.toggle('is-active', btn.dataset.sort === currentSort);
-  btn.addEventListener('click', () => {
-    if (btn.dataset.sort === currentSort) return;
-    currentSort = btn.dataset.sort;
-    saveSort(currentSort);
-    document.querySelectorAll('.sort-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
-    if (lastSnapshot) renderFilteredView(lastSnapshot, new Map()); // re-sort active + ended; no bid flash
-  });
+  btn.addEventListener('click', () => applySort(btn.dataset.sort));
 });
+const sortSelect = document.getElementById('sort-select');
+if (sortSelect) sortSelect.addEventListener('change', () => applySort(sortSelect.value));
+syncSortControls();
 
 // View-mode button wiring. Reflects the persisted choice on initial paint
 // and applies it to the containers. Switching modes is a pure CSS class
