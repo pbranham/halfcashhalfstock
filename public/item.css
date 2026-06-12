@@ -164,21 +164,48 @@
   touch-action: pan-y;
 }
 
-/* One quiet sentence above the legend saying what the chart's line is
-   actually made of (complete import / per-bidder maxes / 30s sampling).
-   Muted on purpose — it should inform, not shout. */
-.chart-source {
-  font-size: 0.8rem;
+/* Caption row under the chart: legend on the left, data-source note on
+   the right, one shared muted type scale. The chart itself is the hero —
+   reference material reads as a figure caption, not a preamble. */
+.chart-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem 1rem;
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
   color: var(--fg-muted);
-  margin: -0.35rem 0 0.6rem;
+}
+.chart-caption .chart-source {
+  margin: 0 0 0 auto;
+  font-size: inherit;
+  color: inherit;
 }
 
-/* Shown only when proxy-defense dots are actually drawn. */
+/* What-is-proxy-defense disclosure, revealed by the ? chip in the legend. */
 .legend-note {
   font-size: 0.72rem;
   color: var(--fg-muted);
   opacity: 0.85;
-  margin: -0.25rem 0 0.5rem;
+  margin: 0.35rem 0 0;
+}
+.legend-info {
+  margin-left: 0.35rem;
+  width: 1.05rem;
+  height: 1.05rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-elev);
+  color: var(--fg-muted);
+  font-size: 0.65rem;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: 1px;
+}
+.legend-info[aria-expanded='true'] {
+  color: var(--fg);
+  border-color: var(--accent);
 }
 
 /* Sub-line inside a stat card: "12 tracked here" expands to a short
@@ -210,11 +237,10 @@
 
 .chart-legend {
   display: flex;
-  gap: 1rem;
+  gap: 0.3rem 1rem;
   flex-wrap: wrap;
-  font-size: 0.75rem;
-  margin-bottom: 0.5rem;
-  color: var(--fg-muted);
+  font-size: inherit;
+  color: inherit;
 }
 
 .chart-legend .swatch {
@@ -261,11 +287,46 @@
   border-radius: 0;
 }
 
-.chart-legend .cumulative-line {
-  width: 14px;
-  height: 2px;
-  background: #fff176;
-  opacity: 0.85;
+/* Section header row: heading on the left, controls on the right, using
+   the dead space beside short headings instead of spending a full row on
+   the control. Wraps gracefully when a narrow screen genuinely can't fit
+   both. The h3 inside drops its own margin — the row owns the spacing. */
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.8rem;
+}
+.section-head h3 {
+  margin: 0;
+}
+
+/* Segmented control for the chart's time lens. Visible and labeled —
+   replaces the old invisible click-the-axis-band cycling. */
+.chart-zoom {
+  display: inline-flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.chart-zoom-btn {
+  background: var(--bg-elev);
+  border: 0;
+  color: var(--fg-muted);
+  padding: 0.4rem 0.9rem;
+  font-size: 0.8rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+.chart-zoom-btn + .chart-zoom-btn {
+  border-left: 1px solid var(--border);
+}
+.chart-zoom-btn.is-active {
+  background: var(--accent-soft);
+  color: var(--fg);
 }
 
 .chart-help {
@@ -273,7 +334,15 @@
   color: var(--fg-muted);
   margin: 0.4rem 0 0;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  min-height: 1em;
+  /* Reserve the line(s) the scrub readout occupies so scrubbing never
+     reflows the content under the user's finger. Phones wrap the
+     readout to two lines, so reserve two there. */
+  min-height: 1.3em;
+}
+@media (max-width: 500px) {
+  .chart-help {
+    min-height: 2.6em;
+  }
 }
 
 .data-table {
