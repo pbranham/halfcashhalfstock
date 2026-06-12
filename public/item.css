@@ -261,12 +261,27 @@
   border-radius: 0;
 }
 
+/* Section header row: heading on the left, controls on the right, using
+   the dead space beside short headings instead of spending a full row on
+   the control. Wraps gracefully when a narrow screen genuinely can't fit
+   both. The h3 inside drops its own margin — the row owns the spacing. */
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.8rem;
+}
+.section-head h3 {
+  margin: 0;
+}
+
 /* Segmented control for the chart's time lens. Visible and labeled —
    replaces the old invisible click-the-axis-band cycling. */
 .chart-zoom {
   display: inline-flex;
   gap: 0;
-  margin-bottom: 0.6rem;
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;

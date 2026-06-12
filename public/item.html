@@ -38,13 +38,15 @@
       </section>
 
       <section class="item-section" id="chart-section" hidden>
-        <h3>Price over time</h3>
-        <p class="chart-source" id="chart-source" hidden></p>
-        <div class="chart-zoom" role="group" aria-label="Chart time scale">
-          <button class="chart-zoom-btn is-active" data-zoom="full" type="button">Full auction</button>
-          <button class="chart-zoom-btn" data-zoom="start" type="button" title="Stretch the opening hours — where hype-driven auctions do their price discovery">Opening rush</button>
-          <button class="chart-zoom-btn" data-zoom="snipe" type="button" title="Stretch the final minutes — where last-seconds bidding wars are decided">Snipe zoom</button>
+        <div class="section-head">
+          <h3>Price over time</h3>
+          <div class="chart-zoom" role="group" aria-label="Chart time scale">
+            <button class="chart-zoom-btn is-active" data-zoom="full" type="button">Full auction</button>
+            <button class="chart-zoom-btn" data-zoom="start" type="button" title="Stretch the opening hours — where hype-driven auctions do their price discovery">Opening rush</button>
+            <button class="chart-zoom-btn" data-zoom="snipe" type="button" title="Stretch the final minutes — where last-seconds bidding wars are decided">Snipe zoom</button>
+          </div>
         </div>
+        <p class="chart-source" id="chart-source" hidden></p>
         <div class="chart-legend" id="chart-legend">
           <span><span class="swatch line-bid"></span>Current bid (USD)</span>
           <span data-legend="bid"><span class="swatch dot-active"></span>Bid</span>

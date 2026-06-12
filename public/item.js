@@ -707,10 +707,12 @@ function renderChart(snapshots, listing, bids) {
   }
 
   if (points.length < 2) {
-    // No chart → no source note either (a label above an apology line
-    // just reads as clutter).
+    // No chart → no source note and no time-lens control either (chrome
+    // above an apology line just reads as clutter).
     const sourceEl = document.getElementById('chart-source');
     if (sourceEl) sourceEl.hidden = true;
+    const zoomEl = document.querySelector('.chart-zoom');
+    if (zoomEl) zoomEl.hidden = true;
     chartWrap.innerHTML = '<p style="opacity: 0.6;">Need at least 2 observations to chart.</p>';
     chartSection.hidden = false;
     chartState = null;
