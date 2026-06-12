@@ -37,7 +37,7 @@ https://halfcashhalfstock-dev.onrender.com (deploys from
 - Vanilla static frontend in `public/` — no bundler, no CDNs. Browser-native
   ESM modules (`<script type="module">`) for `app.js`/`item.js`; those import
   `carousel.js` + `lightbox.js`.
-- Vitest for tests (currently **162**). ESLint + Prettier for lint/format.
+- Vitest for tests (currently **166**). ESLint + Prettier for lint/format.
 - `fast-xml-parser` (Trading API XML); no HTML parser dep (regex in
   `viewbids.ts`).
 - Render hosts both web service and Postgres. Local dev works without DB
@@ -87,6 +87,7 @@ src/
   seller-poll.ts             createAdaptiveSellerFetch: sleep sellers with 0 listings
   item-details-enricher.ts   fire-and-forget gallery + description backfill
   reconcile-finals.ts        reconcileFinalsForItems: GetItem → updateEndedListingFinals
+  listing-poll.ts            startBackgroundListingPoll: always-on 30s loop (prod only)
   db/
     pool.ts                  pg.Pool factory
     migrate.ts               filesystem-driven migration runner (atomic per file)
@@ -116,14 +117,22 @@ migrations/  NNN_*.sql, applied in order, recorded in `_migrations` table
 
 ## API budget
 
-eBay Browse free tier is **~5,000 calls/day**. Three things keep us
-comfortably under it, and the headroom is enough that future features
-(e.g. last-minute endgame burst polling) are affordable.
+eBay Browse free tier is **~5,000 calls/day**. Several things keep us
+comfortably under it:
 
+- **Background listing poll** (`startBackgroundListingPoll`): runs on a
+  30s interval, independent of HTTP requests, so bids and auction-end
+  transitions land in the DB even at 3am with nobody on the dashboard.
+  Gated on `APP_ENVIRONMENT === 'prod'` because dev and prod share the
+  same database — a second instance polling would double upstream calls
+  without adding coverage. Single-flighted (skips when prior tick is
+  still in-flight). Baseline cost at 30s: `1 active seller × 1 call / 30s
+  = 2,880 calls/day`. Bumping the cadence to 20s = 4,320/day (still
+  safe); 15s = 5,760/day (over budget).
 - **Adaptive seller polling** (`createAdaptiveSellerFetch`): a seller that
   comes back with zero active listings is skipped for 30 min before we
-  check again. With Ryan currently dormant, baseline cost is
-  `1 seller × 1 call / 30s = 2,880 calls/day`.
+  check again. With Ryan currently dormant, the background loop costs ~1
+  call per tick instead of N-sellers calls per tick.
 - **Ticker queue scoping** (`TickerQueue`): the passive price-poll refreshes
   only EBAY + GME forever, plus any custom ticker viewed within the last
   30 min. Custom tickers age out so we don't hammer Finnhub for every
@@ -132,6 +141,11 @@ comfortably under it, and the headroom is enough that future features
   item Browse `/item/{id}` call (gallery + description) runs only for rows
   missing details OR older than 7 days, concurrency capped at 4. After the
   initial backfill it amortises to near-zero/day.
+
+Remaining headroom (~2,000 calls/day under the 5,000 cap at the current
+30s cadence) is intentional — reserved for a future last-60s endgame
+burst path on actively-closing auctions, plus normal user-driven Browse
+hits when the snapshot cache misses.
 
 ## Conventions that bit us
 
@@ -508,7 +522,7 @@ Dashboard state lives in `localStorage`:
 - **Before committing**: `npm run build && npm test && npm run lint`
   (typecheck is part of build via `tsc`). All three should finish in ~5s
   combined.
-- **Vitest is fast** (~2s for 162 tests); run early when iterating.
+- **Vitest is fast** (~2s for 166 tests); run early when iterating.
 - **Don't paste large content into chat** — save to a file (e.g. `.tmp/x.html`,
   gitignored) and tell me the path. I'll Read just the lines I need.
 - **PRs are opened per coherent change**, not against one long-running
@@ -531,4 +545,6 @@ Dashboard state lives in `localStorage`:
   token never appears in client-visible URLs.
 - `DATABASE_URL` — Postgres (optional; everything degrades gracefully).
 - `ADMIN_TOKEN` — required to access `/admin` (>= 8 chars).
-- `APP_ENVIRONMENT` — tags request_stats rows ("prod" / "dev").
+- `APP_ENVIRONMENT` — tags request_stats rows ("prod" / "dev"). ALSO gates
+  the background listing poll (only runs when set to `prod`); dev and prod
+  share the same database, so a second poller would double upstream calls.
