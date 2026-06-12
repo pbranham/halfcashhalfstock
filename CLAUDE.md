@@ -40,7 +40,7 @@ https://halfcashhalfstock-dev.onrender.com (deploys from
 - Vanilla static frontend in `public/` — no bundler, no CDNs. Browser-native
   ESM modules (`<script type="module">`) for `app.js`/`item.js`; those import
   `carousel.js` + `lightbox.js`.
-- Vitest for tests (currently **191**). ESLint + Prettier for lint/format
+- Vitest for tests (currently **195**). ESLint + Prettier for lint/format
   (Prettier `printWidth: 100`). Note: the repo is NOT fully prettier-clean, so
   do NOT run `prettier --write` across whole files — it reflows hundreds of
   unrelated lines; format only the lines you touch.
@@ -702,6 +702,24 @@ the snapshot:
 Stale ⚠ is on `.ticker-meta::before` so it surfaces in both market-open
 (only as-of shown) and market-closed (status + as-of shown) cases.
 
+## Operational health (Phase 6)
+
+- **`GET /api/health`** (unauthenticated, no data exposure): `{status:
+  ok|degraded|error, checks, asOf}`. Checks: `db` (live `SELECT 1`;
+  failure → status `error` + HTTP 503), `liveData` (the DbBackedCache
+  stale-fallback flag), `listingPoll` / `feedbackSweep` heartbeats
+  (`not-running` is NORMAL outside prod; `stalled` = ran before then
+  went silent past its cadence — 150s for the 30s poll, ~2h for the
+  hourly sweep), and `tradingAuth` (below). Point uptime monitors here
+  rather than `/healthz` (bare liveness).
+- **Trading token expiry detection**: eBay user tokens die silently
+  (~18 months) — the API answers `Ack=Failure` on every call.
+  `reconcile-finals.ts` keeps a module-level consecutive-failure streak
+  (any healthy response resets it); at 5 it warn-logs once and
+  `/api/health` reports `tradingAuth: suspect`. Heartbeat getters live
+  in their modules (`getListingPollHeartbeat`, `getFeedbackSweepHeartbeat`,
+  `getTradingAuthFailureStreak`).
+
 ## Design + a11y conventions (Phase 5)
 
 - All three pages share the theme tokens in `style.css :root` — item.css
@@ -838,7 +856,7 @@ Dashboard state lives in `localStorage`:
 - **Before committing**: `npm run build && npm test && npm run lint`
   (typecheck is part of build via `tsc`). All three should finish in ~5s
   combined.
-- **Vitest is fast** (~2s for 177 tests); run early when iterating.
+- **Vitest is fast** (~2s for 181 tests); run early when iterating.
 - **Don't paste large content into chat** — save to a file (e.g. `.tmp/x.html`,
   gitignored) and tell me the path. I'll Read just the lines I need.
 - **PRs are opened per coherent change**, not against one long-running
