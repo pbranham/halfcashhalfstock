@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
 import {
+  backfillBidsImportedStamps,
   getClosingPriceAt,
   insertBids,
   persistSnapshot,
@@ -141,7 +142,9 @@ describe('reconcileItemBids', () => {
     expect(sqls[0]).toBe('BEGIN');
     expect(sqls.some((s) => /^DELETE FROM bids/.test(s))).toBe(true);
     expect(sqls.some((s) => /^INSERT INTO bids/.test(s))).toBe(true);
-    expect(sqls.some((s) => /UPDATE listings/.test(s) && /last_backfilled_at = NOW\(\)/.test(s))).toBe(true);
+    // The import stamp is the only durable signal that a complete viewbids
+    // timeline exists for this item — the chart's source label keys off it.
+    expect(sqls.some((s) => /UPDATE listings/.test(s) && /bids_imported_at = NOW\(\)/.test(s))).toBe(true);
     expect(sqls[sqls.length - 1]).toBe('COMMIT');
     expect(client.release).toHaveBeenCalledOnce();
   });
@@ -337,5 +340,46 @@ describe('getClosingPriceAt', () => {
     pool.query.mockResolvedValueOnce({ rows: [{ close: 'not-a-number' }], rowCount: 1 });
     const price = await getClosingPriceAt(pool as unknown as Pool, 'EBAY', new Date());
     expect(price).toBeNull();
+  });
+});
+
+describe('backfillBidsImportedStamps', () => {
+  const ROW = { item_id: 'v1|9|0', seller_id: 'ryan_5050', latest: new Date('2026-06-01T00:00:00Z') };
+
+  it('dry run selects qualifying items but never writes', async () => {
+    const pool = makePool();
+    pool.query.mockResolvedValueOnce({ rows: [ROW], rowCount: 1 });
+    const out = await backfillBidsImportedStamps(pool as unknown as Pool, ['boilerpaulie'], false);
+    expect(out).toEqual([
+      { itemId: 'v1|9|0', sellerId: 'ryan_5050', latestBidAt: '2026-06-01T00:00:00.000Z' },
+    ]);
+    // Only the SELECT ran — no UPDATE in dry-run mode.
+    expect(pool.query).toHaveBeenCalledTimes(1);
+    const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(/bids_imported_at IS NULL/);
+    // All three paste signals are present in the predicate.
+    expect(sql).toMatch(/bidder LIKE '%\*%'/);
+    expect(sql).toMatch(/removed_at IS NOT NULL/);
+    expect(sql).toMatch(/seller_id = ANY/);
+    expect(params).toEqual([['boilerpaulie']]);
+  });
+
+  it('apply runs the UPDATE against the same selection', async () => {
+    const pool = makePool();
+    pool.query.mockResolvedValueOnce({ rows: [ROW], rowCount: 1 });
+    pool.query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    await backfillBidsImportedStamps(pool as unknown as Pool, ['boilerpaulie'], true);
+    expect(pool.query).toHaveBeenCalledTimes(2);
+    const [updateSql] = pool.query.mock.calls[1] as [string];
+    expect(updateSql).toMatch(/UPDATE listings/);
+    expect(updateSql).toMatch(/SET bids_imported_at = sub.latest/);
+  });
+
+  it('apply with zero qualifying items skips the UPDATE entirely', async () => {
+    const pool = makePool();
+    pool.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const out = await backfillBidsImportedStamps(pool as unknown as Pool, ['boilerpaulie'], true);
+    expect(out).toEqual([]);
+    expect(pool.query).toHaveBeenCalledTimes(1);
   });
 });

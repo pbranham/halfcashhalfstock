@@ -17,6 +17,7 @@ import { TtlCache, DbBackedCache } from './cache.js';
 import { createPool } from './db/pool.js';
 import { runMigrations } from './db/migrate.js';
 import {
+  backfillBidsImportedStamps,
   bulkInsertOhlcData,
   forceMarkEnded,
   getClosingPriceAt,
@@ -970,6 +971,25 @@ export function createApp(deps: Deps): express.Express {
           currentBidCount: listing.finalBidCount,
         }));
         res.status(200).json({ action: 'list_ended_for_reconcile', count: items.length, items });
+        return;
+      }
+
+      if (action === 'backfill_import_stamps') {
+        // One-time: stamp bids_imported_at on items paste-imported before
+        // migration 016 existed, so their charts get the "Complete bid
+        // history" label without re-pasting ~40 items. DRY RUN by default;
+        // body.apply === true writes. The first configured seller is the
+        // Trading-token account — bids on anyone else's items can only
+        // have come from a paste.
+        const apply = body?.apply === true;
+        const tradingSeller = deps.config.sellerIds[0] ?? 'boilerpaulie';
+        const items = await backfillBidsImportedStamps(deps.db, [tradingSeller], apply);
+        res.status(200).json({
+          action: 'backfill_import_stamps',
+          mode: apply ? 'applied' : 'dry-run',
+          count: items.length,
+          items,
+        });
         return;
       }
 
