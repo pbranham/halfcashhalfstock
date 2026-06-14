@@ -336,4 +336,81 @@ describe('composeSnapshot', () => {
     // Only the v1|9 item contributes to splitAtEnd (100 / 2 / 50 = 1 share).
     expect(snapshot.endedTotals.splitAtEnd).toEqual({ cashUsd: 50, stockUsd: 50, shares: 1 });
   });
+
+  it('stamps valuationTicker and reports single mode without a valuation ctx', () => {
+    const snapshot = composeSnapshot([listing({ itemId: 'v1|1', priceUsd: 100 })], QUOTE);
+    expect(snapshot.valuationMode).toBe('single');
+    expect(snapshot.stocks).toEqual([QUOTE]);
+    expect(snapshot.items[0]?.valuationTicker).toBe('EBAY');
+  });
+});
+
+describe('composeSnapshot — By seller (mixed) valuation', () => {
+  const GME_QUOTE: PriceQuote = {
+    symbol: 'GME',
+    price: 25,
+    currency: 'USD',
+    asOf: '2026-05-06T18:00:00.000Z',
+    source: 'finnhub',
+  };
+  // Ryan → $EBAY (live 50); me (boilerpaulie) → $GME (live 25).
+  const valuation = {
+    tickerForSeller: (s: string) => (s === 'boilerpaulie' ? 'GME' : 'EBAY'),
+    quoteForTicker: (t: string) => (t === 'GME' ? GME_QUOTE : QUOTE),
+    quotes: [QUOTE, GME_QUOTE],
+  };
+
+  it('values each active item in its seller stock and stamps valuationTicker', () => {
+    const snapshot = composeSnapshot(
+      [
+        listing({ itemId: 'v1|1', sellerId: 'ryan_5050', priceUsd: 100, bidCount: 2 }),
+        listing({ itemId: 'v1|2', sellerId: 'boilerpaulie', priceUsd: 100, bidCount: 2 }),
+      ],
+      QUOTE,
+      [],
+      new Map(),
+      new Map(),
+      valuation,
+    );
+    expect(snapshot.valuationMode).toBe('mixed');
+    expect(snapshot.stocks.map((q) => q.symbol)).toEqual(['EBAY', 'GME']);
+    // Ryan's item → $EBAY @ 50: shares = (100/2)/50 = 1.
+    expect(snapshot.items[0]?.valuationTicker).toBe('EBAY');
+    expect(snapshot.items[0]?.split).toEqual({ cashUsd: 50, stockUsd: 50, shares: 1 });
+    // My item → $GME @ 25: shares = (100/2)/25 = 2.
+    expect(snapshot.items[1]?.valuationTicker).toBe('GME');
+    expect(snapshot.items[1]?.split).toEqual({ cashUsd: 50, stockUsd: 50, shares: 2 });
+  });
+
+  it('values an ended item live + at-end in its seller stock', () => {
+    const snapshot = composeSnapshot(
+      [],
+      QUOTE,
+      [
+        {
+          itemId: 'v1|9',
+          sellerId: 'boilerpaulie',
+          title: 'Mine, sold',
+          imageUrl: null,
+          itemWebUrl: null,
+          isAuction: true,
+          endsAt: null,
+          endedAt: '2026-05-06T01:00:00.000Z',
+          finalPriceUsd: 100,
+          finalBidCount: 3,
+          currency: 'USD',
+        },
+      ],
+      // Close looked up in the seller's ticker ($GME) by the caller.
+      new Map([['v1|9', 25]]),
+      new Map(),
+      valuation,
+    );
+    const item = snapshot.endedItems[0]!;
+    expect(item.valuationTicker).toBe('GME');
+    // Live vs $GME live (25): (100/2)/25 = 2 shares.
+    expect(item.split).toEqual({ cashUsd: 50, stockUsd: 50, shares: 2 });
+    // At-end vs the $GME close (25): also 2 shares.
+    expect(item.endTimeSplit).toEqual({ cashUsd: 50, stockUsd: 50, shares: 2 });
+  });
 });

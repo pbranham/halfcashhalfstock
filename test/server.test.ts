@@ -79,6 +79,37 @@ describe('createApp', () => {
     expect(body.totals.split.shares).toBe(1);
   });
 
+  it('serves /api/snapshot?symbol=MIXED valuing each seller in its own stock', async () => {
+    const ryan = { ...LISTING, itemId: 'v1|1', sellerId: 'ryan_5050', priceUsd: 100, bidCount: 2 };
+    const mine = { ...LISTING, itemId: 'v1|2', sellerId: 'boilerpaulie', priceUsd: 100, bidCount: 2 };
+    await startApp({
+      config: loadConfig({}),
+      log: silentLogger(),
+      fetchListings: async () => [ryan, mine],
+      // $EBAY @ 50, $GME @ 25 — distinct so the per-seller math is visible.
+      fetchQuote: async (symbol: string): Promise<PriceQuote> =>
+        symbol === 'GME'
+          ? { symbol: 'GME', price: 25, currency: 'USD', asOf: QUOTE.asOf, source: 'finnhub' }
+          : { symbol: 'EBAY', price: 50, currency: 'USD', asOf: QUOTE.asOf, source: 'finnhub' },
+    });
+    const res = await fetch(`${baseUrl}/api/snapshot?symbol=MIXED`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      valuationMode: string;
+      stocks: { symbol: string }[];
+      items: { itemId: string; valuationTicker: string; split: { shares: number } }[];
+    };
+    expect(body.valuationMode).toBe('mixed');
+    expect(body.stocks.map((q) => q.symbol)).toEqual(['EBAY', 'GME']);
+    const byId = Object.fromEntries(body.items.map((i) => [i.itemId, i]));
+    // Ryan → $EBAY @ 50: shares = (100/2)/50 = 1.
+    expect(byId['v1|1']?.valuationTicker).toBe('EBAY');
+    expect(byId['v1|1']?.split.shares).toBe(1);
+    // Mine → $GME @ 25: shares = (100/2)/25 = 2.
+    expect(byId['v1|2']?.valuationTicker).toBe('GME');
+    expect(byId['v1|2']?.split.shares).toBe(2);
+  });
+
   it('returns 503 in production without leaking detail', async () => {
     await startApp({
       config: loadConfig({ NODE_ENV: 'production' }),
