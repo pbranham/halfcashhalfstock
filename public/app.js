@@ -107,6 +107,20 @@ function applyOtherHalfEnabled() {
     btn.textContent = otherHalfEnabled ? 'Hide' : 'Show';
     btn.setAttribute('aria-expanded', otherHalfEnabled ? 'true' : 'false');
   }
+  syncExpandAllButton();
+}
+
+// Expand-all / collapse-all control: shown only when the brokerage is enabled
+// and has 2+ stock positions. Label tracks the current state.
+function syncExpandAllButton() {
+  const btn = document.getElementById('brokerage-expand');
+  if (!btn) return;
+  const byTicker = lastBrokerageVM?.byTicker ?? [];
+  btn.hidden = !otherHalfEnabled || byTicker.length < 2;
+  if (!btn.hidden) {
+    const allCollapsed = byTicker.every((r) => collapsedPositions.has(r.ticker));
+    btn.textContent = allCollapsed ? 'Expand all' : 'Collapse all';
+  }
 }
 
 // --- Ended-section time window ("Recently ended" vs "All time") ---
@@ -455,12 +469,17 @@ function buildLots(positions) {
     );
 }
 
+// P&L value as the dollar amount with the percent stacked directly beneath it
+// (uniform two-line cell across position / lot / total rows).
 function pnlNode(pnl, pct) {
   const up = pnl >= 0;
-  const cls = up ? 'pnl-up' : 'pnl-down';
   const arrow = up ? '\u25b2' : '\u25bc';
-  const pctStr = pct !== null && Number.isFinite(pct) ? ` (${up ? '+' : ''}${pct.toFixed(1)}%)` : '';
-  return el('span', { class: cls, textContent: `${arrow} ${up ? '+' : '\u2212'}${usd.format(Math.abs(pnl))}${pctStr}` });
+  const node = el('span', { class: `pnl ${up ? 'pnl-up' : 'pnl-down'}` });
+  node.appendChild(el('span', { class: 'pnl-amt', textContent: `${arrow} ${up ? '+' : '\u2212'}${usd.format(Math.abs(pnl))}` }));
+  if (pct !== null && Number.isFinite(pct)) {
+    node.appendChild(el('span', { class: 'pnl-pct', textContent: `(${up ? '+' : ''}${pct.toFixed(1)}%)` }));
+  }
+  return node;
 }
 
 // A single `.stat` card. `value` is a string or a DOM node.
@@ -633,6 +652,7 @@ function renderHoldings() {
     );
   }
   container.replaceChildren(grid);
+  syncExpandAllButton();
 }
 
 function renderBrokerage(snapshot, filteredEnded, priceForTicker) {
@@ -1680,6 +1700,19 @@ if (brokerageToggle) {
     otherHalfEnabled = !otherHalfEnabled;
     saveOtherHalfEnabled(otherHalfEnabled);
     applyOtherHalfEnabled();
+  });
+}
+
+// Expand-all / collapse-all every position in the holdings table at once.
+const brokerageExpand = document.getElementById('brokerage-expand');
+if (brokerageExpand) {
+  brokerageExpand.addEventListener('click', () => {
+    if (!lastBrokerageVM) return;
+    const tickers = lastBrokerageVM.byTicker.map((r) => r.ticker);
+    const allCollapsed = tickers.every((t) => collapsedPositions.has(t));
+    if (allCollapsed) collapsedPositions.clear();
+    else tickers.forEach((t) => collapsedPositions.add(t));
+    renderHoldings();
   });
 }
 applyOtherHalfEnabled();

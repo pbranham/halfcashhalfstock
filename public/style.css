@@ -413,6 +413,11 @@ main {
 .brokerage-head .totals-heading {
   margin-bottom: 8px;
 }
+.brokerage-head-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
 /* The stat grid reuses .totals styling; kill its trailing margin here —
    the section owns its own spacing. */
 .brokerage .totals {
@@ -428,6 +433,17 @@ main {
 }
 .pnl-down {
   color: #ff7a7a;
+}
+/* P&L cell: dollar amount on top, percent stacked directly beneath. */
+.pnl {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.2;
+}
+.pnl-pct {
+  font-size: 0.85em;
+  opacity: 0.85;
 }
 #brokerage-table {
   margin-top: 10px;
@@ -534,10 +550,11 @@ main {
   object-fit: contain;
 }
 
-/* Full-width thumbnail strip beneath a lot — every funding auction, wrapping
-   onto as many rows as needed (no cap). */
+/* Thumbnail strip beneath a lot — every funding auction, wrapping onto as many
+   rows as needed (no cap). Spans all columns EXCEPT the last (P&L), so photos
+   never bleed under the P&L numbers. */
 .lot-thumbs-row {
-  grid-column: 1 / -1;
+  grid-column: 1 / -2;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;

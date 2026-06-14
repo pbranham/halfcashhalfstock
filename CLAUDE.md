@@ -290,16 +290,20 @@ header stays visible when collapsed so it's re-enableable.
   grid; rows are `display:contents` so cells align). NOT a separate stats
   block + "Position detail" anymore — the lots roll into the holdings table:
   - Columns: **Stock/Date · Shares · Avg cost · Cost basis · Worth today ·
-    Unrealized P&L** (▲/▼ + % in `.pnl-up`/`.pnl-down`).
+    Unrealized P&L** (`pnlNode` = ▲/▼ dollar amount with the % stacked
+    directly beneath it, `.pnl` flex-column; colours in `.pnl-up`/`.pnl-down`).
   - Per stock: a **position row** (`.bh-pos`, bold) whose Stock cell is a
     disclosure button (`.pos-toggle`, caret + $TICKER + logo + @seller).
     Clicking collapses/expands that stock's lots; `collapsedPositions` (a
     module Set, default expanded) survives the 30s re-render and a toggle
-    rebuilds just the table.
+    rebuilds just the table. A header **Expand all / Collapse all** button
+    (`#brokerage-expand`, `syncExpandAllButton()`) toggles them en masse;
+    shown only when enabled + 2+ stocks.
   - Under each (when expanded): its **day-lots** as `.bh-lot` sub-rows (date
     indented in the Stock column, same money columns), each followed by a
-    full-width `.lot-thumbs-row` of **every** funding auction's photo
-    (uncapped, wraps; each → item page). Lots are date-ordered, newest first.
+    `.lot-thumbs-row` of **every** funding auction's photo (uncapped, wraps;
+    each → item page; spans all columns except the last so photos never bleed
+    under the P&L). Lots are date-ordered, newest first.
   - A composite **Total** row only when 2+ stocks (shares `—`). Full-width
     `.bh-sep` rules separate stock groups; `.bh-sep-strong` above Total.
   - Below 560px the grid reflows to stacked cards (data-label prefixes).
