@@ -303,7 +303,27 @@ function aggregateEndedTotals(items) {
 // every position resolves the same price; in "By seller" mode each marks to
 // its own stock. Cost basis / worth / P&L roll up in USD (additive across
 // stocks); shares stay grouped by ticker.
-function aggregateBrokerage(endedItems, priceForTicker) {
+// Attach costBasis / worthNow / pnl / pnlPct to a base object. worthNow null
+// (price feed down) makes pnl/pnlPct null too.
+function withPnl(base, costBasis, worthNow) {
+  const pnl = worthNow !== null ? worthNow - costBasis : null;
+  return {
+    ...base,
+    costBasis,
+    worthNow,
+    pnl,
+    pnlPct: worthNow !== null && costBasis > 0 ? (pnl / costBasis) * 100 : null,
+  };
+}
+
+// Builds the brokerage view-model. `priceForTicker(ticker)` gives a stock's
+// live price; `tickerOrder` (e.g. the snapshot's stock symbols) fixes the row
+// order of the per-stock table so it stays stable regardless of the sort pill.
+// Positions preserve INPUT order, so callers sort `endedItems` (by the page's
+// Sort pill) first. USD figures (cost/worth/P&L) roll up both per-stock and as
+// a composite total; shares stay per-stock (you can't add $EBAY to $GME
+// shares).
+function aggregateBrokerage(endedItems, priceForTicker, tickerOrder = []) {
   const sold = endedItems.filter((i) => (i.finalBidCount ?? 0) > 0);
   const positions = sold
     .filter((i) => i.endTimeSplit && Number.isFinite(i.endTimeSplit.shares))
@@ -318,30 +338,49 @@ function aggregateBrokerage(endedItems, priceForTicker) {
         title: i.title,
         endedAt: i.endedAt,
         ticker,
+        sellerId: i.sellerId,
         shares,
         closePrice: i.endTimePriceUsd,
         costBasis,
         worthNow,
         pnl: worthNow !== null ? worthNow - costBasis : null,
       };
-    })
-    .sort((a, b) => (a.endedAt < b.endedAt ? 1 : -1));
-  const byTicker = new Map();
-  for (const p of positions) byTicker.set(p.ticker, (byTicker.get(p.ticker) ?? 0) + p.shares);
-  const sharesByTicker = [...byTicker.entries()].map(([ticker, shares]) => ({ ticker, shares }));
+    });
+
+  // Per-stock rollup. A missing live price counts as 0 worth so one down
+  // stock doesn't blank the row (matches the composite total below).
+  const groups = new Map();
+  for (const p of positions) {
+    let g = groups.get(p.ticker);
+    if (!g) {
+      g = { ticker: p.ticker, shares: 0, costBasis: 0, worthNow: 0, anyWorth: false, count: 0 };
+      groups.set(p.ticker, g);
+    }
+    g.shares += p.shares;
+    g.costBasis += p.costBasis;
+    g.count += 1;
+    if (p.worthNow !== null) {
+      g.worthNow += p.worthNow;
+      g.anyWorth = true;
+    }
+  }
+  const rank = (t) => {
+    const i = tickerOrder.indexOf(t);
+    return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+  };
+  const byTicker = [...groups.values()]
+    .sort((a, b) => rank(a.ticker) - rank(b.ticker))
+    .map((g) => withPnl({ ticker: g.ticker, count: g.count, shares: g.shares }, g.costBasis, g.anyWorth ? g.worthNow : null));
+
   const costBasis = positions.reduce((sum, p) => sum + p.costBasis, 0);
-  // Only meaningful when at least one position is priced; treat a missing
-  // price as 0 so a single down stock doesn't blank the whole rollup.
   const anyWorth = positions.some((p) => p.worthNow !== null);
   const worthNow = anyWorth ? positions.reduce((sum, p) => sum + (p.worthNow ?? 0), 0) : null;
+
   return {
     positions,
     excludedCount: sold.length - positions.length,
-    sharesByTicker,
-    costBasis,
-    worthNow,
-    pnl: worthNow !== null ? worthNow - costBasis : null,
-    pnlPct: worthNow !== null && costBasis > 0 ? ((worthNow - costBasis) / costBasis) * 100 : null,
+    byTicker,
+    total: withPnl({}, costBasis, worthNow),
   };
 }
 
@@ -380,32 +419,142 @@ function sharesCard(label, sharesByTicker) {
   ]);
 }
 
+// "$TICKER" + logo cell for the holdings table's Stock column.
+function tickerCell(ticker) {
+  const cell = el('span', { class: 'bh-ticker' }, [`$${ticker}`]);
+  const logo = tickerLogoImg(ticker);
+  if (logo) {
+    logo.classList.add('bh-logo');
+    cell.appendChild(logo);
+  }
+  return cell;
+}
+
+function moneyOrDash(n) {
+  return n !== null && n !== undefined ? usd.format(n) : '—';
+}
+function pnlCell(pnl, pct) {
+  return pnl !== null && pnl !== undefined ? pnlNode(pnl, pct) : el('span', { textContent: '—' });
+}
+
+// One holdings-table row. Cells are a flat list that flows into the parent
+// grid (rows are `display: contents`); numeric cells carry a data-label so the
+// mobile stacked layout can prefix "Cost basis: …".
+function holdingsRow(cells, { head = false, total = false } = {}) {
+  const row = el('div', { class: `bh-row${head ? ' bh-head' : ''}${total ? ' bh-total' : ''}` });
+  for (const c of cells) {
+    const span = el('span', c.cls ? { class: c.cls } : {});
+    if (c.label) span.setAttribute('data-label', c.label);
+    if (typeof c.value === 'string') span.textContent = c.value;
+    else if (c.value) span.appendChild(c.value);
+    row.appendChild(span);
+  }
+  return row;
+}
+
+// Per-stock holdings table (By-seller mode with 2+ stocks): one row per stock
+// with its own cost/worth/P&L, then a composite Total row (shares "—" since
+// different stocks don't sum).
+function holdingsTable(byTicker, total) {
+  const wrap = el('div', { class: 'brokerage-holdings' });
+  wrap.appendChild(
+    holdingsRow(
+      [
+        { value: 'Stock', cls: 'bh-stock' },
+        { value: 'Shares' },
+        { value: 'Cost basis' },
+        { value: 'Worth today' },
+        { value: 'Unrealized P&L' },
+      ],
+      { head: true },
+    ),
+  );
+  for (const r of byTicker) {
+    wrap.appendChild(
+      holdingsRow([
+        { value: tickerCell(r.ticker), cls: 'bh-stock' },
+        { value: shares.format(r.shares), label: 'Shares' },
+        { value: moneyOrDash(r.costBasis), label: 'Cost basis' },
+        { value: moneyOrDash(r.worthNow), label: 'Worth today' },
+        { value: pnlCell(r.pnl, r.pnlPct), label: 'Unrealized P&L' },
+      ]),
+    );
+  }
+  wrap.appendChild(
+    holdingsRow(
+      [
+        { value: 'Total', cls: 'bh-stock' },
+        { value: '—', label: 'Shares' },
+        { value: moneyOrDash(total.costBasis), label: 'Cost basis' },
+        { value: moneyOrDash(total.worthNow), label: 'Worth today' },
+        { value: pnlCell(total.pnl, total.pnlPct), label: 'Unrealized P&L' },
+      ],
+      { total: true },
+    ),
+  );
+  return wrap;
+}
+
+// One position line in the Statement. The stock is conveyed by the group
+// header (or, single-stock mode, the section itself), so the row omits it.
+function brokeragePositionRow(p) {
+  const row = el('div', { class: 'brokerage-row' });
+  row.appendChild(
+    el('a', {
+      class: 'brokerage-item',
+      href: `/item.html?id=${encodeURIComponent(p.itemId)}`,
+      textContent: p.title,
+    }),
+  );
+  const detail = el('div', { class: 'brokerage-detail' });
+  const closeStr = p.closePrice !== null ? ` @ ${usd.format(p.closePrice)}` : '';
+  detail.appendChild(el('span', { textContent: `${sharesCompact.format(p.shares)} sh${closeStr}` }));
+  detail.appendChild(el('span', { textContent: `cost ${usd.format(p.costBasis)}` }));
+  detail.appendChild(el('span', { textContent: `now ${usd.format(p.worthNow)}` }));
+  detail.appendChild(pnlNode(p.pnl, p.costBasis > 0 ? (p.pnl / p.costBasis) * 100 : null));
+  row.appendChild(detail);
+  return row;
+}
+
 function renderBrokerage(snapshot, filteredEnded, priceForTicker) {
   const section = document.getElementById('brokerage-section');
   if (!section) return;
-  const b = aggregateBrokerage(filteredEnded, priceForTicker);
+  const tickerOrder = (snapshot.stocks ?? [snapshot.stock]).filter(Boolean).map((q) => q.symbol);
+  // Sort positions by the page's Sort pill (same logic as the ended list) so
+  // the Statement orders/regroups in lockstep with the rest of the page.
+  const sortedEnded = sortEndedItems(filteredEnded, currentSort);
+  const b = aggregateBrokerage(sortedEnded, priceForTicker, tickerOrder);
   // Nothing sold with an end-time price yet (or price feed down) — the
   // hypothetical has nothing to say; hide rather than show dashes.
-  if (b.positions.length === 0 || b.worthNow === null) {
+  if (b.positions.length === 0 || b.total.worthNow === null) {
     section.hidden = true;
     return;
   }
-  const mixed = snapshot.valuationMode === 'mixed';
-  const symbol = snapshot.stock?.symbol ?? activeSymbol;
+  // 2+ stocks (By-seller, unfiltered) -> per-stock holdings table + grouped
+  // statement. One stock (single-ticker, or filtered to one seller) -> the
+  // compact cards + a flat statement, exactly as before.
+  const multi = b.byTicker.length > 1;
+  const only = b.byTicker[0];
 
   setText(
     document.getElementById('brokerage-tagline'),
-    mixed
+    multi
       ? 'If every buyer had really paid half in stock \u2014 Ryan\u2019s in $EBAY, mine in $GME \u2014 here\u2019s how those shares are doing:'
-      : `If every buyer had really paid half in $${symbol} stock, here\u2019s how their shares are doing:`,
+      : `If every buyer had really paid half in $${only?.ticker ?? activeSymbol} stock, here\u2019s how their shares are doing:`,
   );
 
   const stats = document.getElementById('brokerage-stats');
   stats.replaceChildren();
-  stats.appendChild(sharesCard('Shares held', b.sharesByTicker));
-  stats.appendChild(statCard('Cost basis', usd.format(b.costBasis)));
-  stats.appendChild(statCard('Worth today', usd.format(b.worthNow)));
-  stats.appendChild(statCard('Unrealized P&L', pnlNode(b.pnl, b.pnlPct)));
+  if (multi) {
+    stats.className = 'brokerage-stats';
+    stats.appendChild(holdingsTable(b.byTicker, b.total));
+  } else {
+    stats.className = 'brokerage-stats totals';
+    stats.appendChild(sharesCard('Shares held', [{ ticker: only.ticker, shares: only.shares }]));
+    stats.appendChild(statCard('Cost basis', usd.format(b.total.costBasis)));
+    stats.appendChild(statCard('Worth today', usd.format(b.total.worthNow)));
+    stats.appendChild(statCard('Unrealized P&L', pnlNode(b.total.pnl, b.total.pnlPct)));
+  }
 
   setText(
     document.getElementById('brokerage-summary'),
@@ -414,24 +563,24 @@ function renderBrokerage(snapshot, filteredEnded, priceForTicker) {
 
   const table = document.getElementById('brokerage-table');
   table.replaceChildren();
-  for (const p of b.positions) {
-    const row = el('div', { class: 'brokerage-row' });
-    row.appendChild(
-      el('a', {
-        class: 'brokerage-item',
-        href: `/item.html?id=${encodeURIComponent(p.itemId)}`,
-        textContent: p.title,
-      }),
-    );
-    const detail = el('div', { class: 'brokerage-detail' });
-    const tickerStr = mixed ? ` $${p.ticker}` : '';
-    const closeStr = p.closePrice !== null ? ` @ ${usd.format(p.closePrice)}` : '';
-    detail.appendChild(el('span', { textContent: `${sharesCompact.format(p.shares)} sh${tickerStr}${closeStr}` }));
-    detail.appendChild(el('span', { textContent: `cost ${usd.format(p.costBasis)}` }));
-    detail.appendChild(el('span', { textContent: `now ${usd.format(p.worthNow)}` }));
-    detail.appendChild(pnlNode(p.pnl, p.costBasis > 0 ? (p.pnl / p.costBasis) * 100 : null));
-    row.appendChild(detail);
-    table.appendChild(row);
+  if (multi) {
+    // Group by stock (in the table's stable order); each group is already
+    // sorted by the page pill since positions came in sorted.
+    for (const r of b.byTicker) {
+      const group = b.positions.filter((p) => p.ticker === r.ticker);
+      if (group.length === 0) continue;
+      const sellers = [...new Set(group.map((p) => p.sellerId).filter(Boolean))];
+      const sellerStr = sellers.length ? ` · ${sellers.map((s) => `@${s}`).join(', ')}` : '';
+      table.appendChild(
+        el('div', {
+          class: 'brokerage-group-head',
+          textContent: `$${r.ticker}${sellerStr} · ${group.length} position${group.length === 1 ? '' : 's'}`,
+        }),
+      );
+      for (const p of group) table.appendChild(brokeragePositionRow(p));
+    }
+  } else {
+    for (const p of b.positions) table.appendChild(brokeragePositionRow(p));
   }
 
   const footnote = document.getElementById('brokerage-footnote');

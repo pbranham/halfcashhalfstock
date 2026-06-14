@@ -257,23 +257,34 @@ paid half in stock at the close-of-auction price, here's how that stock
 is doing today.
 
 - Pure frontend transform of data already on the snapshot:
-  `aggregateBrokerage(endedItems, priceForTicker)` in `app.js` marks each
-  sold item's `endTimeSplit` (shares + stock-half dollars at its end-time
-  close) to the live price of its `valuationTicker`. No new data.
+  `aggregateBrokerage(endedItems, priceForTicker, tickerOrder)` in `app.js`
+  marks each sold item's `endTimeSplit` (shares + stock-half dollars at its
+  end-time close) to the live price of its `valuationTicker`. No new data.
+  Returns `{ positions, byTicker, total, excludedCount }`: `byTicker` is a
+  per-stock rollup (each stock's own cost/worth/P&L, ordered by
+  `tickerOrder`), `total` the USD composite. `withPnl(base, cost, worth)`
+  attaches `pnl`/`pnlPct`. Positions preserve INPUT order, so
+  `renderBrokerage` sorts `endedItems` by the page Sort pill (via
+  `sortEndedItems`) before calling.
 - Respects the seller filter + selected stock like everything else in
   `renderFilteredView`. Hidden entirely when no sold item has an
   end-time close or the price feed is down (no dashes-on-display).
-- Four stat cards (Shares held / Cost basis / Worth today / Unrealized
-  P&L with ▲/▼ + % in `.pnl-up`/`.pnl-down` colors) reusing the
-  `.totals` card grid; a native `<details>` "Statement (N positions)"
-  expands the per-item rows (title links to the item page; shares @
-  close, cost, now, ±). Items lacking an end-time close are counted in
-  a footnote, mirroring the ended-totals "Missing end-time price"
-  pattern. Head-to-head seller comparison was considered and CUT at the
-  owner's request — don't add it back.
-- In "By seller" mode (below) "Shares held" becomes a two-row breakdown
-  ($EBAY / $GME); cost basis / worth / P&L stay single USD figures
-  (additive across stocks); per-position rows gain a `$TICKER` label.
+- **Layout adapts to stock count** (`multi = byTicker.length > 1`):
+  - **One stock** (single-ticker, or By-seller filtered to one seller):
+    four stat cards (Shares held / Cost basis / Worth today / Unrealized
+    P&L with ▲/▼ + % in `.pnl-up`/`.pnl-down`) reusing the `.totals`
+    grid, and a flat Statement.
+  - **2+ stocks** (By-seller, unfiltered): a per-stock **holdings table**
+    (`.brokerage-holdings`, CSS-grid rows via `display:contents`,
+    `holdingsTable()`) — one row per stock with its own cost/worth/P&L,
+    then a composite **Total** row (shares `—`, since stocks don't sum).
+    Below 560px the table reflows to one stacked card per stock
+    (data-label prefixes). The Statement groups positions by stock
+    (`.brokerage-group-head` "$TICKER · @seller · N positions").
+  - Either way the Statement (`<details>`) sorts by the **page Sort pill**
+    (not a fixed order), and items lacking an end-time close are counted
+    in a footnote. Head-to-head seller comparison was considered and CUT
+    at the owner's request — don't add it back.
 
 ## "By seller" mixed valuation
 
@@ -304,13 +315,15 @@ old behavior). The label is "By seller"; the wire/`localStorage` value is
   the dashboard regroups per-item by `valuationTicker`.
 - **Dashboard**: the header shows one live price per stock
   (`.ticker-quotes`, inline on wide screens / stacked under 720px — owner's
-  choice). Totals + brokerage "Half Stock" / "Shares held" become one
-  shares row per ticker via `sharesCard`; cash/dollar figures stay single
-  (USD is additive). Each tile shows its seller stock's shares + logo
+  choice). The **Totals** "Half Stock" stat becomes one shares row per
+  stock via `sharesCard`; cash/dollar figures stay single (USD is
+  additive). The **brokerage** goes further — a full per-stock holdings
+  table + composite Total + per-stock-grouped Statement (see The Imaginary
+  Brokerage section). Each tile shows its seller stock's shares + logo
   (`splitBox(cash, shares, ticker)`; per-ticker logos built on the fly via
-  `logoUrlFor(ticker)` since the proxy keys off `?symbol=`). The aggregates
-  (`aggregateActiveTotals`/`aggregateEndedTotals`/`aggregateBrokerage`) sum
-  per-item splits grouped by ticker via `sumSplitsByTicker`.
+  `logoUrlFor(ticker)` since the proxy keys off `?symbol=`). The Totals
+  aggregates (`aggregateActiveTotals`/`aggregateEndedTotals`) sum per-item
+  splits grouped by ticker via `sumSplitsByTicker`.
 - The **item page is unaffected** — it never read the dashboard's stored
   ticker, and each item belongs to exactly one seller (one stock) anyway.
 - If you add a third seller, the pairing comes from `EBAY_SELLER_TICKERS`
