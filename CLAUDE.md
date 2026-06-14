@@ -249,42 +249,61 @@ For an auction that ended during market hours, finer-grain candles (if still
 within retention) give a more accurate price; for older auctions only the
 daily close at market open exists, which is good enough for the visualization.
 
-## The Imaginary Brokerage (Phase 4)
+## The Other Half (brokerage; Phase 4 + "The Other Half" v2)
 
 Dashboard section between Totals and the most-recent-bid widget — the
 site's core hypothetical, resolved: if every winning buyer had really
-paid half in stock at the close-of-auction price, here's how that stock
-is doing today.
+paid half in stock at the close-of-auction price, here's how that **other
+half** is doing today. (Was "The Imaginary Brokerage"; renamed per owner.
+Full roadmap for the v2 evolution — performance chart, item-level P&L,
+item-page conversion chart — in `~/.claude/plans/the-other-half.md`.)
+
+**Model:** ONE position per stock, made of **lots** grouped by the day
+auctions ended (tax-lot style); each lot is funded by the auction items
+whose thumbnails sit beneath it. Items are lots/auctions, NOT "positions".
+Decisions locked: track **stock value only** (cash half deferred);
+**ended-only** (active auctions are a future "pending" callout); eBay
+fees + payout lag are out of scope.
+
+**Enable toggle:** the section header carries a Hide/Show button
+(`#brokerage-toggle`, mirrors the ended section). `otherHalfEnabled` is
+persisted in `localStorage.hchs.otherHalf` (`on`/`off`, default on) and
+collapses/expands `#brokerage-body` via `applyOtherHalfEnabled()`. (Phase
+3 will also gate per-item P&L on ended cards off this flag.) The slim
+header stays visible when collapsed so it's re-enableable.
 
 - Pure frontend transform of data already on the snapshot:
   `aggregateBrokerage(endedItems, priceForTicker, tickerOrder)` in `app.js`
   marks each sold item's `endTimeSplit` (shares + stock-half dollars at its
   end-time close) to the live price of its `valuationTicker`. No new data.
   Returns `{ positions, byTicker, total, excludedCount }`: `byTicker` is a
-  per-stock rollup (each stock's own cost/worth/P&L, ordered by
-  `tickerOrder`), `total` the USD composite. `withPnl(base, cost, worth)`
-  attaches `pnl`/`pnlPct`. Positions preserve INPUT order, so
-  `renderBrokerage` sorts `endedItems` by the page Sort pill (via
+  per-stock rollup (each stock's own cost/worth/P&L + `sellers` + `lots`,
+  ordered by `tickerOrder`), `total` the USD composite. `withPnl(base,
+  cost, worth)` attaches `pnl`/`pnlPct`; `buildLots(positions)` groups a
+  stock's items into day-lots (most recent first). Positions preserve INPUT
+  order, so `renderBrokerage` sorts `endedItems` by the page Sort pill (via
   `sortEndedItems`) before calling.
 - Respects the seller filter + selected stock like everything else in
   `renderFilteredView`. Hidden entirely when no sold item has an
   end-time close or the price feed is down (no dashes-on-display).
-- **Layout adapts to stock count** (`multi = byTicker.length > 1`):
+- **Stats adapt to stock count** (`multi = byTicker.length > 1`):
   - **One stock** (single-ticker, or By-seller filtered to one seller):
     four stat cards (Shares held / Cost basis / Worth today / Unrealized
-    P&L with ▲/▼ + % in `.pnl-up`/`.pnl-down`) reusing the `.totals`
-    grid, and a flat Statement.
+    P&L with ▲/▼ + % in `.pnl-up`/`.pnl-down`) reusing the `.totals` grid.
   - **2+ stocks** (By-seller, unfiltered): a per-stock **holdings table**
     (`.brokerage-holdings`, CSS-grid rows via `display:contents`,
     `holdingsTable()`) — one row per stock with its own cost/worth/P&L,
     then a composite **Total** row (shares `—`, since stocks don't sum).
     Below 560px the table reflows to one stacked card per stock
-    (data-label prefixes). The Statement groups positions by stock
-    (`.brokerage-group-head` "$TICKER · @seller · N positions").
-  - Either way the Statement (`<details>`) sorts by the **page Sort pill**
-    (not a fixed order), and items lacking an end-time close are counted
-    in a footnote. Head-to-head seller comparison was considered and CUT
-    at the owner's request — don't add it back.
+    (data-label prefixes).
+- **Position detail** (`<details>`, "Position detail · N lots · M auctions")
+  is the same in both modes: per stock a `.brokerage-group-head` ("$TICKER
+  · @seller · X sh"), then its **day-lots** (`.lot`): a summary line (date ·
+  shares @ avg price · cost · now · ±P&L) above a `.lot-thumbs` strip of the
+  funding auctions' photos (each → item page; capped at 6 + "+N"). Lots are
+  date-ordered (newest first). Items lacking an end-time close are counted
+  in a footnote. Head-to-head seller comparison was considered and CUT at
+  the owner's request — don't add it back.
 
 ## "By seller" mixed valuation
 
@@ -698,6 +717,8 @@ Dashboard state lives in `localStorage`:
 - `hchs.viewMode` — `list` / `grid-sm` / `grid-md` / `grid-lg`
 - `hchs.sort` — one of the five sort modes
 - `hchs.aboutOpen` — `1` / `0` for the collapsible intro
+- `hchs.otherHalf` — `on` / `off` (default on): The Other Half brokerage
+  enabled (body shown) vs collapsed
 - `hchs.chart.zoom` — item-page chart time lens: `full` / `start` /
   `snipe` (the old `hchs.chart.yScale` / `hchs.chart.xScale` keys are
   dead — y-log was cut in Phase 3; orphaned values are ignored)

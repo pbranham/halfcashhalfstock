@@ -87,6 +87,28 @@ function saveEndedPriceMode(value) {
 }
 let currentEndedPriceMode = loadEndedPriceMode();
 
+// --- "The Other Half" enable toggle ---
+// On = the brokerage body shows (and, later, per-item P&L on ended cards).
+// Off = collapsed to the slim header, reclaiming space. Default on.
+function loadOtherHalfEnabled() {
+  return localStorage.getItem('hchs.otherHalf') !== 'off';
+}
+function saveOtherHalfEnabled(on) {
+  localStorage.setItem('hchs.otherHalf', on ? 'on' : 'off');
+}
+let otherHalfEnabled = loadOtherHalfEnabled();
+
+// Reflect the enabled state: show/hide the brokerage body + sync the toggle.
+function applyOtherHalfEnabled() {
+  const body = document.getElementById('brokerage-body');
+  const btn = document.getElementById('brokerage-toggle');
+  if (body) body.hidden = !otherHalfEnabled;
+  if (btn) {
+    btn.textContent = otherHalfEnabled ? 'Hide' : 'Show';
+    btn.setAttribute('aria-expanded', otherHalfEnabled ? 'true' : 'false');
+  }
+}
+
 // --- Ended-section time window ("Recently ended" vs "All time") ---
 // The "all" value caps at the server's 36500-day max (~100 years) so we
 // effectively fetch everything ever ended. The DB never deletes ended
@@ -293,12 +315,14 @@ function aggregateEndedTotals(items) {
   };
 }
 
-// --- The Imaginary Brokerage ---
+// --- The Other Half ---
 // The site's core hypothetical, resolved: if every winning buyer had really
-// paid half in stock at the close-of-auction price, here's how that stock
-// is doing today. Pure transform of data already on the snapshot — each
+// paid half in stock at the close-of-auction price, here's how that other
+// half is doing today. Pure transform of data already on the snapshot — each
 // sold item's endTimeSplit (shares + stock-half dollars at its end-time
-// close) marked to the live price.
+// close) marked to the live price. One POSITION per stock, made of LOTS
+// grouped by the day auctions ended (tax-lot style), each lot funded by the
+// auction items whose thumbnails sit beneath it.
 // `priceForTicker(ticker)` returns the live price for a stock. In normal mode
 // every position resolves the same price; in "By seller" mode each marks to
 // its own stock. Cost basis / worth / P&L roll up in USD (additive across
@@ -336,6 +360,7 @@ function aggregateBrokerage(endedItems, priceForTicker, tickerOrder = []) {
       return {
         itemId: i.itemId,
         title: i.title,
+        imageUrl: i.imageUrl,
         endedAt: i.endedAt,
         ticker,
         sellerId: i.sellerId,
@@ -370,7 +395,15 @@ function aggregateBrokerage(endedItems, priceForTicker, tickerOrder = []) {
   };
   const byTicker = [...groups.values()]
     .sort((a, b) => rank(a.ticker) - rank(b.ticker))
-    .map((g) => withPnl({ ticker: g.ticker, count: g.count, shares: g.shares }, g.costBasis, g.anyWorth ? g.worthNow : null));
+    .map((g) => {
+      const ps = positions.filter((p) => p.ticker === g.ticker);
+      const sellers = [...new Set(ps.map((p) => p.sellerId).filter(Boolean))];
+      return withPnl(
+        { ticker: g.ticker, count: g.count, shares: g.shares, sellers, lots: buildLots(ps) },
+        g.costBasis,
+        g.anyWorth ? g.worthNow : null,
+      );
+    });
 
   const costBasis = positions.reduce((sum, p) => sum + p.costBasis, 0);
   const anyWorth = positions.some((p) => p.worthNow !== null);
@@ -382,6 +415,44 @@ function aggregateBrokerage(endedItems, priceForTicker, tickerOrder = []) {
     byTicker,
     total: withPnl({}, costBasis, worthNow),
   };
+}
+
+// Group a stock's positions into LOTS by the local day the auction ended
+// (tax-lot style). Each lot sums shares/cost/worth across that day's items and
+// keeps their {itemId, imageUrl, title} for the thumbnail strip. Most-recent
+// day first, so the position reads newest → oldest.
+function buildLots(positions) {
+  const byDay = new Map();
+  for (const p of positions) {
+    const d = new Date(p.endedAt);
+    const dayMs = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    let lot = byDay.get(dayMs);
+    if (!lot) {
+      lot = { dayMs, shares: 0, costBasis: 0, worthNow: 0, anyWorth: false, items: [] };
+      byDay.set(dayMs, lot);
+    }
+    lot.shares += p.shares;
+    lot.costBasis += p.costBasis;
+    if (p.worthNow !== null) {
+      lot.worthNow += p.worthNow;
+      lot.anyWorth = true;
+    }
+    lot.items.push({ itemId: p.itemId, imageUrl: p.imageUrl, title: p.title });
+  }
+  return [...byDay.values()]
+    .sort((a, b) => b.dayMs - a.dayMs)
+    .map((lot) =>
+      withPnl(
+        {
+          dayMs: lot.dayMs,
+          shares: lot.shares,
+          avgPrice: lot.shares > 0 ? lot.costBasis / lot.shares : null,
+          items: lot.items,
+        },
+        lot.costBasis,
+        lot.anyWorth ? lot.worthNow : null,
+      ),
+    );
 }
 
 function pnlNode(pnl, pct) {
@@ -497,23 +568,64 @@ function holdingsTable(byTicker, total) {
 
 // One position line in the Statement. The stock is conveyed by the group
 // header (or, single-stock mode, the section itself), so the row omits it.
-function brokeragePositionRow(p) {
-  const row = el('div', { class: 'brokerage-row' });
-  row.appendChild(
-    el('a', {
-      class: 'brokerage-item',
-      href: `/item.html?id=${encodeURIComponent(p.itemId)}`,
-      textContent: p.title,
+// Per-stock header in the position detail: "$GME · @seller · X sh".
+function brokerageGroupHead(r) {
+  const sellerStr = r.sellers.length ? ` · ${r.sellers.map((s) => `@${s}`).join(', ')}` : '';
+  return el('div', {
+    class: 'brokerage-group-head',
+    textContent: `$${r.ticker}${sellerStr} · ${shares.format(r.shares)} sh`,
+  });
+}
+
+// Thumbnail strip of the auction items that funded a lot (each links to the
+// item page). Caps at 6 with a "+N" overflow chip so a big day stays compact.
+function lotThumbs(items) {
+  const strip = el('div', { class: 'lot-thumbs' });
+  const MAX = 6;
+  for (const it of items.slice(0, MAX)) {
+    const a = el('a', {
+      class: 'lot-thumb',
+      href: `/item.html?id=${encodeURIComponent(it.itemId)}`,
+      title: it.title,
+      'aria-label': it.title,
+    });
+    if (it.imageUrl) {
+      a.appendChild(el('img', { src: hiResImg(it.imageUrl, 140), alt: it.title, loading: 'lazy' }));
+    }
+    strip.appendChild(a);
+  }
+  if (items.length > MAX) {
+    strip.appendChild(el('span', { class: 'lot-thumb-more', textContent: `+${items.length - MAX}` }));
+  }
+  return strip;
+}
+
+// One lot (a day's purchase): a summary line + the funding items' thumbnails.
+function brokerageLot(lot) {
+  const wrap = el('div', { class: 'lot' });
+  const line = el('div', { class: 'lot-line' });
+  line.appendChild(
+    el('span', {
+      class: 'lot-date',
+      textContent: new Date(lot.dayMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
     }),
   );
-  const detail = el('div', { class: 'brokerage-detail' });
-  const closeStr = p.closePrice !== null ? ` @ ${usd.format(p.closePrice)}` : '';
-  detail.appendChild(el('span', { textContent: `${sharesCompact.format(p.shares)} sh${closeStr}` }));
-  detail.appendChild(el('span', { textContent: `cost ${usd.format(p.costBasis)}` }));
-  detail.appendChild(el('span', { textContent: `now ${usd.format(p.worthNow)}` }));
-  detail.appendChild(pnlNode(p.pnl, p.costBasis > 0 ? (p.pnl / p.costBasis) * 100 : null));
-  row.appendChild(detail);
-  return row;
+  const avgStr = lot.avgPrice !== null ? ` @ ${usd.format(lot.avgPrice)}` : '';
+  const nowStr = lot.worthNow !== null ? ` · now ${usd.format(lot.worthNow)}` : '';
+  line.appendChild(
+    el('span', {
+      class: 'lot-detail',
+      textContent: `${sharesCompact.format(lot.shares)} sh${avgStr} · cost ${usd.format(lot.costBasis)}${nowStr}`,
+    }),
+  );
+  if (lot.pnl !== null) {
+    const pnl = pnlNode(lot.pnl, lot.pnlPct);
+    pnl.classList.add('lot-pnl');
+    line.appendChild(pnl);
+  }
+  wrap.appendChild(line);
+  wrap.appendChild(lotThumbs(lot.items));
+  return wrap;
 }
 
 function renderBrokerage(snapshot, filteredEnded, priceForTicker) {
@@ -530,17 +642,17 @@ function renderBrokerage(snapshot, filteredEnded, priceForTicker) {
     section.hidden = true;
     return;
   }
-  // 2+ stocks (By-seller, unfiltered) -> per-stock holdings table + grouped
-  // statement. One stock (single-ticker, or filtered to one seller) -> the
-  // compact cards + a flat statement, exactly as before.
+  // Stats adapt to stock count: 2+ stocks (By-seller, unfiltered) -> the
+  // per-stock holdings table; one stock -> the compact cards. The Position
+  // detail below (lots grouped by stock) is the same either way.
   const multi = b.byTicker.length > 1;
   const only = b.byTicker[0];
 
   setText(
     document.getElementById('brokerage-tagline'),
     multi
-      ? 'If every buyer had really paid half in stock \u2014 Ryan\u2019s in $EBAY, mine in $GME \u2014 here\u2019s how those shares are doing:'
-      : `If every buyer had really paid half in $${only?.ticker ?? activeSymbol} stock, here\u2019s how their shares are doing:`,
+      ? 'If every buyer had really paid half in stock \u2014 Ryan\u2019s in $EBAY, mine in $GME \u2014 here\u2019s how that other half is doing today:'
+      : `If every buyer had really paid half in $${only?.ticker ?? activeSymbol} stock, here\u2019s how that other half is doing today:`,
   );
 
   const stats = document.getElementById('brokerage-stats');
@@ -556,31 +668,21 @@ function renderBrokerage(snapshot, filteredEnded, priceForTicker) {
     stats.appendChild(statCard('Unrealized P&L', pnlNode(b.total.pnl, b.total.pnlPct)));
   }
 
+  // Position detail: one stock = one position, broken into day-lots. Each lot
+  // carries the thumbnails of the auctions that funded it.
+  const lotCount = b.byTicker.reduce((sum, r) => sum + r.lots.length, 0);
+  const auctionCount = b.positions.length;
   setText(
     document.getElementById('brokerage-summary'),
-    `Statement (${b.positions.length} position${b.positions.length === 1 ? '' : 's'})`,
+    `Position detail · ${lotCount} lot${lotCount === 1 ? '' : 's'} · ${auctionCount} auction${auctionCount === 1 ? '' : 's'}`,
   );
 
   const table = document.getElementById('brokerage-table');
   table.replaceChildren();
-  if (multi) {
-    // Group by stock (in the table's stable order); each group is already
-    // sorted by the page pill since positions came in sorted.
-    for (const r of b.byTicker) {
-      const group = b.positions.filter((p) => p.ticker === r.ticker);
-      if (group.length === 0) continue;
-      const sellers = [...new Set(group.map((p) => p.sellerId).filter(Boolean))];
-      const sellerStr = sellers.length ? ` · ${sellers.map((s) => `@${s}`).join(', ')}` : '';
-      table.appendChild(
-        el('div', {
-          class: 'brokerage-group-head',
-          textContent: `$${r.ticker}${sellerStr} · ${group.length} position${group.length === 1 ? '' : 's'}`,
-        }),
-      );
-      for (const p of group) table.appendChild(brokeragePositionRow(p));
-    }
-  } else {
-    for (const p of b.positions) table.appendChild(brokeragePositionRow(p));
+  for (const r of b.byTicker) {
+    if (r.lots.length === 0) continue;
+    table.appendChild(brokerageGroupHead(r));
+    for (const lot of r.lots) table.appendChild(brokerageLot(lot));
   }
 
   const footnote = document.getElementById('brokerage-footnote');
@@ -1590,6 +1692,17 @@ if (endedToggle) {
     endedToggle.textContent = collapsed ? 'Show' : 'Hide';
   });
 }
+
+// "The Other Half" enable toggle — collapse/expand the brokerage, persisted.
+const brokerageToggle = document.getElementById('brokerage-toggle');
+if (brokerageToggle) {
+  brokerageToggle.addEventListener('click', () => {
+    otherHalfEnabled = !otherHalfEnabled;
+    saveOtherHalfEnabled(otherHalfEnabled);
+    applyOtherHalfEnabled();
+  });
+}
+applyOtherHalfEnabled();
 
 // Brand-icon click toggles theme. Precedence: localStorage > OS preference > dark default.
 const brand = document.querySelector('.brand');

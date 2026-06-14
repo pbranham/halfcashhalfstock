@@ -397,9 +397,21 @@ main {
   margin-top: 2px;
 }
 
-/* --- The Imaginary Brokerage --- */
+/* --- The Other Half (brokerage) --- */
 .brokerage {
   margin-bottom: 24px;
+}
+/* Header bar: the name + the enable (Hide/Show) toggle, mirroring the ended
+   section's header. Stays visible when collapsed so it's re-enableable. */
+.brokerage-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.brokerage-head .totals-heading {
+  margin-bottom: 8px;
 }
 /* The stat grid reuses .totals styling; kill its trailing margin here —
    the section owns its own spacing. */
@@ -438,37 +450,67 @@ main {
   display: flex;
   flex-direction: column;
 }
-.brokerage-row {
+
+/* Position detail: a stock's day-lots, each a summary line + thumbnail strip. */
+.lot {
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.lot:last-child {
+  border-bottom: 0;
+}
+.lot-line {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 2px 16px;
-  padding: 8px 2px;
-  border-bottom: 1px solid var(--border);
+  gap: 2px 12px;
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
-.brokerage-row:last-child {
-  border-bottom: 0;
+.lot-date {
+  font-weight: 700;
+  min-width: 52px;
 }
-.brokerage-item {
-  flex: 1 1 240px;
-  min-width: 0;
-  color: inherit;
-  text-decoration: none;
+.lot-detail {
+  color: var(--fg-muted);
+}
+.lot-pnl {
+  margin-left: auto;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
-.brokerage-item:hover {
-  text-decoration: underline;
-}
-.brokerage-detail {
+.lot-thumbs {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px 14px;
+  gap: 6px;
+  margin-top: 8px;
+}
+.lot-thumb {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  flex-shrink: 0;
+}
+.lot-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.lot-thumb-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
   color: var(--fg-muted);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
 }
 .brokerage-footnote {
   color: var(--fg-muted);
