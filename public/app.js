@@ -6,6 +6,13 @@ const QUICK_RETRY_MS = 4_000;
 const STALE_MS = 120_000;
 
 const SUPPORTED_SYMBOLS = ['EBAY', 'GME'];
+// "By seller" valuation mode: not a real ticker. The server values each item
+// in its seller's paired stock and returns one live price per stock. It has a
+// pill but never goes in the custom-ticker input.
+const MIXED_SYMBOL = 'MIXED';
+function isPillSymbol(s) {
+  return SUPPORTED_SYMBOLS.includes(s) || s === MIXED_SYMBOL;
+}
 let activeSymbol = SUPPORTED_SYMBOLS[0];
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
@@ -44,7 +51,7 @@ const SELLER_PILL_TO_ID = {
 // still manually pick a different ticker afterward — the auto-swap only
 // fires on filter changes.
 const SELLER_FILTER_DEFAULT_TICKER = {
-  all: 'EBAY',
+  all: 'MIXED',
   mine: 'GME',
   ryan: 'EBAY',
 };
@@ -218,62 +225,70 @@ function sortEndedItems(items, sort) {
   }
 }
 
+// Sum per-item splits into a cash half + a per-ticker shares breakdown.
+// `getSplit(item)` returns the relevant pre-computed HalfSplit (live or
+// at-end). Cash/stock dollars are additive (USD); shares are grouped by
+// item.valuationTicker because you can't add $EBAY shares to $GME shares. In
+// normal mode every item shares one ticker, so sharesByTicker has one entry.
+function sumSplitsByTicker(items, getSplit) {
+  const byTicker = new Map();
+  let cashUsd = 0;
+  for (const i of items) {
+    const s = getSplit(i);
+    if (!s) continue;
+    cashUsd += s.cashUsd;
+    const t = i.valuationTicker || currentTickerSymbol;
+    byTicker.set(t, (byTicker.get(t) ?? 0) + s.shares);
+  }
+  const sharesByTicker = [...byTicker.entries()].map(([ticker, shares]) => ({ ticker, shares }));
+  return { cashUsd, sharesByTicker };
+}
+
 // Recompute totals from a filtered subset so the on-page numbers reflect the
 // active seller filter. Mirrors the server-side composeSnapshot math:
 // no-bid items are excluded from the dollar totals (their priceUsd is just
 // the starting price, which shouldn't count until someone bids).
-function aggregateActiveTotals(items, stockPrice) {
+function aggregateActiveTotals(items) {
   const priced = items.filter(
     (i) =>
       i.priceUsd !== null && i.priceUsd !== undefined && (i.bidCount ?? 0) > 0,
   );
   const bidUsd = priced.reduce((sum, i) => sum + i.priceUsd, 0);
-  const cashUsd = bidUsd / 2;
-  const stockUsd = bidUsd / 2;
-  const shares = stockPrice > 0 ? stockUsd / stockPrice : 0;
+  const { cashUsd, sharesByTicker } = sumSplitsByTicker(priced, (i) => i.split);
   return {
     listingsCount: items.length,
     pricedCount: priced.length,
     bidsCount: items.reduce((sum, i) => sum + (i.bidCount ?? 0), 0),
     bidUsd,
-    split: { cashUsd, stockUsd, shares },
+    cashUsd,
+    sharesByTicker,
   };
 }
 
-function aggregateEndedTotals(items, stockPrice) {
+function aggregateEndedTotals(items) {
   // No-bid auctions (finalBidCount === 0) didn't actually clear at any real
   // price, so they shouldn't roll into the ended totals.
   const hasBid = (i) => (i.finalBidCount ?? 0) > 0;
 
-  // Live split: every USD-priced item with at least one bid contributes at
-  // the current stock price.
+  // Live: every USD-priced item with at least one bid contributes at the
+  // current stock price (its seller's stock in "By seller" mode).
   const priced = items.filter((i) => i.split !== null && i.split !== undefined && hasBid(i));
   const bidUsd = priced.reduce((sum, i) => sum + i.finalPriceUsd, 0);
-  const cashUsd = bidUsd / 2;
-  const stockUsd = bidUsd / 2;
-  const shares = stockPrice > 0 ? stockUsd / stockPrice : 0;
+  const live = sumSplitsByTicker(priced, (i) => i.split);
 
-  // End-time split: sum each item's pre-computed endTimeSplit. Items where
-  // OHLC history is missing OR that never received a bid drop out of this
-  // aggregate.
+  // At end: each item's pre-computed endTimeSplit. Items missing OHLC history
+  // (or with no bid) drop out of this aggregate.
   const pricedAtEnd = items.filter(
     (i) => i.endTimeSplit !== null && i.endTimeSplit !== undefined && hasBid(i),
   );
-  const splitAtEnd = pricedAtEnd.reduce(
-    (acc, i) => ({
-      cashUsd: acc.cashUsd + i.endTimeSplit.cashUsd,
-      stockUsd: acc.stockUsd + i.endTimeSplit.stockUsd,
-      shares: acc.shares + i.endTimeSplit.shares,
-    }),
-    { cashUsd: 0, stockUsd: 0, shares: 0 },
-  );
+  const atEnd = sumSplitsByTicker(pricedAtEnd, (i) => i.endTimeSplit);
 
   return {
     listingsCount: items.length,
     bidsCount: items.reduce((sum, i) => sum + (i.finalBidCount ?? 0), 0),
     bidUsd,
-    split: { cashUsd, stockUsd, shares },
-    splitAtEnd,
+    live,
+    atEnd,
     pricedAtEndCount: pricedAtEnd.length,
   };
 }
@@ -284,11 +299,17 @@ function aggregateEndedTotals(items, stockPrice) {
 // is doing today. Pure transform of data already on the snapshot — each
 // sold item's endTimeSplit (shares + stock-half dollars at its end-time
 // close) marked to the live price.
-function aggregateBrokerage(endedItems, livePrice) {
+// `priceForTicker(ticker)` returns the live price for a stock. In normal mode
+// every position resolves the same price; in "By seller" mode each marks to
+// its own stock. Cost basis / worth / P&L roll up in USD (additive across
+// stocks); shares stay grouped by ticker.
+function aggregateBrokerage(endedItems, priceForTicker) {
   const sold = endedItems.filter((i) => (i.finalBidCount ?? 0) > 0);
   const positions = sold
     .filter((i) => i.endTimeSplit && Number.isFinite(i.endTimeSplit.shares))
     .map((i) => {
+      const ticker = i.valuationTicker || currentTickerSymbol;
+      const livePrice = priceForTicker(ticker);
       const shares = i.endTimeSplit.shares;
       const costBasis = i.endTimeSplit.stockUsd;
       const worthNow = livePrice > 0 ? shares * livePrice : null;
@@ -296,6 +317,7 @@ function aggregateBrokerage(endedItems, livePrice) {
         itemId: i.itemId,
         title: i.title,
         endedAt: i.endedAt,
+        ticker,
         shares,
         closePrice: i.endTimePriceUsd,
         costBasis,
@@ -304,13 +326,18 @@ function aggregateBrokerage(endedItems, livePrice) {
       };
     })
     .sort((a, b) => (a.endedAt < b.endedAt ? 1 : -1));
-  const shares = positions.reduce((sum, p) => sum + p.shares, 0);
+  const byTicker = new Map();
+  for (const p of positions) byTicker.set(p.ticker, (byTicker.get(p.ticker) ?? 0) + p.shares);
+  const sharesByTicker = [...byTicker.entries()].map(([ticker, shares]) => ({ ticker, shares }));
   const costBasis = positions.reduce((sum, p) => sum + p.costBasis, 0);
-  const worthNow = livePrice > 0 ? shares * livePrice : null;
+  // Only meaningful when at least one position is priced; treat a missing
+  // price as 0 so a single down stock doesn't blank the whole rollup.
+  const anyWorth = positions.some((p) => p.worthNow !== null);
+  const worthNow = anyWorth ? positions.reduce((sum, p) => sum + (p.worthNow ?? 0), 0) : null;
   return {
     positions,
     excludedCount: sold.length - positions.length,
-    shares,
+    sharesByTicker,
     costBasis,
     worthNow,
     pnl: worthNow !== null ? worthNow - costBasis : null,
@@ -326,42 +353,59 @@ function pnlNode(pnl, pct) {
   return el('span', { class: cls, textContent: `${arrow} ${up ? '+' : '\u2212'}${usd.format(Math.abs(pnl))}${pctStr}` });
 }
 
-function renderBrokerage(snapshot, filteredEnded, livePrice) {
+// A single `.stat` card. `value` is a string or a DOM node.
+function statCard(label, value) {
+  const valueEl = el('div', { class: 'stat-value' });
+  if (typeof value === 'string') valueEl.textContent = value;
+  else valueEl.appendChild(value);
+  return el('div', { class: 'stat' }, [
+    el('div', { class: 'stat-label', textContent: label }),
+    valueEl,
+  ]);
+}
+
+// A `.stat` card whose value is one shares line per ticker. One line in normal
+// mode (reads identically to before); two in "By seller" mode ($EBAY / $GME).
+function sharesCard(label, sharesByTicker) {
+  const rows = sharesByTicker && sharesByTicker.length
+    ? sharesByTicker
+    : [{ ticker: currentTickerSymbol, shares: 0 }];
+  const valueEl = el('div', { class: `stat-value${rows.length > 1 ? ' stat-value-multi' : ''}` });
+  for (const { ticker, shares: n } of rows) {
+    valueEl.appendChild(el('div', { class: 'shares-row' }, [sharesValue(n, { ticker })]));
+  }
+  return el('div', { class: 'stat' }, [
+    el('div', { class: 'stat-label', textContent: label }),
+    valueEl,
+  ]);
+}
+
+function renderBrokerage(snapshot, filteredEnded, priceForTicker) {
   const section = document.getElementById('brokerage-section');
   if (!section) return;
-  const b = aggregateBrokerage(filteredEnded, livePrice);
+  const b = aggregateBrokerage(filteredEnded, priceForTicker);
   // Nothing sold with an end-time price yet (or price feed down) — the
   // hypothetical has nothing to say; hide rather than show dashes.
   if (b.positions.length === 0 || b.worthNow === null) {
     section.hidden = true;
     return;
   }
+  const mixed = snapshot.valuationMode === 'mixed';
   const symbol = snapshot.stock?.symbol ?? activeSymbol;
 
   setText(
     document.getElementById('brokerage-tagline'),
-    `If every buyer had really paid half in $${symbol} stock, here\u2019s how their shares are doing:`,
+    mixed
+      ? 'If every buyer had really paid half in stock \u2014 Ryan\u2019s in $EBAY, mine in $GME \u2014 here\u2019s how those shares are doing:'
+      : `If every buyer had really paid half in $${symbol} stock, here\u2019s how their shares are doing:`,
   );
 
   const stats = document.getElementById('brokerage-stats');
   stats.replaceChildren();
-  const cards = [
-    { label: 'Shares held', value: sharesValue(b.shares) },
-    { label: 'Cost basis', value: usd.format(b.costBasis) },
-    { label: 'Worth today', value: usd.format(b.worthNow) },
-    { label: 'Unrealized P&L', value: pnlNode(b.pnl, b.pnlPct) },
-  ];
-  for (const stat of cards) {
-    const valueEl = el('div', { class: 'stat-value' });
-    if (typeof stat.value === 'string') valueEl.textContent = stat.value;
-    else valueEl.appendChild(stat.value);
-    stats.appendChild(
-      el('div', { class: 'stat' }, [
-        el('div', { class: 'stat-label', textContent: stat.label }),
-        valueEl,
-      ]),
-    );
-  }
+  stats.appendChild(sharesCard('Shares held', b.sharesByTicker));
+  stats.appendChild(statCard('Cost basis', usd.format(b.costBasis)));
+  stats.appendChild(statCard('Worth today', usd.format(b.worthNow)));
+  stats.appendChild(statCard('Unrealized P&L', pnlNode(b.pnl, b.pnlPct)));
 
   setText(
     document.getElementById('brokerage-summary'),
@@ -380,8 +424,9 @@ function renderBrokerage(snapshot, filteredEnded, livePrice) {
       }),
     );
     const detail = el('div', { class: 'brokerage-detail' });
+    const tickerStr = mixed ? ` $${p.ticker}` : '';
     const closeStr = p.closePrice !== null ? ` @ ${usd.format(p.closePrice)}` : '';
-    detail.appendChild(el('span', { textContent: `${sharesCompact.format(p.shares)} sh${closeStr}` }));
+    detail.appendChild(el('span', { textContent: `${sharesCompact.format(p.shares)} sh${tickerStr}${closeStr}` }));
     detail.appendChild(el('span', { textContent: `cost ${usd.format(p.costBasis)}` }));
     detail.appendChild(el('span', { textContent: `now ${usd.format(p.worthNow)}` }));
     detail.appendChild(pnlNode(p.pnl, p.costBasis > 0 ? (p.pnl / p.costBasis) * 100 : null));
@@ -471,10 +516,26 @@ function formatPriceAsOf(asOfDate, marketOpen) {
 function renderTicker(snapshot) {
   const ticker = document.getElementById('ticker');
   if (!ticker) return;
-  const price = snapshot?.stock?.price;
-  const symbol = snapshot?.stock?.symbol ?? activeSymbol;
-  setText(ticker.querySelector('.ticker-symbol'), `$${symbol}`);
-  setText(ticker.querySelector('.ticker-price'), price ? usd.format(price) : '—');
+  // One quote in normal mode; one per stock in "By seller" mode ($EBAY, $GME).
+  let stocks =
+    snapshot?.valuationMode === 'mixed' && Array.isArray(snapshot.stocks) && snapshot.stocks.length
+      ? snapshot.stocks
+      : [snapshot?.stock].filter(Boolean);
+  if (stocks.length === 0) {
+    stocks = [{ symbol: activeSymbol === MIXED_SYMBOL ? 'EBAY' : activeSymbol, price: null, asOf: null }];
+  }
+  const quotesWrap = ticker.querySelector('.ticker-quotes');
+  if (quotesWrap) {
+    quotesWrap.classList.toggle('is-multi', stocks.length > 1);
+    quotesWrap.replaceChildren(
+      ...stocks.map((q) =>
+        el('div', { class: 'ticker-quote' }, [
+          el('span', { class: 'ticker-symbol', textContent: `$${q.symbol}` }),
+          el('span', { class: 'ticker-price', textContent: q.price ? usd.format(q.price) : '—' }),
+        ]),
+      ),
+    );
+  }
   const generated = snapshot?.generatedAt ? new Date(snapshot.generatedAt) : null;
   const isStale = generated ? Date.now() - generated.getTime() > STALE_MS : false;
   ticker.classList.toggle('is-stale', isStale);
@@ -483,7 +544,10 @@ function renderTicker(snapshot) {
   // Price-feed timestamp lives directly below the market-status line so the
   // user can tell at a glance how stale the stock value is (especially over
   // a weekend, when the close from Friday afternoon should be unambiguous).
-  const asOf = snapshot?.stock?.asOf ? new Date(snapshot.stock.asOf) : null;
+  // Both stocks are US equities sharing one market clock — show the freshest
+  // as-of across them.
+  const asOfMs = stocks.map((q) => (q.asOf ? Date.parse(q.asOf) : NaN)).filter((n) => !Number.isNaN(n));
+  const asOf = asOfMs.length ? new Date(Math.max(...asOfMs)) : null;
   setText(ticker.querySelector('.ticker-as-of'), formatPriceAsOf(asOf, marketOpen));
 }
 
@@ -539,26 +603,12 @@ function renderTotals(snapshot, totals) {
   if (!root) return;
   root.replaceChildren();
   if (!snapshot || !totals) return;
-  const { listingsCount, bidsCount, bidUsd, split } = totals;
-  const symbol = snapshot.stock?.symbol ?? activeSymbol;
-  const items = [
-    { label: 'Active listings', value: integer.format(listingsCount) },
-    { label: 'Bids', value: integer.format(bidsCount ?? 0) },
-    { label: 'Sum of current bids', value: usd.format(bidUsd) },
-    { label: 'Half Cash', value: usd.format(split.cashUsd) },
-    { label: 'Half Stock', value: sharesValue(split.shares) },
-  ];
-  for (const stat of items) {
-    const valueEl = el('div', { class: 'stat-value' });
-    if (typeof stat.value === 'string') valueEl.textContent = stat.value;
-    else valueEl.appendChild(stat.value);
-    root.appendChild(
-      el('div', { class: 'stat' }, [
-        el('div', { class: 'stat-label', textContent: stat.label }),
-        valueEl,
-      ]),
-    );
-  }
+  const { listingsCount, bidsCount, bidUsd, cashUsd, sharesByTicker } = totals;
+  root.appendChild(statCard('Active listings', integer.format(listingsCount)));
+  root.appendChild(statCard('Bids', integer.format(bidsCount ?? 0)));
+  root.appendChild(statCard('Sum of current bids', usd.format(bidUsd)));
+  root.appendChild(statCard('Half Cash', usd.format(cashUsd)));
+  root.appendChild(sharesCard('Half Stock', sharesByTicker));
 }
 
 // Inline icon markup. Sale-mode icons replace the spelled-out tag on the
@@ -604,23 +654,31 @@ function historyLink(itemId) {
   return a;
 }
 
-// Ticker-logo state, refreshed from each /api/snapshot response. When the
-// server has a logo.dev token, this is the image URL for the currently
-// selected stock; otherwise null and we fall back to a spelled-out "shares"
-// unit.
-let currentTickerLogoUrl = null;
+// Ticker-logo state, refreshed from each /api/snapshot response. `logosEnabled`
+// reflects whether the server has a logo.dev token; per-ticker URLs are built
+// on demand (the proxy keys off ?symbol=) so "By seller" mode can show each
+// stock's own logo. currentTickerSymbol is the single active symbol used as a
+// default when an item carries no valuationTicker.
+let logosEnabled = false;
 let currentTickerSymbol = '';
+
+// Logo proxy URL for a ticker, or null when logos are disabled.
+function logoUrlFor(ticker) {
+  if (!logosEnabled || !ticker) return null;
+  return `/api/ticker-logo?symbol=${encodeURIComponent(ticker)}`;
+}
 
 // The ticker logo <img>, or null when no logo is configured. Callers decide
 // the fallback: the inline "shares" unit (sharesUnit) or simply nothing (the
 // split's "Half Stock" label, which already names the asset).
-function tickerLogoImg() {
-  if (!currentTickerLogoUrl) return null;
+function tickerLogoImg(ticker) {
+  const url = logoUrlFor(ticker);
+  if (!url) return null;
   return el('img', {
     class: 'ticker-logo',
-    src: currentTickerLogoUrl,
-    alt: currentTickerSymbol,
-    title: currentTickerSymbol,
+    src: url,
+    alt: ticker,
+    title: ticker,
     loading: 'lazy',
   });
 }
@@ -629,8 +687,8 @@ function tickerLogoImg() {
 // (mirrors a currency glyph), otherwise the spelled-out word "shares". The
 // img onerror handler downgrades to the text unit if the logo fails to
 // load (network error, unknown ticker, etc.) without leaving a broken icon.
-function sharesUnit() {
-  const img = tickerLogoImg();
+function sharesUnit(ticker) {
+  const img = tickerLogoImg(ticker);
   if (img) {
     img.addEventListener('error', () => {
       img.replaceWith(el('span', { class: 'unit', textContent: 'shares' }));
@@ -716,7 +774,7 @@ function imageGallery(images, alt) {
 // overflowing into the neighbouring value or off the tile edge. One value
 // per atomic unit, free to reflow, is the only layout that holds at every
 // tile width (the values themselves are intrinsically wide).
-function splitBox(cashUsd, sharesAmount) {
+function splitBox(cashUsd, sharesAmount, ticker) {
   const split = el('div', { class: 'item-split' });
   split.appendChild(
     el('div', { class: 'split-half' }, [
@@ -727,7 +785,7 @@ function splitBox(cashUsd, sharesAmount) {
   split.appendChild(
     el('div', { class: 'split-half' }, [
       el('span', { class: 'label', textContent: 'Half Stock' }),
-      el('span', { class: 'value' }, [sharesValue(sharesAmount, { compact: true })]),
+      el('span', { class: 'value' }, [sharesValue(sharesAmount, { compact: true, ticker })]),
     ]),
   );
   return split;
@@ -736,10 +794,11 @@ function splitBox(cashUsd, sharesAmount) {
 // Format a shares amount as "{N} <unit>" where the unit is the ticker logo
 // or the word "shares". `compact: true` uses 4 significant digits (for
 // narrow tile splits); default uses the full 4-decimal form (for totals).
-function sharesValue(n, { compact = false } = {}) {
+// `ticker` selects which stock's logo to show (defaults to the active one).
+function sharesValue(n, { compact = false, ticker = currentTickerSymbol } = {}) {
   return el('span', {}, [
     compact ? sharesCompact.format(n) : shares.format(n),
-    sharesUnit(),
+    sharesUnit(ticker),
   ]);
 }
 
@@ -796,7 +855,7 @@ function renderItem(item, symbol) {
   if (stats.children.length) bidRow.appendChild(stats);
   body.appendChild(bidRow);
   if (item.split) {
-    body.appendChild(splitBox(item.split.cashUsd, item.split.shares));
+    body.appendChild(splitBox(item.split.cashUsd, item.split.shares, item.valuationTicker));
   }
   card.appendChild(body);
   return card;
@@ -828,27 +887,13 @@ function renderEndedSection(snapshot, endedItems, totals) {
 
   totalsRoot.replaceChildren();
   if (totals) {
-    const symbol = snapshot.stock?.symbol ?? activeSymbol;
-    const displaySplit = atEnd ? totals.splitAtEnd : totals.split;
+    const display = atEnd ? totals.atEnd : totals.live;
     const sharesSuffix = atEnd ? ' (at end)' : ' (live)';
-    const stats = [
-      { label: 'Ended listings', value: integer.format(totals.listingsCount) },
-      { label: 'Bids', value: integer.format(totals.bidsCount) },
-      { label: 'Sum of final bids', value: usd.format(totals.bidUsd) },
-      { label: 'Half Cash', value: usd.format(displaySplit.cashUsd) },
-      { label: `Half Stock${sharesSuffix}`, value: sharesValue(displaySplit.shares) },
-    ];
-    for (const stat of stats) {
-      const valueEl = el('div', { class: 'stat-value' });
-      if (typeof stat.value === 'string') valueEl.textContent = stat.value;
-      else valueEl.appendChild(stat.value);
-      totalsRoot.appendChild(
-        el('div', { class: 'stat' }, [
-          el('div', { class: 'stat-label', textContent: stat.label }),
-          valueEl,
-        ]),
-      );
-    }
+    totalsRoot.appendChild(statCard('Ended listings', integer.format(totals.listingsCount)));
+    totalsRoot.appendChild(statCard('Bids', integer.format(totals.bidsCount)));
+    totalsRoot.appendChild(statCard('Sum of final bids', usd.format(totals.bidUsd)));
+    totalsRoot.appendChild(statCard('Half Cash', usd.format(display.cashUsd)));
+    totalsRoot.appendChild(sharesCard(`Half Stock${sharesSuffix}`, display.sharesByTicker));
     // When some ended items lack OHLC history, flag the gap so users know
     // the at-end aggregate is a subset.
     if (atEnd && totals.pricedAtEndCount < totals.listingsCount) {
@@ -911,7 +956,7 @@ function renderEndedItem(item) {
   body.appendChild(bidRow);
 
   if (displaySplit) {
-    body.appendChild(splitBox(displaySplit.cashUsd, displaySplit.shares));
+    body.appendChild(splitBox(displaySplit.cashUsd, displaySplit.shares, item.valuationTicker));
   }
   card.appendChild(body);
   return card;
@@ -1078,9 +1123,19 @@ function renderError(message) {
 // or sort: filters items, recomputes totals from the filtered set, then
 // renders both active and ended sections. Called on snapshot refresh and on
 // filter/sort changes.
+// Live price lookup by ticker. One quote in normal mode; one per stock in
+// "By seller" mode. Unknown tickers fall back to the primary quote's price so
+// a stray valuationTicker never zeroes a split.
+function priceForTickerFromSnapshot(snapshot) {
+  const quotes = (snapshot.stocks ?? [snapshot.stock]).filter(Boolean);
+  const byTicker = new Map(quotes.map((q) => [q.symbol, q.price ?? 0]));
+  const fallback = snapshot.stock?.price ?? 0;
+  return (ticker) => byTicker.get(ticker) ?? fallback;
+}
+
 function renderFilteredView(snapshot, bidDiff) {
   if (!snapshot) return;
-  const stockPrice = snapshot.stock?.price ?? 0;
+  const priceForTicker = priceForTickerFromSnapshot(snapshot);
   const filteredActive = filterBySeller(snapshot.items ?? []);
   // 0-bid ended auctions are unsold listings — they didn't clear and they
   // don't contribute to any of the dollar totals (composeSnapshot already
@@ -1089,15 +1144,15 @@ function renderFilteredView(snapshot, bidDiff) {
   const filteredEnded = filterBySeller(snapshot.endedItems ?? []).filter(
     (i) => (i.finalBidCount ?? 0) > 0,
   );
-  renderTotals(snapshot, aggregateActiveTotals(filteredActive, stockPrice));
-  renderBrokerage(snapshot, filteredEnded, stockPrice);
+  renderTotals(snapshot, aggregateActiveTotals(filteredActive));
+  renderBrokerage(snapshot, filteredEnded, priceForTicker);
   renderMostRecentBid(snapshot, filteredActive);
   renderItems(snapshot, filteredActive, bidDiff);
-  renderEndedSection(snapshot, filteredEnded, aggregateEndedTotals(filteredEnded, stockPrice));
+  renderEndedSection(snapshot, filteredEnded, aggregateEndedTotals(filteredEnded));
 }
 
 function updateIntroSymbol(symbol) {
-  const display = `$${symbol}`;
+  const display = symbol === MIXED_SYMBOL ? '$EBAY + $GME' : `$${symbol}`;
   setText(document.getElementById('intro-symbol-2'), display);
 }
 
@@ -1150,11 +1205,11 @@ async function refresh() {
     lastKnownGoodSymbol = activeSymbol;
     saveTickerToStorage(activeSymbol);
     // Update logo state BEFORE any render that calls sharesValue().
-    currentTickerLogoUrl = snapshot.tickerLogoUrl ?? null;
-    currentTickerSymbol = snapshot.stock?.symbol ?? activeSymbol;
+    logosEnabled = Boolean(snapshot.tickerLogoUrl);
+    currentTickerSymbol = snapshot.stock?.symbol ?? (activeSymbol === MIXED_SYMBOL ? 'EBAY' : activeSymbol);
     renderDegradedBanner(snapshot);
     renderTicker(snapshot);
-    updateIntroSymbol(snapshot.stock?.symbol ?? activeSymbol);
+    updateIntroSymbol(snapshot.valuationMode === 'mixed' ? MIXED_SYMBOL : (snapshot.stock?.symbol ?? activeSymbol));
     renderLastUpdated(snapshot);
     renderPriceSource(snapshot);
     renderFilteredView(snapshot, prevBidCounts);
@@ -1220,7 +1275,7 @@ document.querySelectorAll('.stock-btn').forEach((btn) => {
 // Custom ticker input wiring
 const tickerInput = document.getElementById('ticker-input');
 if (tickerInput) {
-  if (!SUPPORTED_SYMBOLS.includes(activeSymbol)) {
+  if (!isPillSymbol(activeSymbol)) {
     tickerInput.value = activeSymbol;
   }
   tickerInput.addEventListener('input', () => {
@@ -1244,7 +1299,7 @@ if (tickerInput) {
     }
   });
   tickerInput.addEventListener('blur', () => {
-    if (!SUPPORTED_SYMBOLS.includes(activeSymbol)) {
+    if (!isPillSymbol(activeSymbol)) {
       tickerInput.value = activeSymbol;
     } else {
       tickerInput.value = '';

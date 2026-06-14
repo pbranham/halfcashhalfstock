@@ -10,9 +10,12 @@ A Node 20 / TypeScript / Express + Postgres app that monitors **multiple eBay
 seller accounts** (`boilerpaulie` + `ryan_5050` by default; configurable via
 `EBAY_SELLER_IDS`) and converts each live auction bid into a "half cash + half
 EBAY stock" equivalent at the live market price. The dashboard has a seller
-filter (`[All] [Mine] [Ryan]`), a per-card seller badge, and a `[Live] [At
-auction end]` toggle on the ended-auctions section that revalues each closed
-auction using the EBAY close at the moment it ended. Per-card image
+filter (`[All] [Mine] [Ryan]`), a per-card seller badge, a stock control
+(`[By seller] [$EBAY] [$GME]` + custom) where **By seller** values each
+seller's auctions in their own paired stock (Ryan→$EBAY, mine→$GME) and shows
+both live prices, and a `[Live] [At auction end]` toggle on the ended-auctions
+section that revalues each closed auction using the stock close at the moment
+it ended. Per-card image
 carousels + a click-to-zoom lightbox surface every gallery photo each listing
 carries; the item-audit page also renders the seller's HTML description in a
 sandboxed iframe.
@@ -37,7 +40,7 @@ https://halfcashhalfstock-dev.onrender.com (deploys from
 - Vanilla static frontend in `public/` — no bundler, no CDNs. Browser-native
   ESM modules (`<script type="module">`) for `app.js`/`item.js`; those import
   `carousel.js` + `lightbox.js`.
-- Vitest for tests (currently **177**). ESLint + Prettier for lint/format.
+- Vitest for tests (currently **184**). ESLint + Prettier for lint/format.
 - `fast-xml-parser` (Trading API XML); no HTML parser dep (regex in
   `viewbids.ts`).
 - Render hosts both web service and Postgres. Local dev works without DB
@@ -137,7 +140,10 @@ comfortably under it:
 - **Ticker queue scoping** (`TickerQueue`): the passive price-poll refreshes
   only EBAY + GME forever, plus any custom ticker viewed within the last
   30 min. Custom tickers age out so we don't hammer Finnhub for every
-  symbol ever typed into the dropdown.
+  symbol ever typed into the dropdown. "By seller" mode (`?symbol=MIXED`)
+  fetches both EBAY + GME per snapshot, but both are already always-warm,
+  so it adds no Finnhub cost beyond what single-ticker viewing already
+  incurs (and `fetchQuote` is itself cached per symbol).
 - **Per-item details enrichment** (`createItemDetailsEnricher`): the per-
   item Browse `/item/{id}` call (gallery + description) runs only for rows
   missing details OR older than 7 days, concurrency capped at 4. After the
@@ -251,10 +257,10 @@ paid half in stock at the close-of-auction price, here's how that stock
 is doing today.
 
 - Pure frontend transform of data already on the snapshot:
-  `aggregateBrokerage(endedItems, livePrice)` in `app.js` marks each sold
-  item's `endTimeSplit` (shares + stock-half dollars at its end-time
-  close) to the live price. No server changes, no new data.
-- Respects the seller filter + selected ticker like everything else in
+  `aggregateBrokerage(endedItems, priceForTicker)` in `app.js` marks each
+  sold item's `endTimeSplit` (shares + stock-half dollars at its end-time
+  close) to the live price of its `valuationTicker`. No new data.
+- Respects the seller filter + selected stock like everything else in
   `renderFilteredView`. Hidden entirely when no sold item has an
   end-time close or the price feed is down (no dashes-on-display).
 - Four stat cards (Shares held / Cost basis / Worth today / Unrealized
@@ -265,6 +271,52 @@ is doing today.
   a footnote, mirroring the ended-totals "Missing end-time price"
   pattern. Head-to-head seller comparison was considered and CUT at the
   owner's request — don't add it back.
+- In "By seller" mode (below) "Shares held" becomes a two-row breakdown
+  ($EBAY / $GME); cost basis / worth / P&L stay single USD figures
+  (additive across stocks); per-position rows gain a `$TICKER` label.
+
+## "By seller" mixed valuation
+
+Default stock mode for the **All** seller view: instead of valuing every
+auction in one ticker, value each in its seller's paired stock — Ryan's
+(`ryan_5050`) in **$EBAY**, mine (`boilerpaulie`) in **$GME** (the same
+thematic pairing the seller-filter pill swap already used). A
+`[By seller] [$EBAY] [$GME]` pill sits at the head of the stock control;
+choosing a specific ticker overrides to single-stock for everyone (the
+old behavior). The label is "By seller"; the wire/`localStorage` value is
+`MIXED`.
+
+- **Server**: `?symbol=MIXED` is handled in `/api/snapshot`. It bypasses
+  ticker validation (MIXED isn't a real symbol), fetches a quote for every
+  ticker in `mixedValuationTickers(config)` (= `[EBAY, GME]`, default stock
+  first), and hands `composeSnapshot` a `ValuationContext`
+  (`tickerForSeller` / `quoteForTicker` / `quotes`). Each item's `split`
+  and `endTimeSplit` are then denominated in its seller ticker, and
+  end-time OHLC closes are looked up per seller ticker (cache key is
+  `${itemId}:${ticker}`). The seller→ticker map lives in `config.ts`
+  (`resolveSellerTicker`, default `boilerpaulie:GME,ryan_5050:EBAY`,
+  overridable via `EBAY_SELLER_TICKERS`).
+- **Snapshot shape** (additive — existing single-ticker callers unaffected):
+  every `ListingView`/`EndedListingView` carries `valuationTicker`; the
+  snapshot root carries `stocks: PriceQuote[]` (one entry in single mode,
+  two in mixed) and `valuationMode: 'single' | 'mixed'`. The rolled-up
+  `totals.split.shares` mixes tickers in mixed mode and is NOT rendered —
+  the dashboard regroups per-item by `valuationTicker`.
+- **Dashboard**: the header shows one live price per stock
+  (`.ticker-quotes`, inline on wide screens / stacked under 720px — owner's
+  choice). Totals + brokerage "Half Stock" / "Shares held" become one
+  shares row per ticker via `sharesCard`; cash/dollar figures stay single
+  (USD is additive). Each tile shows its seller stock's shares + logo
+  (`splitBox(cash, shares, ticker)`; per-ticker logos built on the fly via
+  `logoUrlFor(ticker)` since the proxy keys off `?symbol=`). The aggregates
+  (`aggregateActiveTotals`/`aggregateEndedTotals`/`aggregateBrokerage`) sum
+  per-item splits grouped by ticker via `sumSplitsByTicker`.
+- The **item page is unaffected** — it never read the dashboard's stored
+  ticker, and each item belongs to exactly one seller (one stock) anyway.
+- If you add a third seller, the pairing comes from `EBAY_SELLER_TICKERS`
+  (or the default map); the header/totals/brokerage already render N stock
+  rows, but the brokerage tagline hard-codes "$EBAY / $GME" copy — update
+  it there.
 
 ## Per-item gallery + description (PR #26)
 
@@ -636,7 +688,9 @@ Dashboard state lives in `localStorage`:
 - `hchs.chart.zoom` — item-page chart time lens: `full` / `start` /
   `snipe` (the old `hchs.chart.yScale` / `hchs.chart.xScale` keys are
   dead — y-log was cut in Phase 3; orphaned values are ignored)
-- `ticker` — the custom ticker selected in the input
+- `ticker` — the selected stock: `EBAY` / `GME` / a custom ticker, or
+  `MIXED` for "By seller" mode (values each seller's auctions in their own
+  stock)
 - `theme` — `dark` / `light` override (icon-toggle)
 
 ## Efficient workflows
@@ -659,6 +713,10 @@ Dashboard state lives in `localStorage`:
 - `EBAY_SELLER_IDS` — comma-separated list of sellers to poll. Defaults to
   `boilerpaulie,ryan_5050`. Legacy `EBAY_SELLER_ID` (single value) is
   accepted as a fallback when `EBAY_SELLER_IDS` is unset.
+- `EBAY_SELLER_TICKERS` — seller→stock pairing for "By seller" valuation
+  mode, `seller:TICKER,seller:TICKER`. Defaults to
+  `boilerpaulie:GME,ryan_5050:EBAY`. Sellers absent from the map fall back
+  to `STOCK_SYMBOL`.
 - `FINNHUB_API_KEY` — stock prices; the SOLE live-quote provider (Yahoo
   was cut from the chain — see "Dead code"). Without the key, startup
   still works: a stub provider fails every quote and the DbBackedCache /

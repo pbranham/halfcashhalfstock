@@ -58,9 +58,13 @@
       </button>
       <div id="last-updated" class="last-updated" aria-live="polite"></div>
       <div id="ticker" class="ticker" aria-live="polite">
-        <div class="ticker-quote">
-          <span class="ticker-symbol"></span>
-          <span class="ticker-price">—</span>
+        <!-- One .ticker-quote in normal mode; "By seller" mode renders one per
+             stock ($EBAY + $GME). renderTicker rebuilds this list each refresh. -->
+        <div class="ticker-quotes">
+          <div class="ticker-quote">
+            <span class="ticker-symbol"></span>
+            <span class="ticker-price">—</span>
+          </div>
         </div>
         <div class="ticker-meta">
           <span class="ticker-status"></span>
@@ -108,6 +112,7 @@
           </div>
           <div class="stock-bar" role="group" aria-label="Choose stock">
             <span class="sort-label">Stock:</span>
+            <button class="stock-btn" data-symbol="MIXED" title="Value each seller's auctions in their own stock — Ryan's in $EBAY, mine in $GME">By seller</button>
             <button class="stock-btn is-active" data-symbol="EBAY">$EBAY</button>
             <button class="stock-btn" data-symbol="GME">$GME</button>
             <input
