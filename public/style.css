@@ -429,105 +429,23 @@ main {
 .pnl-down {
   color: #ff7a7a;
 }
-.brokerage-statement summary {
-  cursor: pointer;
-  color: var(--fg-muted);
-  font-size: 13px;
-  list-style: none;
-  width: fit-content;
-}
-.brokerage-statement summary::before {
-  content: '\25b8 ';
-}
-.brokerage-statement[open] summary::before {
-  content: '\25be ';
-}
-.brokerage-statement summary::-webkit-details-marker {
-  display: none;
-}
-.brokerage-table {
+#brokerage-table {
   margin-top: 10px;
-  display: flex;
-  flex-direction: column;
 }
 
-/* Position detail: a stock's day-lots, each a summary line + thumbnail strip. */
-.lot {
-  padding: 10px 2px;
-  border-bottom: 1px solid var(--border);
-}
-.lot:last-child {
-  border-bottom: 0;
-}
-.lot-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 12px;
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}
-.lot-date {
-  font-weight: 700;
-  min-width: 52px;
-}
-.lot-detail {
-  color: var(--fg-muted);
-}
-.lot-pnl {
-  margin-left: auto;
-  white-space: nowrap;
-}
-.lot-thumbs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-.lot-thumb {
-  width: 34px;
-  height: 34px;
-  border-radius: 6px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  background: var(--bg-elev);
-  flex-shrink: 0;
-}
-.lot-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-.lot-thumb-more {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 34px;
-  height: 34px;
-  padding: 0 6px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  color: var(--fg-muted);
-  font-size: 12px;
-  font-weight: 600;
-}
 .brokerage-footnote {
   color: var(--fg-muted);
   font-size: 12px;
   margin: 8px 0 0;
 }
 
-.brokerage .brokerage-stats {
-  margin-bottom: 10px;
-}
-
-/* Per-stock holdings table (By-seller mode, 2+ stocks). Rows are
-   display:contents so their cells flow into this grid and align across rows. */
+/* The Other Half: ONE grid table — per-stock POSITION rows with their day-LOTS
+   as indented sub-rows in the same columns, each lot followed by a full-width
+   thumbnail strip. Rows are display:contents so cells align across the grid. */
 .brokerage-holdings {
   display: grid;
-  grid-template-columns: minmax(84px, auto) repeat(4, minmax(0, 1fr));
-  gap: 6px 16px;
+  grid-template-columns: minmax(150px, 1.6fr) repeat(5, minmax(0, 1fr));
+  gap: 4px 16px;
   align-items: baseline;
 }
 .bh-row {
@@ -547,10 +465,61 @@ main {
   color: var(--fg-muted);
   font-weight: 600;
 }
-.bh-total > span {
-  border-top: 1px solid var(--border);
-  padding-top: 6px;
+/* Position (parent) row: bold. Group separation is a full-width .bh-sep rule
+   (a per-cell border would break across the column gaps). */
+.bh-pos > span {
   font-weight: 700;
+  padding-top: 6px;
+}
+/* Lot (child) sub-row: lighter, the date indented under the stock cell. */
+.bh-lot > span {
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+.bh-row > .bh-lot-date {
+  padding-left: 22px;
+  font-weight: 600;
+}
+.bh-total > span {
+  font-weight: 700;
+  padding-top: 6px;
+}
+/* Full-width separators between stock groups + above the Total row. */
+.bh-sep {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border);
+  margin-top: 6px;
+}
+.bh-sep-strong {
+  border-top-width: 2px;
+}
+
+/* Position disclosure button in the stock cell. */
+.pos-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.pos-caret {
+  color: var(--fg-muted);
+  font-size: 11px;
+  transition: transform 0.12s ease;
+}
+.pos-caret.is-collapsed {
+  transform: rotate(-90deg);
+}
+.pos-seller {
+  color: var(--fg-muted);
+  font-weight: 400;
+  font-size: 12px;
 }
 .bh-ticker {
   display: inline-flex;
@@ -565,23 +534,33 @@ main {
   object-fit: contain;
 }
 
-/* Statement group header (By-seller mode) — one per stock above its rows. */
-.brokerage-group-head {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--fg-muted);
-  font-weight: 700;
-  margin: 14px 0 6px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--border);
+/* Full-width thumbnail strip beneath a lot — every funding auction, wrapping
+   onto as many rows as needed (no cap). */
+.lot-thumbs-row {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 0 8px 22px;
 }
-.brokerage-group-head:first-child {
-  margin-top: 0;
+.lot-thumb {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  flex-shrink: 0;
+}
+.lot-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 @media (max-width: 560px) {
-  /* Stack each stock as its own card; the header row's column labels are
+  /* Stack each row as a card with label:value lines; the header labels are
      replaced by per-cell data-label prefixes. */
   .brokerage-holdings {
     display: block;
@@ -593,30 +572,34 @@ main {
     display: grid;
     grid-template-columns: 1fr auto;
     gap: 2px 10px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border);
+    padding: 6px 0;
   }
   .bh-row > span {
     text-align: right;
+    padding: 0;
   }
   .bh-row > .bh-stock {
     grid-column: 1 / -1;
     text-align: left;
-    font-size: 15px;
     margin-bottom: 2px;
+  }
+  .bh-pos > .bh-stock {
+    font-size: 15px;
+  }
+  .bh-row > .bh-lot-date {
+    padding-left: 16px;
   }
   .bh-row > span[data-label]::before {
     content: attr(data-label);
     float: left;
     color: var(--fg-muted);
   }
-  .bh-total {
-    border-top: 2px solid var(--border);
-    margin-top: 4px;
+  .lot-thumbs-row {
+    padding-left: 16px;
   }
-  .bh-total > span {
-    border-top: none;
-    padding-top: 0;
+  /* .bh-sep keeps working as a block divider in the stacked layout. */
+  .bh-sep {
+    margin: 8px 0 4px;
   }
 }
 

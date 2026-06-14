@@ -511,8 +511,10 @@ function pnlCell(pnl, pct) {
 // One holdings-table row. Cells are a flat list that flows into the parent
 // grid (rows are `display: contents`); numeric cells carry a data-label so the
 // mobile stacked layout can prefix "Cost basis: …".
-function holdingsRow(cells, { head = false, total = false } = {}) {
-  const row = el('div', { class: `bh-row${head ? ' bh-head' : ''}${total ? ' bh-total' : ''}` });
+function holdingsRow(cells, { head = false, total = false, rowClass = '' } = {}) {
+  const row = el('div', {
+    class: `bh-row${head ? ' bh-head' : ''}${total ? ' bh-total' : ''}${rowClass ? ` ${rowClass}` : ''}`,
+  });
   for (const c of cells) {
     const span = el('span', c.cls ? { class: c.cls } : {});
     if (c.label) span.setAttribute('data-label', c.label);
@@ -523,109 +525,114 @@ function holdingsRow(cells, { head = false, total = false } = {}) {
   return row;
 }
 
-// Per-stock holdings table (By-seller mode with 2+ stocks): one row per stock
-// with its own cost/worth/P&L, then a composite Total row (shares "—" since
-// different stocks don't sum).
-function holdingsTable(byTicker, total) {
-  const wrap = el('div', { class: 'brokerage-holdings' });
-  wrap.appendChild(
-    holdingsRow(
-      [
-        { value: 'Stock', cls: 'bh-stock' },
-        { value: 'Shares' },
-        { value: 'Cost basis' },
-        { value: 'Worth today' },
-        { value: 'Unrealized P&L' },
-      ],
-      { head: true },
-    ),
-  );
-  for (const r of byTicker) {
-    wrap.appendChild(
-      holdingsRow([
-        { value: tickerCell(r.ticker), cls: 'bh-stock' },
-        { value: shares.format(r.shares), label: 'Shares' },
-        { value: moneyOrDash(r.costBasis), label: 'Cost basis' },
-        { value: moneyOrDash(r.worthNow), label: 'Worth today' },
-        { value: pnlCell(r.pnl, r.pnlPct), label: 'Unrealized P&L' },
-      ]),
-    );
+// --- Holdings table (positions + expandable lot sub-rows, one grid) ---
+// `lastBrokerageVM` + `collapsedPositions` are module-scope so the collapse
+// state survives the 30s re-render and a toggle can rebuild just the table.
+// Positions default to EXPANDED (their lots showing inline).
+let lastBrokerageVM = null;
+const collapsedPositions = new Set();
+
+const HOLDINGS_HEAD = ['Stock', 'Shares', 'Avg cost', 'Cost basis', 'Worth today', 'Unrealized P&L'];
+
+// Stock cell of a position row: a disclosure button (caret + $TICKER + logo +
+// @seller) that collapses/expands this stock's lots.
+function positionStockCell(r, collapsed) {
+  const btn = el('button', { class: 'pos-toggle', type: 'button', 'aria-expanded': collapsed ? 'false' : 'true' });
+  btn.appendChild(el('span', { class: `pos-caret${collapsed ? ' is-collapsed' : ''}`, 'aria-hidden': 'true', textContent: '▾' }));
+  btn.appendChild(tickerCell(r.ticker));
+  if (r.sellers.length) {
+    btn.appendChild(el('span', { class: 'pos-seller', textContent: r.sellers.map((s) => `@${s}`).join(', ') }));
   }
-  wrap.appendChild(
-    holdingsRow(
-      [
-        { value: 'Total', cls: 'bh-stock' },
-        { value: '—', label: 'Shares' },
-        { value: moneyOrDash(total.costBasis), label: 'Cost basis' },
-        { value: moneyOrDash(total.worthNow), label: 'Worth today' },
-        { value: pnlCell(total.pnl, total.pnlPct), label: 'Unrealized P&L' },
-      ],
-      { total: true },
-    ),
-  );
-  return wrap;
-}
-
-// One position line in the Statement. The stock is conveyed by the group
-// header (or, single-stock mode, the section itself), so the row omits it.
-// Per-stock header in the position detail: "$GME · @seller · X sh".
-function brokerageGroupHead(r) {
-  const sellerStr = r.sellers.length ? ` · ${r.sellers.map((s) => `@${s}`).join(', ')}` : '';
-  return el('div', {
-    class: 'brokerage-group-head',
-    textContent: `$${r.ticker}${sellerStr} · ${shares.format(r.shares)} sh`,
+  btn.addEventListener('click', () => {
+    if (collapsedPositions.has(r.ticker)) collapsedPositions.delete(r.ticker);
+    else collapsedPositions.add(r.ticker);
+    renderHoldings();
   });
+  return btn;
 }
 
-// Thumbnail strip of the auction items that funded a lot (each links to the
-// item page). Caps at 6 with a "+N" overflow chip so a big day stays compact.
-function lotThumbs(items) {
-  const strip = el('div', { class: 'lot-thumbs' });
-  const MAX = 6;
-  for (const it of items.slice(0, MAX)) {
+// Full-width row of ALL the lot's funding-auction thumbnails (each → item
+// page). Uncapped — it wraps onto as many rows as it needs.
+function lotThumbRow(lot) {
+  const row = el('div', { class: 'lot-thumbs-row' });
+  for (const it of lot.items) {
     const a = el('a', {
       class: 'lot-thumb',
       href: `/item.html?id=${encodeURIComponent(it.itemId)}`,
       title: it.title,
       'aria-label': it.title,
     });
-    if (it.imageUrl) {
-      a.appendChild(el('img', { src: hiResImg(it.imageUrl, 140), alt: it.title, loading: 'lazy' }));
-    }
-    strip.appendChild(a);
+    if (it.imageUrl) a.appendChild(el('img', { src: hiResImg(it.imageUrl, 140), alt: it.title, loading: 'lazy' }));
+    row.appendChild(a);
   }
-  if (items.length > MAX) {
-    strip.appendChild(el('span', { class: 'lot-thumb-more', textContent: `+${items.length - MAX}` }));
-  }
-  return strip;
+  return row;
 }
 
-// One lot (a day's purchase): a summary line + the funding items' thumbnails.
-function brokerageLot(lot) {
-  const wrap = el('div', { class: 'lot' });
-  const line = el('div', { class: 'lot-line' });
-  line.appendChild(
-    el('span', {
-      class: 'lot-date',
-      textContent: new Date(lot.dayMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-    }),
+// The unified holdings table: per-stock position rows (expandable) with their
+// day-lots as indented sub-rows in the SAME columns + a thumbnail row each,
+// then a composite Total (only when 2+ stocks). Rebuilt from lastBrokerageVM
+// on every collapse toggle.
+function renderHoldings() {
+  const container = document.getElementById('brokerage-table');
+  if (!container || !lastBrokerageVM) return;
+  const { byTicker, total } = lastBrokerageVM;
+  const grid = el('div', { class: 'brokerage-holdings' });
+  grid.appendChild(
+    holdingsRow(HOLDINGS_HEAD.map((h, i) => ({ value: h, cls: i === 0 ? 'bh-stock' : '' })), { head: true }),
   );
-  const avgStr = lot.avgPrice !== null ? ` @ ${usd.format(lot.avgPrice)}` : '';
-  const nowStr = lot.worthNow !== null ? ` · now ${usd.format(lot.worthNow)}` : '';
-  line.appendChild(
-    el('span', {
-      class: 'lot-detail',
-      textContent: `${sharesCompact.format(lot.shares)} sh${avgStr} · cost ${usd.format(lot.costBasis)}${nowStr}`,
-    }),
-  );
-  if (lot.pnl !== null) {
-    const pnl = pnlNode(lot.pnl, lot.pnlPct);
-    pnl.classList.add('lot-pnl');
-    line.appendChild(pnl);
+  for (const r of byTicker) {
+    grid.appendChild(el('div', { class: 'bh-sep' }));
+    const collapsed = collapsedPositions.has(r.ticker);
+    const avg = r.shares > 0 ? r.costBasis / r.shares : null;
+    grid.appendChild(
+      holdingsRow(
+        [
+          { value: positionStockCell(r, collapsed), cls: 'bh-stock' },
+          { value: shares.format(r.shares), label: 'Shares' },
+          { value: moneyOrDash(avg), label: 'Avg cost' },
+          { value: moneyOrDash(r.costBasis), label: 'Cost basis' },
+          { value: moneyOrDash(r.worthNow), label: 'Worth today' },
+          { value: pnlCell(r.pnl, r.pnlPct), label: 'Unrealized P&L' },
+        ],
+        { rowClass: 'bh-pos' },
+      ),
+    );
+    if (collapsed) continue;
+    for (const lot of r.lots) {
+      const dateStr = new Date(lot.dayMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      grid.appendChild(
+        holdingsRow(
+          [
+            { value: dateStr, cls: 'bh-stock bh-lot-date' },
+            { value: sharesCompact.format(lot.shares), label: 'Shares' },
+            { value: moneyOrDash(lot.avgPrice), label: 'Avg cost' },
+            { value: moneyOrDash(lot.costBasis), label: 'Cost basis' },
+            { value: moneyOrDash(lot.worthNow), label: 'Worth today' },
+            { value: pnlCell(lot.pnl, lot.pnlPct), label: 'Unrealized P&L' },
+          ],
+          { rowClass: 'bh-lot' },
+        ),
+      );
+      grid.appendChild(lotThumbRow(lot));
+    }
   }
-  wrap.appendChild(line);
-  wrap.appendChild(lotThumbs(lot.items));
-  return wrap;
+  if (byTicker.length > 1) {
+    grid.appendChild(el('div', { class: 'bh-sep bh-sep-strong' }));
+    grid.appendChild(
+      holdingsRow(
+        [
+          { value: 'Total', cls: 'bh-stock' },
+          { value: '—', label: 'Shares' },
+          { value: '—', label: 'Avg cost' },
+          { value: moneyOrDash(total.costBasis), label: 'Cost basis' },
+          { value: moneyOrDash(total.worthNow), label: 'Worth today' },
+          { value: pnlCell(total.pnl, total.pnlPct), label: 'Unrealized P&L' },
+        ],
+        { total: true },
+      ),
+    );
+  }
+  container.replaceChildren(grid);
 }
 
 function renderBrokerage(snapshot, filteredEnded, priceForTicker) {
@@ -642,9 +649,9 @@ function renderBrokerage(snapshot, filteredEnded, priceForTicker) {
     section.hidden = true;
     return;
   }
-  // Stats adapt to stock count: 2+ stocks (By-seller, unfiltered) -> the
-  // per-stock holdings table; one stock -> the compact cards. The Position
-  // detail below (lots grouped by stock) is the same either way.
+  // One unified table: per-stock position rows (the summary) with their
+  // day-lots expandable inline beneath, then a composite Total. The old
+  // separate "Position detail" section rolls into this table now.
   const multi = b.byTicker.length > 1;
   const only = b.byTicker[0];
 
@@ -655,35 +662,8 @@ function renderBrokerage(snapshot, filteredEnded, priceForTicker) {
       : `If every buyer had really paid half in $${only?.ticker ?? activeSymbol} stock, here\u2019s how that other half is doing today:`,
   );
 
-  const stats = document.getElementById('brokerage-stats');
-  stats.replaceChildren();
-  if (multi) {
-    stats.className = 'brokerage-stats';
-    stats.appendChild(holdingsTable(b.byTicker, b.total));
-  } else {
-    stats.className = 'brokerage-stats totals';
-    stats.appendChild(sharesCard('Shares held', [{ ticker: only.ticker, shares: only.shares }]));
-    stats.appendChild(statCard('Cost basis', usd.format(b.total.costBasis)));
-    stats.appendChild(statCard('Worth today', usd.format(b.total.worthNow)));
-    stats.appendChild(statCard('Unrealized P&L', pnlNode(b.total.pnl, b.total.pnlPct)));
-  }
-
-  // Position detail: one stock = one position, broken into day-lots. Each lot
-  // carries the thumbnails of the auctions that funded it.
-  const lotCount = b.byTicker.reduce((sum, r) => sum + r.lots.length, 0);
-  const auctionCount = b.positions.length;
-  setText(
-    document.getElementById('brokerage-summary'),
-    `Position detail · ${lotCount} lot${lotCount === 1 ? '' : 's'} · ${auctionCount} auction${auctionCount === 1 ? '' : 's'}`,
-  );
-
-  const table = document.getElementById('brokerage-table');
-  table.replaceChildren();
-  for (const r of b.byTicker) {
-    if (r.lots.length === 0) continue;
-    table.appendChild(brokerageGroupHead(r));
-    for (const lot of r.lots) table.appendChild(brokerageLot(lot));
-  }
+  lastBrokerageVM = b;
+  renderHoldings();
 
   const footnote = document.getElementById('brokerage-footnote');
   if (b.excludedCount > 0) {

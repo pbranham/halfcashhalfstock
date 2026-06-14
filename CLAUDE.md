@@ -286,24 +286,26 @@ header stays visible when collapsed so it's re-enableable.
 - Respects the seller filter + selected stock like everything else in
   `renderFilteredView`. Hidden entirely when no sold item has an
   end-time close or the price feed is down (no dashes-on-display).
-- **Stats adapt to stock count** (`multi = byTicker.length > 1`):
-  - **One stock** (single-ticker, or By-seller filtered to one seller):
-    four stat cards (Shares held / Cost basis / Worth today / Unrealized
-    P&L with ▲/▼ + % in `.pnl-up`/`.pnl-down`) reusing the `.totals` grid.
-  - **2+ stocks** (By-seller, unfiltered): a per-stock **holdings table**
-    (`.brokerage-holdings`, CSS-grid rows via `display:contents`,
-    `holdingsTable()`) — one row per stock with its own cost/worth/P&L,
-    then a composite **Total** row (shares `—`, since stocks don't sum).
-    Below 560px the table reflows to one stacked card per stock
-    (data-label prefixes).
-- **Position detail** (`<details>`, "Position detail · N lots · M auctions")
-  is the same in both modes: per stock a `.brokerage-group-head` ("$TICKER
-  · @seller · X sh"), then its **day-lots** (`.lot`): a summary line (date ·
-  shares @ avg price · cost · now · ±P&L) above a `.lot-thumbs` strip of the
-  funding auctions' photos (each → item page; capped at 6 + "+N"). Lots are
-  date-ordered (newest first). Items lacking an end-time close are counted
-  in a footnote. Head-to-head seller comparison was considered and CUT at
-  the owner's request — don't add it back.
+- **One unified table** (`renderHoldings()` → `.brokerage-holdings`, a CSS
+  grid; rows are `display:contents` so cells align). NOT a separate stats
+  block + "Position detail" anymore — the lots roll into the holdings table:
+  - Columns: **Stock/Date · Shares · Avg cost · Cost basis · Worth today ·
+    Unrealized P&L** (▲/▼ + % in `.pnl-up`/`.pnl-down`).
+  - Per stock: a **position row** (`.bh-pos`, bold) whose Stock cell is a
+    disclosure button (`.pos-toggle`, caret + $TICKER + logo + @seller).
+    Clicking collapses/expands that stock's lots; `collapsedPositions` (a
+    module Set, default expanded) survives the 30s re-render and a toggle
+    rebuilds just the table.
+  - Under each (when expanded): its **day-lots** as `.bh-lot` sub-rows (date
+    indented in the Stock column, same money columns), each followed by a
+    full-width `.lot-thumbs-row` of **every** funding auction's photo
+    (uncapped, wraps; each → item page). Lots are date-ordered, newest first.
+  - A composite **Total** row only when 2+ stocks (shares `—`). Full-width
+    `.bh-sep` rules separate stock groups; `.bh-sep-strong` above Total.
+  - Below 560px the grid reflows to stacked cards (data-label prefixes).
+- Items lacking an end-time close are counted in a footnote. Head-to-head
+  seller comparison was considered and CUT at the owner's request — don't
+  add it back.
 
 ## "By seller" mixed valuation
 
