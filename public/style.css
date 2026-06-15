@@ -449,6 +449,92 @@ main {
   margin-top: 10px;
 }
 
+/* Performance-over-time chart (stock value vs cost basis). */
+.brokerage-chart {
+  margin: 6px 0 4px;
+}
+.perf-readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  min-height: 34px;
+  font-variant-numeric: tabular-nums;
+}
+.perf-ro-date {
+  color: var(--fg-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.perf-ro-val {
+  font-size: 18px;
+  font-weight: 700;
+}
+.perf-chart {
+  display: block;
+  width: 100%;
+  touch-action: pan-y;
+  cursor: crosshair;
+}
+.perf-value {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.perf-value.is-down {
+  stroke: #ff7a7a;
+}
+.perf-cost {
+  fill: none;
+  stroke: var(--fg-muted);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 3;
+  opacity: 0.65;
+}
+.perf-lot {
+  fill: var(--bg);
+  stroke: var(--accent);
+  stroke-width: 1.4;
+}
+.perf-lot.is-down {
+  stroke: #ff7a7a;
+}
+.perf-now {
+  fill: var(--accent);
+}
+.perf-now.is-down {
+  fill: #ff7a7a;
+}
+.perf-guide {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.perf-scrub-dot {
+  fill: var(--fg);
+}
+.perf-axis {
+  fill: var(--fg-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.perf-axis-end {
+  text-anchor: end;
+}
+
+/* "Pending" open-auctions line — sits outside the realized position. */
+.brokerage-pending {
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
 .brokerage-footnote {
   color: var(--fg-muted);
   font-size: 12px;

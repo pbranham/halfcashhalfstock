@@ -108,6 +108,11 @@ function applyOtherHalfEnabled() {
     btn.setAttribute('aria-expanded', otherHalfEnabled ? 'true' : 'false');
   }
   syncExpandAllButton();
+  // The chart measures its container width; if it rendered while collapsed
+  // (width 0), redraw now that the body is visible and has a real width.
+  if (otherHalfEnabled && lastPerfRender && !lastPerfRender.container.hidden) {
+    renderPerformanceChart(lastPerfRender.container, lastPerfRender.series);
+  }
 }
 
 // Expand-all / collapse-all control: shown only when the brokerage is enabled
@@ -659,7 +664,251 @@ function renderHoldings() {
   syncExpandAllButton();
 }
 
-function renderBrokerage(snapshot, filteredEnded, priceForTicker) {
+// --- Performance over time (The Other Half) ---
+// Daily-close history, fetched once and reused; the chart reconstructs from it
+// client-side so the seller filter re-derives instantly.
+let ohlcHistory = null;
+let lastPerfRender = null; // { container, series } for resize re-render
+
+async function refreshOhlcHistory() {
+  try {
+    const res = await fetch(`/api/ohlc-history?tickers=${SUPPORTED_SYMBOLS.join(',')}&days=240`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return;
+    const body = await res.json();
+    ohlcHistory = body.closes ?? {};
+    // Redraw now that history is available (the chart was skipped until now).
+    if (lastSnapshot) renderFilteredView(lastSnapshot, new Map());
+  } catch {
+    /* leave ohlcHistory null; the chart just stays hidden */
+  }
+}
+
+// Reconstruct portfolio (stock-only) value over time: each lot's shares marked
+// to the daily close on every day since the earliest lot, with cost basis the
+// running sum of stock-halves, plus a final point at the live price (so the
+// last value matches the holdings table's "worth today"). Returns null when
+// there isn't enough history to draw (≥2 points needed).
+function buildPerformanceSeries(positions, history, priceForTicker, nowMs) {
+  if (!history) return null;
+  const acqs = positions
+    .filter((p) => Array.isArray(history[p.ticker]) && history[p.ticker].length > 0)
+    .map((p) => ({ t: Date.parse(p.endedAt), ticker: p.ticker, shares: p.shares, cost: p.costBasis }))
+    .filter((a) => Number.isFinite(a.t))
+    .sort((a, b) => a.t - b.t);
+  if (acqs.length === 0) return null;
+  const firstT = acqs[0].t;
+  const tickers = [...new Set(acqs.map((a) => a.ticker))];
+  const grid = [...new Set(tickers.flatMap((tk) => history[tk].map((c) => c.t)))]
+    .filter((t) => t >= firstT)
+    .sort((a, b) => a - b);
+
+  // Pointer sweep: closeNow[tk] = the most recent close at or before the
+  // current day. Monotonic since the grid is ascending.
+  const ptr = {};
+  const closeNow = {};
+  for (const tk of tickers) {
+    ptr[tk] = 0;
+    closeNow[tk] = null;
+  }
+  const advanceTo = (t) => {
+    for (const tk of tickers) {
+      const arr = history[tk];
+      while (ptr[tk] < arr.length && arr[ptr[tk]].t <= t) {
+        closeNow[tk] = arr[ptr[tk]].close;
+        ptr[tk] += 1;
+      }
+    }
+  };
+
+  const points = [];
+  let prevCost = -1;
+  for (const t of grid) {
+    advanceTo(t);
+    let value = 0;
+    let cost = 0;
+    let ok = true;
+    for (const a of acqs) {
+      if (a.t > t) break; // sorted; nothing later contributes yet
+      cost += a.cost;
+      const cl = closeNow[a.ticker];
+      if (cl == null) {
+        ok = false; // history doesn't reach this day for a held stock yet
+        break;
+      }
+      value += a.shares * cl;
+    }
+    if (!ok) continue;
+    points.push({ t, value, cost, isLot: prevCost < 0 ? true : cost > prevCost + 1e-9 });
+    prevCost = cost;
+  }
+
+  // Final live point — matches "worth today" in the holdings table.
+  let nowValue = 0;
+  let nowCost = 0;
+  let nowOk = true;
+  for (const a of acqs) {
+    nowCost += a.cost;
+    const lp = priceForTicker(a.ticker);
+    if (!(lp > 0)) {
+      nowOk = false;
+      break;
+    }
+    nowValue += a.shares * lp;
+  }
+  if (nowOk && (points.length === 0 || nowMs > points[points.length - 1].t)) {
+    points.push({ t: nowMs, value: nowValue, cost: nowCost, isLot: false, now: true });
+  }
+
+  return points.length >= 2 ? { points } : null;
+}
+
+function renderPerformanceChart(container, series) {
+  const pts = series.points;
+  const W = Math.max(320, Math.round(container.clientWidth || 700));
+  const H = 200;
+  const padL = 10;
+  const padR = 10;
+  const padT = 14;
+  const padB = 22;
+  const t0 = pts[0].t;
+  const t1 = pts[pts.length - 1].t;
+  const tSpan = Math.max(1, t1 - t0);
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const p of pts) {
+    lo = Math.min(lo, p.value, p.cost);
+    hi = Math.max(hi, p.value, p.cost);
+  }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+    container.replaceChildren();
+    return;
+  }
+  if (lo === hi) {
+    lo -= 1;
+    hi += 1;
+  }
+  const vpad = (hi - lo) * 0.08;
+  lo -= vpad;
+  hi += vpad;
+  const X = (t) => padL + ((t - t0) / tSpan) * (W - padL - padR);
+  const Y = (v) => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+  const pathD = (acc) => pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.t).toFixed(1)} ${Y(acc(p)).toFixed(1)}`).join(' ');
+
+  const NS = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs) => {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  };
+  const last = pts[pts.length - 1];
+  const down = last.value < last.cost;
+  const valueCls = `perf-value${down ? ' is-down' : ''}`;
+
+  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: String(H), class: 'perf-chart' });
+  svg.appendChild(mk('path', { class: 'perf-cost', d: pathD((p) => p.cost) }));
+  svg.appendChild(mk('path', { class: valueCls, d: pathD((p) => p.value) }));
+  for (const p of pts) {
+    if (p.isLot) svg.appendChild(mk('circle', { class: `perf-lot${down ? ' is-down' : ''}`, cx: X(p.t).toFixed(1), cy: Y(p.value).toFixed(1), r: '2.6' }));
+  }
+  svg.appendChild(mk('circle', { class: `perf-now${down ? ' is-down' : ''}`, cx: X(last.t).toFixed(1), cy: Y(last.value).toFixed(1), r: '3.2' }));
+  // y bounds + date range labels
+  svg.appendChild(mk('text', { class: 'perf-axis', x: String(padL), y: String(padT - 3) })).textContent = usd.format(hi - vpad);
+  svg.appendChild(mk('text', { class: 'perf-axis', x: String(padL), y: String(H - padB + 12) })).textContent = usd.format(lo + vpad);
+  const dRange = mk('text', { class: 'perf-axis perf-axis-end', x: String(W - padR), y: String(H - padB + 12) });
+  dRange.textContent = `${fmtChartDate(t0)} – today`;
+  svg.appendChild(dRange);
+  const guide = mk('line', { class: 'perf-guide', x1: '0', y1: String(padT), x2: '0', y2: String(H - padB), opacity: '0' });
+  const sdot = mk('circle', { class: 'perf-scrub-dot', r: '3.5', opacity: '0' });
+  svg.appendChild(guide);
+  svg.appendChild(sdot);
+
+  const readout = el('div', { class: 'perf-readout' });
+  const setReadout = (p) => {
+    const pnl = p.value - p.cost;
+    const pct = p.cost > 0 ? (pnl / p.cost) * 100 : null;
+    readout.replaceChildren(
+      el('span', { class: 'perf-ro-date', textContent: p.now ? 'Today' : fmtChartDate(p.t) }),
+      el('span', { class: 'perf-ro-val', textContent: usd.format(p.value) }),
+      pnlNode(pnl, pct),
+    );
+  };
+  setReadout(last);
+
+  const nearest = (clientX) => {
+    const rect = svg.getBoundingClientRect();
+    if (rect.width === 0) return last;
+    const px = ((clientX - rect.left) / rect.width) * W;
+    let best = pts[0];
+    let bd = Infinity;
+    for (const p of pts) {
+      const dx = Math.abs(X(p.t) - px);
+      if (dx < bd) {
+        bd = dx;
+        best = p;
+      }
+    }
+    return best;
+  };
+  const move = (clientX) => {
+    const p = nearest(clientX);
+    const px = X(p.t).toFixed(1);
+    guide.setAttribute('x1', px);
+    guide.setAttribute('x2', px);
+    guide.setAttribute('opacity', '1');
+    sdot.setAttribute('cx', px);
+    sdot.setAttribute('cy', Y(p.value).toFixed(1));
+    sdot.setAttribute('opacity', '1');
+    setReadout(p);
+  };
+  const clear = () => {
+    guide.setAttribute('opacity', '0');
+    sdot.setAttribute('opacity', '0');
+    setReadout(last);
+  };
+  svg.addEventListener('mousemove', (e) => move(e.clientX));
+  svg.addEventListener('mouseleave', clear);
+  svg.addEventListener('touchmove', (e) => {
+    if (e.touches[0]) move(e.touches[0].clientX);
+  }, { passive: true });
+  svg.addEventListener('touchend', clear);
+
+  container.replaceChildren(readout, svg);
+  lastPerfRender = { container, series };
+}
+
+function fmtChartDate(t) {
+  return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+// Open auctions aren't realized lots, so they sit OUTSIDE the position — a
+// quiet "what's pending" line: total bids + the shares they'd buy at today's
+// price if they closed now.
+function renderPendingCallout(el2, filteredActive, priceForTicker) {
+  const live = filteredActive.filter((i) => (i.bidCount ?? 0) > 0 && i.priceUsd != null);
+  if (live.length === 0) {
+    el2.hidden = true;
+    return;
+  }
+  let cost = 0;
+  const byTicker = new Map();
+  for (const i of live) {
+    const half = i.priceUsd / 2;
+    cost += half;
+    const tk = i.valuationTicker || currentTickerSymbol;
+    const lp = priceForTicker(tk);
+    if (lp > 0) byTicker.set(tk, (byTicker.get(tk) ?? 0) + half / lp);
+  }
+  const sharesStr = [...byTicker.entries()].map(([tk, sh]) => `+${sharesCompact.format(sh)} $${tk}`).join(' · ');
+  setText(
+    el2,
+    `${live.length} open auction${live.length === 1 ? '' : 's'} · ${usd.format(cost)} in bids${sharesStr ? ` → ${sharesStr} if they close now` : ''}`,
+  );
+  el2.hidden = false;
+}
+
+function renderBrokerage(snapshot, filteredEnded, filteredActive, priceForTicker) {
   const section = document.getElementById('brokerage-section');
   if (!section) return;
   const tickerOrder = (snapshot.stocks ?? [snapshot.stock]).filter(Boolean).map((q) => q.symbol);
@@ -688,6 +937,23 @@ function renderBrokerage(snapshot, filteredEnded, priceForTicker) {
 
   lastBrokerageVM = b;
   renderHoldings();
+
+  // Performance-over-time chart (hidden until daily OHLC history is available).
+  const chart = document.getElementById('brokerage-chart');
+  if (chart) {
+    const series = buildPerformanceSeries(b.positions, ohlcHistory, priceForTicker, Date.now());
+    if (series) {
+      chart.hidden = false;
+      renderPerformanceChart(chart, series);
+    } else {
+      chart.hidden = true;
+      chart.replaceChildren();
+      lastPerfRender = null;
+    }
+  }
+
+  const pending = document.getElementById('brokerage-pending');
+  if (pending) renderPendingCallout(pending, filteredActive ?? [], priceForTicker);
 
   const footnote = document.getElementById('brokerage-footnote');
   if (b.excludedCount > 0) {
@@ -1400,7 +1666,7 @@ function renderFilteredView(snapshot, bidDiff) {
     (i) => (i.finalBidCount ?? 0) > 0,
   );
   renderTotals(snapshot, aggregateActiveTotals(filteredActive));
-  renderBrokerage(snapshot, filteredEnded, priceForTicker);
+  renderBrokerage(snapshot, filteredEnded, filteredActive, priceForTicker);
   renderMostRecentBid(snapshot, filteredActive);
   renderItems(snapshot, filteredActive, bidDiff);
   renderEndedSection(snapshot, filteredEnded, aggregateEndedTotals(filteredEnded));
@@ -1751,3 +2017,17 @@ document.addEventListener('visibilitychange', () => {
 
 refresh();
 schedule();
+refreshOhlcHistory();
+
+// Re-render the performance chart on resize (it's measured to the container
+// width). Debounced; only when a chart is currently shown.
+let perfResizeTimer = null;
+window.addEventListener('resize', () => {
+  if (perfResizeTimer !== null) return;
+  perfResizeTimer = window.setTimeout(() => {
+    perfResizeTimer = null;
+    if (lastPerfRender && !lastPerfRender.container.hidden) {
+      renderPerformanceChart(lastPerfRender.container, lastPerfRender.series);
+    }
+  }, 200);
+});

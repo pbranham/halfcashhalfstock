@@ -829,6 +829,34 @@ export async function getClosingPriceAt(
   return Number.isFinite(close) ? close : null;
 }
 
+// Daily closes (interval='1d') per ticker since `since`, ascending. Powers the
+// "The Other Half" performance chart — it reconstructs portfolio value over
+// time by marking each lot's shares to the close on every day. Returns a
+// `{ ticker: [{ t: epochMs, close }] }` map; tickers with no history get [].
+export async function readDailyCloses(
+  pool: Pool,
+  tickers: readonly string[],
+  since: Date,
+): Promise<Record<string, Array<{ t: number; close: number }>>> {
+  const out: Record<string, Array<{ t: number; close: number }>> = {};
+  for (const t of tickers) out[t] = [];
+  if (tickers.length === 0) return out;
+  const res = await pool.query<{ ticker: string; period_start: Date; close: string }>(
+    `SELECT ticker, period_start, close
+     FROM ohlc_data
+     WHERE ticker = ANY($1) AND interval = '1d' AND close IS NOT NULL AND period_start >= $2
+     ORDER BY ticker, period_start ASC`,
+    [tickers as string[], since],
+  );
+  for (const row of res.rows) {
+    const close = Number(row.close);
+    if (out[row.ticker] && Number.isFinite(close)) {
+      out[row.ticker]!.push({ t: row.period_start.getTime(), close });
+    }
+  }
+  return out;
+}
+
 export async function readOhlcData(
   pool: Pool,
   ticker: string,

@@ -168,6 +168,39 @@ describe('createApp', () => {
     expect(body.error).toBe('bad_request');
   });
 
+  it('serves /api/ohlc-history daily closes per ticker from the DB', async () => {
+    const dbRows = [
+      { ticker: 'EBAY', period_start: new Date('2026-05-13T20:00:00Z'), close: '108.61' },
+      { ticker: 'GME', period_start: new Date('2026-05-13T20:00:00Z'), close: '21.77' },
+    ];
+    const db = { query: async () => ({ rows: dbRows, rowCount: dbRows.length }) };
+    await startApp({
+      config: loadConfig({}),
+      log: silentLogger(),
+      fetchListings: async () => [],
+      fetchQuote: async () => QUOTE,
+      db: db as never,
+    });
+    const res = await fetch(`${baseUrl}/api/ohlc-history?tickers=EBAY,GME&days=120`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { closes: Record<string, Array<{ t: number; close: number }>> };
+    expect(body.closes.EBAY).toEqual([{ t: Date.parse('2026-05-13T20:00:00Z'), close: 108.61 }]);
+    expect(body.closes.GME).toEqual([{ t: Date.parse('2026-05-13T20:00:00Z'), close: 21.77 }]);
+  });
+
+  it('returns empty closes from /api/ohlc-history when no DB is configured', async () => {
+    await startApp({
+      config: loadConfig({}),
+      log: silentLogger(),
+      fetchListings: async () => [],
+      fetchQuote: async () => QUOTE,
+    });
+    const res = await fetch(`${baseUrl}/api/ohlc-history?tickers=EBAY`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { closes: Record<string, unknown> };
+    expect(body.closes).toEqual({});
+  });
+
   it('snapshot tickerLogoUrl points at the local proxy when the token is set', async () => {
     await startApp({
       config: loadConfig({ LOGO_DEV_TOKEN: 'pk_test' }),

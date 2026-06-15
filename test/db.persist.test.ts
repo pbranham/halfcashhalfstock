@@ -6,6 +6,7 @@ import {
   insertBids,
   persistSnapshot,
   readBidsForItem,
+  readDailyCloses,
   reconcileItemBids,
   upsertListing,
 } from '../src/db/persist.js';
@@ -340,6 +341,48 @@ describe('getClosingPriceAt', () => {
     pool.query.mockResolvedValueOnce({ rows: [{ close: 'not-a-number' }], rowCount: 1 });
     const price = await getClosingPriceAt(pool as unknown as Pool, 'EBAY', new Date());
     expect(price).toBeNull();
+  });
+});
+
+describe('readDailyCloses', () => {
+  it('groups 1d closes per ticker as { t, close }, ascending', async () => {
+    const pool = makePool();
+    pool.query.mockResolvedValueOnce({
+      rows: [
+        { ticker: 'EBAY', period_start: new Date('2026-05-12T20:00:00Z'), close: '110.20' },
+        { ticker: 'EBAY', period_start: new Date('2026-05-13T20:00:00Z'), close: '108.61' },
+        { ticker: 'GME', period_start: new Date('2026-05-13T20:00:00Z'), close: '21.77' },
+      ],
+      rowCount: 3,
+    });
+    const since = new Date('2026-05-01T00:00:00Z');
+    const out = await readDailyCloses(pool as unknown as Pool, ['EBAY', 'GME'], since);
+    expect(out.EBAY).toEqual([
+      { t: Date.parse('2026-05-12T20:00:00Z'), close: 110.2 },
+      { t: Date.parse('2026-05-13T20:00:00Z'), close: 108.61 },
+    ]);
+    expect(out.GME).toEqual([{ t: Date.parse('2026-05-13T20:00:00Z'), close: 21.77 }]);
+    const [sql, params] = pool.query.mock.calls[0];
+    expect(sql).toMatch(/interval = '1d'/);
+    expect(sql).toMatch(/close IS NOT NULL/);
+    expect(params).toEqual([['EBAY', 'GME'], since]);
+  });
+
+  it('returns empty arrays for requested tickers with no rows; skips non-finite', async () => {
+    const pool = makePool();
+    pool.query.mockResolvedValueOnce({
+      rows: [{ ticker: 'EBAY', period_start: new Date('2026-05-13T20:00:00Z'), close: 'NaN' }],
+      rowCount: 1,
+    });
+    const out = await readDailyCloses(pool as unknown as Pool, ['EBAY', 'GME'], new Date());
+    expect(out).toEqual({ EBAY: [], GME: [] });
+  });
+
+  it('short-circuits to {} without querying when no tickers given', async () => {
+    const pool = makePool();
+    const out = await readDailyCloses(pool as unknown as Pool, [], new Date());
+    expect(out).toEqual({});
+    expect(pool.query).not.toHaveBeenCalled();
   });
 });
 

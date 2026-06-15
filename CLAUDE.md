@@ -40,7 +40,7 @@ https://halfcashhalfstock-dev.onrender.com (deploys from
 - Vanilla static frontend in `public/` — no bundler, no CDNs. Browser-native
   ESM modules (`<script type="module">`) for `app.js`/`item.js`; those import
   `carousel.js` + `lightbox.js`.
-- Vitest for tests (currently **184**). ESLint + Prettier for lint/format.
+- Vitest for tests (currently **189**). ESLint + Prettier for lint/format.
 - `fast-xml-parser` (Trading API XML); no HTML parser dep (regex in
   `viewbids.ts`).
 - Render hosts both web service and Postgres. Local dev works without DB
@@ -148,6 +148,10 @@ comfortably under it:
   item Browse `/item/{id}` call (gallery + description) runs only for rows
   missing details OR older than 7 days, concurrency capped at 4. After the
   initial backfill it amortises to near-zero/day.
+- **`/api/ohlc-history`** (The Other Half performance chart) hits no eBay
+  or Finnhub upstream at all — it reads only the retained 1d OHLC rows from
+  Postgres, is cached ~1h, and is fetched once per page load. Zero external
+  API cost.
 
 Remaining headroom (~2,000 calls/day under the 5,000 cap at the current
 30s cadence) is intentional — reserved for a future last-60s endgame
@@ -310,6 +314,30 @@ header stays visible when collapsed so it's re-enableable.
 - Items lacking an end-time close are counted in a footnote. Head-to-head
   seller comparison was considered and CUT at the owner's request — don't
   add it back.
+- **Performance chart (Phase 2)** above the table (`#brokerage-chart`): the
+  stock-only portfolio value over time vs cost basis. Pure client transform
+  — `buildPerformanceSeries(positions, ohlcHistory, priceForTicker, now)`
+  marks each lot's shares to the **daily close** on every day since the
+  earliest lot (running cost basis = Σ stock-halves), then appends a final
+  point at the **live** price so the last value matches "worth today".
+  `renderPerformanceChart` draws an SVG (measured to container width, so a
+  resize / section-expand re-renders it via `lastPerfRender`): value line
+  (accent, red when below cost), dashed cost line, lot markers, a "now"
+  dot, and a scrub readout. Hidden entirely when there isn't ≥2 points of
+  history (graceful when OHLC isn't backfilled). Daily closes come from
+  **`GET /api/ohlc-history?tickers=EBAY,GME&days=N`** (server reads the
+  retained 1d OHLC via `readDailyCloses`, cached ~1h); the dashboard fetches
+  it once (`refreshOhlcHistory`) and reconstructs client-side, so the seller
+  filter re-derives with no refetch. **Dependency:** the 1d history must
+  reach back to the earliest lot — run the `backfill_ohlc_history` admin
+  action with a range covering it (Ryan's lots start early May 2026).
+- **Pending callout** (`#brokerage-pending`): open (still-running) auctions
+  aren't realized lots, so they sit OUTSIDE the position as a quiet line —
+  total bids + the shares they'd buy at today's price if they closed now.
+  Decision locked: ended-only for the position; this is the "pending" view.
+- Decisions locked (see `~/.claude/plans/the-other-half.md`): **stock value
+  only** (cash half deferred), **ended-only** lots, eBay fees + payout lag
+  out of scope.
 
 ## "By seller" mixed valuation
 
