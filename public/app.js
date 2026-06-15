@@ -633,6 +633,10 @@ function renderHoldings() {
         ),
       );
       grid.appendChild(lotThumbRow(lot));
+      // The thumbnail strip spans all columns but the last (P&L). Drop an empty
+      // filler into that trailing cell so grid auto-flow starts the next lot on
+      // a fresh row instead of backfilling it (which shifted later lots over).
+      grid.appendChild(el('span', { class: 'bh-fill', 'aria-hidden': 'true' }));
     }
   }
   if (byTicker.length > 1) {
