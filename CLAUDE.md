@@ -40,7 +40,7 @@ https://halfcashhalfstock-dev.onrender.com (deploys from
 - Vanilla static frontend in `public/` — no bundler, no CDNs. Browser-native
   ESM modules (`<script type="module">`) for `app.js`/`item.js`; those import
   `carousel.js` + `lightbox.js`.
-- Vitest for tests (currently **189**). ESLint + Prettier for lint/format.
+- Vitest for tests (currently **191**). ESLint + Prettier for lint/format.
 - `fast-xml-parser` (Trading API XML); no HTML parser dep (regex in
   `viewbids.ts`).
 - Render hosts both web service and Postgres. Local dev works without DB
@@ -92,6 +92,7 @@ src/
   reconcile-finals.ts        reconcileFinalsForItems: GetItem → updateEndedListingFinals
   listing-poll.ts            startBackgroundListingPoll: always-on 30s loop (prod only)
   feedback-sweep.ts          hourly GetFeedback sweep → feedback table (prod only)
+  ohlc-refresh.ts            startDailyOhlcRefresh: daily 1d-OHLC pull from Yahoo (any env w/ DB)
   db/
     pool.ts                  pg.Pool factory
     migrate.ts               filesystem-driven migration runner (atomic per file)
@@ -151,7 +152,9 @@ comfortably under it:
 - **`/api/ohlc-history`** (The Other Half performance chart) hits no eBay
   or Finnhub upstream at all — it reads only the retained 1d OHLC rows from
   Postgres, is cached ~1h, and is fetched once per page load. Zero external
-  API cost.
+  API cost. The 1d rows themselves are kept current by `startDailyOhlcRefresh`
+  — a **daily** Yahoo `getHistoricalCandles('1d')` pull for the seller
+  tickers (≈2 calls/day/env), entirely separate from the eBay Browse quota.
 
 Remaining headroom (~2,000 calls/day under the 5,000 cap at the current
 30s cadence) is intentional — reserved for a future last-60s endgame
@@ -328,9 +331,13 @@ header stays visible when collapsed so it's re-enableable.
   **`GET /api/ohlc-history?tickers=EBAY,GME&days=N`** (server reads the
   retained 1d OHLC via `readDailyCloses`, cached ~1h); the dashboard fetches
   it once (`refreshOhlcHistory`) and reconstructs client-side, so the seller
-  filter re-derives with no refetch. **Dependency:** the 1d history must
-  reach back to the earliest lot — run the `backfill_ohlc_history` admin
-  action with a range covering it (Ryan's lots start early May 2026).
+  filter re-derives with no refetch. **Data:** 1d candles are kept current
+  automatically by `startDailyOhlcRefresh` (`ohlc-refresh.ts`) — a daily
+  Yahoo pull that excludes today's partial candle and runs on any env with a
+  DB, with an immediate first tick so a deploy self-heals gaps. The
+  `backfill_ohlc_history` admin action remains for an immediate fill or a
+  longer seed range. (1d candles used to grow ONLY when someone clicked that
+  button, which is why history could stall — fixed by the daily refresh.)
 - **Pending callout** (`#brokerage-pending`): open (still-running) auctions
   aren't realized lots, so they sit OUTSIDE the position as a quiet line —
   total bids + the shares they'd buy at today's price if they closed now.

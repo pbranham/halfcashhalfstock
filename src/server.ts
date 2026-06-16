@@ -45,6 +45,7 @@ import { createItemDetailsEnricher } from './item-details-enricher.js';
 import { reconcileFinalsForItems } from './reconcile-finals.js';
 import { startBackgroundListingPoll } from './listing-poll.js';
 import { startFeedbackSweep, sweepFeedbackOnce } from './feedback-sweep.js';
+import { startDailyOhlcRefresh } from './ohlc-refresh.js';
 import { fetchBidHistory } from './ebay/bid-history.js';
 import { normalizeTradingItemId } from './ebay/trading.js';
 import { parseViewbids, ViewbidsParseError } from './ebay/viewbids.js';
@@ -1419,10 +1420,26 @@ async function main(): Promise<void> {
     });
   }
 
+  // Daily 1d-OHLC refresh so the performance chart + end-time valuations stay
+  // current automatically (previously the 1d history only grew when someone
+  // clicked the backfill_ohlc_history admin action). Immediate first tick
+  // self-heals any gap on deploy. NOT prod-gated — idempotent + tiny.
+  let stopOhlcRefresh: (() => void) | null = null;
+  if (db) {
+    stopOhlcRefresh = startDailyOhlcRefresh({
+      pool: db,
+      tickers: mixedValuationTickers(config),
+      log,
+    });
+  } else {
+    log.info('daily ohlc refresh disabled', { reason: 'no database' });
+  }
+
   const shutdown = (signal: string): void => {
     log.info('shutting down', { signal });
     if (stopBackgroundPoll) stopBackgroundPoll();
     if (stopFeedbackSweep) stopFeedbackSweep();
+    if (stopOhlcRefresh) stopOhlcRefresh();
     if (tickerQueue) tickerQueue.stop();
     if (requestStats) requestStats.stop();
     server.close(() => {
