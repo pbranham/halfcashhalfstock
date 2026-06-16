@@ -26,7 +26,7 @@ import {
   persistSnapshot,
   readAdditionalImagesByItemId,
   readBidsForItem,
-  readDailyCloses,
+  readDailyOhlc,
   readEndedListings,
   readFeedbackForItem,
   readListingDetail,
@@ -292,9 +292,9 @@ export function createApp(deps: Deps): express.Express {
 
   const snapshotCache = new TtlCache<Snapshot>();
 
-  // Daily-close history for the performance chart. Changes at most once per
+  // Daily OHLC history for the performance chart. Changes at most once per
   // trading day, so a coarse TTL is plenty; keyed by `${tickers}:${days}`.
-  const ohlcHistoryCache = new TtlCache<Record<string, Array<{ t: number; close: number }>>>();
+  const ohlcHistoryCache = new TtlCache<Awaited<ReturnType<typeof readDailyOhlc>>>();
   const OHLC_HISTORY_TTL_MS = 60 * 60 * 1000;
 
   // Cache for end-time stock closes: the OHLC close for a fixed (item,
@@ -541,20 +541,20 @@ export function createApp(deps: Deps): express.Express {
       const days = Number.isFinite(rawDays) && rawDays > 0 && rawDays <= 3650 ? rawDays : 180;
 
       if (tickers.length === 0 || !deps.db) {
-        res.status(200).json({ closes: {}, asOf: new Date().toISOString() });
+        res.status(200).json({ ohlc: {}, asOf: new Date().toISOString() });
         return;
       }
       const db = deps.db;
       const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-      const closes = await ohlcHistoryCache.get(
+      const ohlc = await ohlcHistoryCache.get(
         `ohlc-history:${tickers.join(',')}:${days}`,
         OHLC_HISTORY_TTL_MS,
-        () => readDailyCloses(db, tickers, since),
+        () => readDailyOhlc(db, tickers, since),
       );
       res
         .status(200)
         .set('Cache-Control', 'public, max-age=1800')
-        .json({ closes, asOf: new Date().toISOString() });
+        .json({ ohlc, asOf: new Date().toISOString() });
     } catch (err) {
       next(err);
     }

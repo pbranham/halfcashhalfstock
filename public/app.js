@@ -665,10 +665,43 @@ function renderHoldings() {
 }
 
 // --- Performance over time (The Other Half) ---
-// Daily-close history, fetched once and reused; the chart reconstructs from it
-// client-side so the seller filter re-derives instantly.
+// Daily OHLC history, fetched once and reused; the chart reconstructs from it
+// client-side so the seller filter / chart mode re-derive instantly.
 let ohlcHistory = null;
-let lastPerfRender = null; // { container, series } for resize re-render
+let lastPerfRender = null; // { container, series } for re-render on resize/toggle
+
+const CHART_TYPES = ['area', 'line', 'candle'];
+const SERIES_COLOR = { EBAY: '#5aa9e6', GME: '#c792ea' };
+function seriesColor(key) {
+  return SERIES_COLOR[key] || '#8b93a7';
+}
+const CHART_ICONS = {
+  area:
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1 13 L5 7 L9 9 L15 3 V15 H1 Z" fill="currentColor" opacity="0.45"/><path d="M1 13 L5 7 L9 9 L15 3" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
+  line:
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><polyline points="1,12 5,6 9,9 15,2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>',
+  candle:
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><line x1="4.5" y1="1.5" x2="4.5" y2="14.5" stroke="currentColor" stroke-width="1"/><rect x="3" y="5" width="3" height="6" fill="currentColor"/><line x1="11.5" y1="3" x2="11.5" y2="13" stroke="currentColor" stroke-width="1"/><rect x="10" y="6" width="3" height="5" fill="currentColor"/></svg>',
+};
+
+let chartType = CHART_TYPES.includes(localStorage.getItem('hchs.otherHalf.chartType'))
+  ? localStorage.getItem('hchs.otherHalf.chartType')
+  : 'area';
+function setChartType(v) {
+  if (!CHART_TYPES.includes(v) || v === chartType) return;
+  chartType = v;
+  localStorage.setItem('hchs.otherHalf.chartType', v);
+  if (lastPerfRender) renderPerformanceChart(lastPerfRender.container, lastPerfRender.series);
+}
+
+// Series the legend can hide (line/area only): 'total' + each ticker.
+let hiddenSeries = new Set((localStorage.getItem('hchs.otherHalf.hidden') || '').split(',').filter(Boolean));
+function toggleSeries(key) {
+  if (hiddenSeries.has(key)) hiddenSeries.delete(key);
+  else hiddenSeries.add(key);
+  localStorage.setItem('hchs.otherHalf.hidden', [...hiddenSeries].join(','));
+  if (lastPerfRender) renderPerformanceChart(lastPerfRender.container, lastPerfRender.series);
+}
 
 async function refreshOhlcHistory() {
   try {
@@ -677,7 +710,7 @@ async function refreshOhlcHistory() {
     });
     if (!res.ok) return;
     const body = await res.json();
-    ohlcHistory = body.closes ?? {};
+    ohlcHistory = body.ohlc ?? {};
     // Redraw now that history is available (the chart was skipped until now).
     if (lastSnapshot) renderFilteredView(lastSnapshot, new Map());
   } catch {
@@ -685,38 +718,38 @@ async function refreshOhlcHistory() {
   }
 }
 
-// Reconstruct portfolio (stock-only) value over time: each lot's shares marked
-// to the daily close on every day since the earliest lot, with cost basis the
-// running sum of stock-halves, plus a final point at the live price (so the
-// last value matches the holdings table's "worth today"). Returns null when
-// there isn't enough history to draw (≥2 points needed).
+// Reconstruct the portfolio over time. For each day since the earliest lot:
+// per-stock value (active shares × that stock's close), the total, cost basis,
+// and a composite portfolio OHLC candle (shares-weighted combine of the
+// stocks' daily bars — high/low are approximations since the stocks' intraday
+// extremes don't co-occur). A final live point (no candle) ties the last value
+// to "worth today". Returns null when there isn't enough history (≥2 points).
 function buildPerformanceSeries(positions, history, priceForTicker, nowMs) {
   if (!history) return null;
-  const acqs = positions
+  const lots = positions
     .filter((p) => Array.isArray(history[p.ticker]) && history[p.ticker].length > 0)
     .map((p) => ({ t: Date.parse(p.endedAt), ticker: p.ticker, shares: p.shares, cost: p.costBasis }))
     .filter((a) => Number.isFinite(a.t))
     .sort((a, b) => a.t - b.t);
-  if (acqs.length === 0) return null;
-  const firstT = acqs[0].t;
-  const tickers = [...new Set(acqs.map((a) => a.ticker))];
+  if (lots.length === 0) return null;
+  const firstT = lots[0].t;
+  const tickers = [...new Set(lots.map((a) => a.ticker))];
   const grid = [...new Set(tickers.flatMap((tk) => history[tk].map((c) => c.t)))]
     .filter((t) => t >= firstT)
     .sort((a, b) => a - b);
 
-  // Pointer sweep: closeNow[tk] = the most recent close at or before the
-  // current day. Monotonic since the grid is ascending.
+  // Pointer sweep: bar[tk] = the most recent daily bar at or before `t`.
   const ptr = {};
-  const closeNow = {};
+  const bar = {};
   for (const tk of tickers) {
     ptr[tk] = 0;
-    closeNow[tk] = null;
+    bar[tk] = null;
   }
   const advanceTo = (t) => {
     for (const tk of tickers) {
       const arr = history[tk];
       while (ptr[tk] < arr.length && arr[ptr[tk]].t <= t) {
-        closeNow[tk] = arr[ptr[tk]].close;
+        bar[tk] = arr[ptr[tk]];
         ptr[tk] += 1;
       }
     }
@@ -726,99 +759,238 @@ function buildPerformanceSeries(positions, history, priceForTicker, nowMs) {
   let prevCost = -1;
   for (const t of grid) {
     advanceTo(t);
-    let value = 0;
+    const shares = {};
     let cost = 0;
-    let ok = true;
-    for (const a of acqs) {
+    for (const a of lots) {
       if (a.t > t) break; // sorted; nothing later contributes yet
       cost += a.cost;
-      const cl = closeNow[a.ticker];
-      if (cl == null) {
+      shares[a.ticker] = (shares[a.ticker] ?? 0) + a.shares;
+    }
+    const byTicker = {};
+    let value = 0;
+    let o = 0;
+    let h = 0;
+    let l = 0;
+    let c = 0;
+    let ok = true;
+    for (const tk of tickers) {
+      const sh = shares[tk] ?? 0;
+      if (sh === 0) {
+        byTicker[tk] = 0;
+        continue;
+      }
+      const b = bar[tk];
+      if (!b) {
         ok = false; // history doesn't reach this day for a held stock yet
         break;
       }
-      value += a.shares * cl;
+      byTicker[tk] = sh * b.c;
+      value += sh * b.c;
+      o += sh * b.o;
+      h += sh * b.h;
+      l += sh * b.l;
+      c += sh * b.c;
     }
     if (!ok) continue;
-    points.push({ t, value, cost, isLot: prevCost < 0 ? true : cost > prevCost + 1e-9 });
+    points.push({
+      t,
+      value,
+      cost,
+      byTicker,
+      candle: { o, h, l, c },
+      isLot: prevCost < 0 ? true : cost > prevCost + 1e-9,
+    });
     prevCost = cost;
   }
 
-  // Final live point — matches "worth today" in the holdings table.
+  // Final live point (line/area only; no candle) — matches "worth today".
+  const nowBy = {};
+  const nowShares = {};
   let nowValue = 0;
   let nowCost = 0;
   let nowOk = true;
-  for (const a of acqs) {
+  for (const a of lots) {
     nowCost += a.cost;
-    const lp = priceForTicker(a.ticker);
-    if (!(lp > 0)) {
+    nowShares[a.ticker] = (nowShares[a.ticker] ?? 0) + a.shares;
+  }
+  for (const tk of tickers) {
+    const sh = nowShares[tk] ?? 0;
+    const lp = priceForTicker(tk);
+    if (sh > 0 && !(lp > 0)) {
       nowOk = false;
       break;
     }
-    nowValue += a.shares * lp;
+    nowBy[tk] = sh * (lp > 0 ? lp : 0);
+    nowValue += nowBy[tk];
   }
   if (nowOk && (points.length === 0 || nowMs > points[points.length - 1].t)) {
-    points.push({ t: nowMs, value: nowValue, cost: nowCost, isLot: false, now: true });
+    points.push({ t: nowMs, value: nowValue, cost: nowCost, byTicker: nowBy, candle: null, isLot: false, now: true });
   }
 
-  return points.length >= 2 ? { points } : null;
+  return points.length >= 2 ? { points, tickers } : null;
+}
+
+// Small legend chip (line/area only) that toggles a series on/off.
+function legendChip(key, label, color) {
+  const chip = el('button', { class: `perf-chip${hiddenSeries.has(key) ? ' is-off' : ''}`, type: 'button' });
+  const sw = el('span', { class: 'perf-swatch' });
+  if (color) sw.style.background = color;
+  else sw.classList.add('perf-swatch-total');
+  chip.appendChild(sw);
+  chip.appendChild(el('span', { textContent: label }));
+  chip.addEventListener('click', () => toggleSeries(key));
+  return chip;
+}
+
+// Toolbar above the chart: legend (left, line/area only) + chart-type toggle
+// (right).
+function buildChartToolbar(tickers, type) {
+  const bar = el('div', { class: 'perf-toolbar' });
+  const legend = el('div', { class: 'perf-legend' });
+  if (type !== 'candle') {
+    legend.appendChild(legendChip('total', 'Total', null));
+    for (const tk of tickers) legend.appendChild(legendChip(tk, `$${tk}`, seriesColor(tk)));
+  }
+  bar.appendChild(legend);
+  const types = el('div', { class: 'perf-types' });
+  for (const t of CHART_TYPES) {
+    const b = el('button', { class: `perf-type-btn${t === type ? ' is-active' : ''}`, type: 'button', title: t, 'aria-label': `${t} chart` });
+    b.innerHTML = CHART_ICONS[t];
+    b.addEventListener('click', () => setChartType(t));
+    types.appendChild(b);
+  }
+  bar.appendChild(types);
+  return bar;
 }
 
 function renderPerformanceChart(container, series) {
   const pts = series.points;
+  const tickers = series.tickers;
+  const type = chartType;
   const W = Math.max(320, Math.round(container.clientWidth || 700));
   const H = 200;
   const padL = 10;
   const padR = 10;
   const padT = 14;
   const padB = 22;
-  const t0 = pts[0].t;
-  const t1 = pts[pts.length - 1].t;
-  const tSpan = Math.max(1, t1 - t0);
-  let lo = Infinity;
-  let hi = -Infinity;
-  for (const p of pts) {
-    lo = Math.min(lo, p.value, p.cost);
-    hi = Math.max(hi, p.value, p.cost);
-  }
-  if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
-    container.replaceChildren();
-    return;
-  }
-  if (lo === hi) {
-    lo -= 1;
-    hi += 1;
-  }
-  const vpad = (hi - lo) * 0.08;
-  lo -= vpad;
-  hi += vpad;
-  const X = (t) => padL + ((t - t0) / tSpan) * (W - padL - padR);
-  const Y = (v) => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
-  const pathD = (acc) => pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.t).toFixed(1)} ${Y(acc(p)).toFixed(1)}`).join(' ');
-
   const NS = 'http://www.w3.org/2000/svg';
   const mk = (tag, attrs) => {
     const e = document.createElementNS(NS, tag);
     for (const k in attrs) e.setAttribute(k, attrs[k]);
     return e;
   };
+
+  const visible = tickers.filter((tk) => !hiddenSeries.has(tk));
+  const showTotal = !hiddenSeries.has('total');
+  const candlePts = pts.filter((p) => p.candle);
+  const plot = type === 'candle' ? candlePts : pts;
+  if (plot.length < 2) {
+    container.replaceChildren(buildChartToolbar(tickers, type));
+    lastPerfRender = { container, series };
+    return;
+  }
+  const defaultPt = plot[plot.length - 1];
   const last = pts[pts.length - 1];
-  const down = last.value < last.cost;
-  const valueCls = `perf-value${down ? ' is-down' : ''}`;
+
+  const t0 = plot[0].t;
+  const t1 = plot[plot.length - 1].t;
+  const tSpan = Math.max(1, t1 - t0);
+
+  // Y domain per mode: area stacks from 0 (true proportions); line/candle zoom
+  // to the value range so the variation is legible.
+  let lo;
+  let hi;
+  if (type === 'area') {
+    lo = 0;
+    hi = 0;
+    for (const p of plot) {
+      let s = 0;
+      for (const tk of visible) s += p.byTicker[tk] ?? 0;
+      hi = Math.max(hi, s, showTotal ? p.value : 0, p.cost);
+    }
+    hi = (hi || 1) * 1.04;
+  } else if (type === 'candle') {
+    lo = Infinity;
+    hi = -Infinity;
+    for (const p of candlePts) {
+      lo = Math.min(lo, p.candle.l, p.cost);
+      hi = Math.max(hi, p.candle.h, p.cost);
+    }
+    const vp = (hi - lo) * 0.08 || 1;
+    lo -= vp;
+    hi += vp;
+  } else {
+    lo = Infinity;
+    hi = -Infinity;
+    for (const p of plot) {
+      lo = Math.min(lo, p.cost);
+      hi = Math.max(hi, p.cost);
+      if (showTotal) {
+        lo = Math.min(lo, p.value);
+        hi = Math.max(hi, p.value);
+      }
+      for (const tk of visible) {
+        lo = Math.min(lo, p.byTicker[tk] ?? 0);
+        hi = Math.max(hi, p.byTicker[tk] ?? 0);
+      }
+    }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) {
+      lo = (Number.isFinite(lo) ? lo : 0) - 1;
+      hi = (Number.isFinite(hi) ? hi : 0) + 1;
+    }
+    const vp = (hi - lo) * 0.08;
+    lo -= vp;
+    hi += vp;
+  }
+  const X = (t) => padL + ((t - t0) / tSpan) * (W - padL - padR);
+  const Y = (v) => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+  const linePath = (acc) => plot.map((p, i) => `${i ? 'L' : 'M'}${X(p.t).toFixed(1)} ${Y(acc(p)).toFixed(1)}`).join(' ');
 
   const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: String(H), class: 'perf-chart' });
-  svg.appendChild(mk('path', { class: 'perf-cost', d: pathD((p) => p.cost) }));
-  svg.appendChild(mk('path', { class: valueCls, d: pathD((p) => p.value) }));
-  for (const p of pts) {
-    if (p.isLot) svg.appendChild(mk('circle', { class: `perf-lot${down ? ' is-down' : ''}`, cx: X(p.t).toFixed(1), cy: Y(p.value).toFixed(1), r: '2.6' }));
+  svg.appendChild(mk('path', { class: 'perf-cost', d: linePath((p) => p.cost) }));
+
+  if (type === 'area') {
+    let cum = plot.map(() => 0);
+    for (const tk of visible) {
+      const lower = cum;
+      const upper = plot.map((p, i) => cum[i] + (p.byTicker[tk] ?? 0));
+      let d = '';
+      plot.forEach((p, i) => {
+        d += `${i ? 'L' : 'M'}${X(p.t).toFixed(1)} ${Y(upper[i]).toFixed(1)}`;
+      });
+      for (let i = plot.length - 1; i >= 0; i--) d += `L${X(plot[i].t).toFixed(1)} ${Y(lower[i]).toFixed(1)}`;
+      svg.appendChild(mk('path', { d: `${d}Z`, fill: seriesColor(tk), 'fill-opacity': '0.45', stroke: seriesColor(tk), 'stroke-width': '1' }));
+      cum = upper;
+    }
+    if (showTotal) svg.appendChild(mk('path', { class: 'perf-total-line', d: linePath((p) => p.value) }));
+  } else if (type === 'candle') {
+    const cw = Math.max(2, Math.min(13, ((W - padL - padR) / candlePts.length) * 0.6));
+    for (const p of candlePts) {
+      const x = X(p.t);
+      const cls = p.candle.c >= p.candle.o ? 'perf-candle-up' : 'perf-candle-down';
+      svg.appendChild(mk('line', { class: cls, x1: x.toFixed(1), x2: x.toFixed(1), y1: Y(p.candle.h).toFixed(1), y2: Y(p.candle.l).toFixed(1) }));
+      const yTop = Math.min(Y(p.candle.o), Y(p.candle.c));
+      const bh = Math.max(1, Math.abs(Y(p.candle.o) - Y(p.candle.c)));
+      svg.appendChild(mk('rect', { class: cls, x: (x - cw / 2).toFixed(1), y: yTop.toFixed(1), width: cw.toFixed(1), height: bh.toFixed(1) }));
+    }
+  } else {
+    for (const tk of visible) {
+      svg.appendChild(mk('path', { d: linePath((p) => p.byTicker[tk] ?? 0), fill: 'none', stroke: seriesColor(tk), 'stroke-width': '1.4' }));
+    }
+    if (showTotal) {
+      const down = last.value < last.cost;
+      svg.appendChild(mk('path', { class: `perf-value${down ? ' is-down' : ''}`, d: linePath((p) => p.value) }));
+      for (const p of plot) if (p.isLot) svg.appendChild(mk('circle', { class: `perf-lot${down ? ' is-down' : ''}`, cx: X(p.t).toFixed(1), cy: Y(p.value).toFixed(1), r: '2.6' }));
+      svg.appendChild(mk('circle', { class: `perf-now${down ? ' is-down' : ''}`, cx: X(last.t).toFixed(1), cy: Y(last.value).toFixed(1), r: '3.2' }));
+    }
   }
-  svg.appendChild(mk('circle', { class: `perf-now${down ? ' is-down' : ''}`, cx: X(last.t).toFixed(1), cy: Y(last.value).toFixed(1), r: '3.2' }));
-  // y bounds + date range labels
-  svg.appendChild(mk('text', { class: 'perf-axis', x: String(padL), y: String(padT - 3) })).textContent = usd.format(hi - vpad);
-  svg.appendChild(mk('text', { class: 'perf-axis', x: String(padL), y: String(H - padB + 12) })).textContent = usd.format(lo + vpad);
+
+  svg.appendChild(mk('text', { class: 'perf-axis', x: String(padL), y: String(padT - 3) })).textContent = usd.format(hi);
+  svg.appendChild(mk('text', { class: 'perf-axis', x: String(padL), y: String(H - padB + 12) })).textContent = usd.format(lo);
   const dRange = mk('text', { class: 'perf-axis perf-axis-end', x: String(W - padR), y: String(H - padB + 12) });
-  dRange.textContent = `${fmtChartDate(t0)} – today`;
+  dRange.textContent = `${fmtChartDate(t0)} – ${type === 'candle' ? fmtChartDate(t1) : 'today'}`;
   svg.appendChild(dRange);
+
   const guide = mk('line', { class: 'perf-guide', x1: '0', y1: String(padT), x2: '0', y2: String(H - padB), opacity: '0' });
   const sdot = mk('circle', { class: 'perf-scrub-dot', r: '3.5', opacity: '0' });
   svg.appendChild(guide);
@@ -834,15 +1006,15 @@ function renderPerformanceChart(container, series) {
       pnlNode(pnl, pct),
     );
   };
-  setReadout(last);
+  setReadout(defaultPt);
 
   const nearest = (clientX) => {
     const rect = svg.getBoundingClientRect();
-    if (rect.width === 0) return last;
+    if (rect.width === 0) return defaultPt;
     const px = ((clientX - rect.left) / rect.width) * W;
-    let best = pts[0];
+    let best = plot[0];
     let bd = Infinity;
-    for (const p of pts) {
+    for (const p of plot) {
       const dx = Math.abs(X(p.t) - px);
       if (dx < bd) {
         bd = dx;
@@ -862,19 +1034,19 @@ function renderPerformanceChart(container, series) {
     sdot.setAttribute('opacity', '1');
     setReadout(p);
   };
-  const clear = () => {
+  const clearScrub = () => {
     guide.setAttribute('opacity', '0');
     sdot.setAttribute('opacity', '0');
-    setReadout(last);
+    setReadout(defaultPt);
   };
   svg.addEventListener('mousemove', (e) => move(e.clientX));
-  svg.addEventListener('mouseleave', clear);
+  svg.addEventListener('mouseleave', clearScrub);
   svg.addEventListener('touchmove', (e) => {
     if (e.touches[0]) move(e.touches[0].clientX);
   }, { passive: true });
-  svg.addEventListener('touchend', clear);
+  svg.addEventListener('touchend', clearScrub);
 
-  container.replaceChildren(readout, svg);
+  container.replaceChildren(buildChartToolbar(tickers, type), readout, svg);
   lastPerfRender = { container, series };
 }
 

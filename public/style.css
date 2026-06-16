@@ -453,6 +453,86 @@ main {
 .brokerage-chart {
   margin: 6px 0 4px;
 }
+
+/* Chart toolbar: legend (left) + chart-type toggle (right). */
+.perf-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 4px;
+}
+.perf-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+.perf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 0;
+  padding: 2px 2px;
+  margin: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.perf-chip.is-off {
+  opacity: 0.4;
+}
+.perf-chip.is-off .perf-swatch {
+  background: var(--fg-muted) !important;
+}
+.perf-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.perf-swatch-total {
+  background: var(--accent);
+}
+.perf-types {
+  display: flex;
+  gap: 4px;
+}
+.perf-type-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.perf-type-btn.is-active {
+  color: var(--fg);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.perf-total-line {
+  fill: none;
+  stroke: var(--fg);
+  stroke-width: 1.6;
+  opacity: 0.8;
+}
+.perf-candle-up {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+.perf-candle-down {
+  fill: #ff7a7a;
+  stroke: #ff7a7a;
+}
+
 .perf-readout {
   display: flex;
   flex-wrap: wrap;

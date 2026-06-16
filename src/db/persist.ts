@@ -829,30 +829,57 @@ export async function getClosingPriceAt(
   return Number.isFinite(close) ? close : null;
 }
 
-// Daily closes (interval='1d') per ticker since `since`, ascending. Powers the
+export interface DailyBar {
+  t: number; // epoch ms
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+}
+
+// Daily OHLC bars (interval='1d') per ticker since `since`, ascending. Powers
 // "The Other Half" performance chart — it reconstructs portfolio value over
-// time by marking each lot's shares to the close on every day. Returns a
-// `{ ticker: [{ t: epochMs, close }] }` map; tickers with no history get [].
-export async function readDailyCloses(
+// time by marking each lot's shares to the close on every day, and combines
+// per-stock bars into composite portfolio candles. Returns a `{ ticker:
+// DailyBar[] }` map; tickers with no history get []. open/high/low fall back
+// to close when a row is missing them (defensive — Yahoo 1d rows carry full
+// OHLC, but live-poll-derived rows may not).
+export async function readDailyOhlc(
   pool: Pool,
   tickers: readonly string[],
   since: Date,
-): Promise<Record<string, Array<{ t: number; close: number }>>> {
-  const out: Record<string, Array<{ t: number; close: number }>> = {};
+): Promise<Record<string, DailyBar[]>> {
+  const out: Record<string, DailyBar[]> = {};
   for (const t of tickers) out[t] = [];
   if (tickers.length === 0) return out;
-  const res = await pool.query<{ ticker: string; period_start: Date; close: string }>(
-    `SELECT ticker, period_start, close
+  const res = await pool.query<{
+    ticker: string;
+    period_start: Date;
+    open: string | null;
+    high: string | null;
+    low: string | null;
+    close: string;
+  }>(
+    `SELECT ticker, period_start, open, high, low, close
      FROM ohlc_data
      WHERE ticker = ANY($1) AND interval = '1d' AND close IS NOT NULL AND period_start >= $2
      ORDER BY ticker, period_start ASC`,
     [tickers as string[], since],
   );
   for (const row of res.rows) {
-    const close = Number(row.close);
-    if (out[row.ticker] && Number.isFinite(close)) {
-      out[row.ticker]!.push({ t: row.period_start.getTime(), close });
-    }
+    const c = Number(row.close);
+    if (!out[row.ticker] || !Number.isFinite(c)) continue;
+    const num = (v: string | null) => {
+      const n = v === null ? NaN : Number(v);
+      return Number.isFinite(n) ? n : c;
+    };
+    out[row.ticker]!.push({
+      t: row.period_start.getTime(),
+      o: num(row.open),
+      h: num(row.high),
+      l: num(row.low),
+      c,
+    });
   }
   return out;
 }

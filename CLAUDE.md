@@ -318,20 +318,31 @@ header stays visible when collapsed so it's re-enableable.
   seller comparison was considered and CUT at the owner's request — don't
   add it back.
 - **Performance chart (Phase 2)** above the table (`#brokerage-chart`): the
-  stock-only portfolio value over time vs cost basis. Pure client transform
-  — `buildPerformanceSeries(positions, ohlcHistory, priceForTicker, now)`
-  marks each lot's shares to the **daily close** on every day since the
-  earliest lot (running cost basis = Σ stock-halves), then appends a final
-  point at the **live** price so the last value matches "worth today".
+  stock-only portfolio value over time, with a **chart-type toggle** (top
+  right: **area / line / candlestick**, persisted) and an **interactive
+  legend** (Total + each stock, click to hide, persisted; hidden in
+  candlestick mode). Pure client transform —
+  `buildPerformanceSeries(positions, ohlcHistory, priceForTicker, now)` marks
+  each lot's shares to the **daily bar** on every day since the earliest lot,
+  producing per-stock component values, the total, running cost basis (Σ
+  stock-halves), and a composite portfolio **OHLC candle** (shares-weighted
+  combine of the stocks' bars — high/low are approximations), plus a final
+  **live** point (no candle) so the last value matches "worth today".
   `renderPerformanceChart` draws an SVG (measured to container width, so a
-  resize / section-expand re-renders it via `lastPerfRender`): value line
-  (accent, red when below cost), dashed cost line, lot markers, a "now"
-  dot, and a scrub readout. Hidden entirely when there isn't ≥2 points of
-  history (graceful when OHLC isn't backfilled). Daily closes come from
-  **`GET /api/ohlc-history?tickers=EBAY,GME&days=N`** (server reads the
-  retained 1d OHLC via `readDailyCloses`, cached ~1h); the dashboard fetches
-  it once (`refreshOhlcHistory`) and reconstructs client-side, so the seller
-  filter re-derives with no refetch. **Data:** 1d candles are kept current
+  resize / section-expand / toggle re-renders via `lastPerfRender`):
+  - **area** stacks the visible stock components from 0 (true proportions) +
+    an optional total outline;
+  - **line** draws the total (accent / red below cost) + lot markers + a now
+    dot + optional per-stock component lines;
+  - **candlestick** draws composite portfolio candles (green/red), completed
+    days only.
+  All modes share a dashed cost line + a scrub readout. Hidden when <2 points
+  of history (graceful when OHLC isn't backfilled). Bars come from **`GET
+  /api/ohlc-history?tickers=EBAY,GME&days=N`** (server reads the retained 1d
+  OHLC via `readDailyOhlc` → `{ ticker: [{t,o,h,l,c}] }`, cached ~1h); the
+  dashboard fetches it once (`refreshOhlcHistory`) and reconstructs
+  client-side, so the seller filter / mode toggle re-derive with no refetch.
+  **Data:** 1d candles are kept current
   automatically by `startDailyOhlcRefresh` (`ohlc-refresh.ts`) — a daily
   Yahoo pull that excludes today's partial candle and runs on any env with a
   DB, with an immediate first tick so a deploy self-heals gaps. The
@@ -760,6 +771,10 @@ Dashboard state lives in `localStorage`:
 - `hchs.aboutOpen` — `1` / `0` for the collapsible intro
 - `hchs.otherHalf` — `on` / `off` (default on): The Other Half brokerage
   enabled (body shown) vs collapsed
+- `hchs.otherHalf.chartType` — `area` (default) / `line` / `candle`:
+  performance-chart type
+- `hchs.otherHalf.hidden` — CSV of legend series hidden on the performance
+  chart (`total`, `EBAY`, `GME`)
 - `hchs.chart.zoom` — item-page chart time lens: `full` / `start` /
   `snipe` (the old `hchs.chart.yScale` / `hchs.chart.xScale` keys are
   dead — y-log was cut in Phase 3; orphaned values are ignored)
