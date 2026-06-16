@@ -330,13 +330,19 @@ header stays visible when collapsed so it's re-enableable.
   **live** point (no candle) so the last value matches "worth today".
   `renderPerformanceChart` draws an SVG (measured to container width, so a
   resize / section-expand / toggle re-renders via `lastPerfRender`):
-  - **area** stacks the visible stock components from 0 (true proportions) +
-    an optional total outline;
+  - **area** stacks the visible stock components, **proportional within a
+    zoomed band** (NOT pinned to 0 — that compressed the variation when one
+    stock dwarfs another) + an optional total outline;
   - **line** draws the total (accent / red below cost) + lot markers + a now
     dot + optional per-stock component lines;
   - **candlestick** draws composite portfolio candles (green/red), completed
     days only.
-  All modes share a dashed cost line + a scrub readout. Hidden when <2 points
+  Everything is **legend-scoped**: the y-domain, the dashed cost line, the
+  scrub readout, and the now/value all reflect only the visible series (so
+  isolating one small stock is readable, and the total-cost line can't drag
+  the axis negative — `lo` is also clamped ≥ 0). `useTotal` = candlestick OR
+  the Total chip on OR nothing selected. Each ticker legend chip shows its
+  **close**, updating on hover. Hidden when <2 points
   of history (graceful when OHLC isn't backfilled). Bars come from **`GET
   /api/ohlc-history?tickers=EBAY,GME&days=N`** (server reads the retained 1d
   OHLC via `readDailyOhlc` → `{ ticker: [{t,o,h,l,c}] }`, cached ~1h); the

@@ -518,11 +518,19 @@ main {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+.perf-chip-price {
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
 .perf-total-line {
   fill: none;
   stroke: var(--fg);
   stroke-width: 1.6;
   opacity: 0.8;
+}
+.perf-total-fill {
+  fill: var(--accent);
+  fill-opacity: 0.3;
 }
 .perf-candle-up {
   fill: var(--accent);

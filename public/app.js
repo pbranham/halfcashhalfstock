@@ -760,13 +760,16 @@ function buildPerformanceSeries(positions, history, priceForTicker, nowMs) {
   for (const t of grid) {
     advanceTo(t);
     const shares = {};
+    const costByTicker = {};
     let cost = 0;
     for (const a of lots) {
       if (a.t > t) break; // sorted; nothing later contributes yet
       cost += a.cost;
       shares[a.ticker] = (shares[a.ticker] ?? 0) + a.shares;
+      costByTicker[a.ticker] = (costByTicker[a.ticker] ?? 0) + a.cost;
     }
     const byTicker = {};
+    const closeByTicker = {};
     let value = 0;
     let o = 0;
     let h = 0;
@@ -775,11 +778,12 @@ function buildPerformanceSeries(positions, history, priceForTicker, nowMs) {
     let ok = true;
     for (const tk of tickers) {
       const sh = shares[tk] ?? 0;
+      const b = bar[tk];
+      closeByTicker[tk] = b ? b.c : null;
       if (sh === 0) {
         byTicker[tk] = 0;
         continue;
       }
-      const b = bar[tk];
       if (!b) {
         ok = false; // history doesn't reach this day for a held stock yet
         break;
@@ -797,6 +801,8 @@ function buildPerformanceSeries(positions, history, priceForTicker, nowMs) {
       value,
       cost,
       byTicker,
+      costByTicker,
+      closeByTicker,
       candle: { o, h, l, c },
       isLot: prevCost < 0 ? true : cost > prevCost + 1e-9,
     });
@@ -805,6 +811,8 @@ function buildPerformanceSeries(positions, history, priceForTicker, nowMs) {
 
   // Final live point (line/area only; no candle) — matches "worth today".
   const nowBy = {};
+  const nowCostBy = {};
+  const nowCloseBy = {};
   const nowShares = {};
   let nowValue = 0;
   let nowCost = 0;
@@ -812,6 +820,7 @@ function buildPerformanceSeries(positions, history, priceForTicker, nowMs) {
   for (const a of lots) {
     nowCost += a.cost;
     nowShares[a.ticker] = (nowShares[a.ticker] ?? 0) + a.shares;
+    nowCostBy[a.ticker] = (nowCostBy[a.ticker] ?? 0) + a.cost;
   }
   for (const tk of tickers) {
     const sh = nowShares[tk] ?? 0;
@@ -821,37 +830,42 @@ function buildPerformanceSeries(positions, history, priceForTicker, nowMs) {
       break;
     }
     nowBy[tk] = sh * (lp > 0 ? lp : 0);
+    nowCloseBy[tk] = lp > 0 ? lp : null;
     nowValue += nowBy[tk];
   }
   if (nowOk && (points.length === 0 || nowMs > points[points.length - 1].t)) {
-    points.push({ t: nowMs, value: nowValue, cost: nowCost, byTicker: nowBy, candle: null, isLot: false, now: true });
+    points.push({
+      t: nowMs,
+      value: nowValue,
+      cost: nowCost,
+      byTicker: nowBy,
+      costByTicker: nowCostBy,
+      closeByTicker: nowCloseBy,
+      candle: null,
+      isLot: false,
+      now: true,
+    });
   }
 
   return points.length >= 2 ? { points, tickers } : null;
 }
 
-// Small legend chip (line/area only) that toggles a series on/off.
-function legendChip(key, label, color) {
+// Legend chip (line/area only): toggles a series; ticker chips carry a close
+// that updates on hover.
+function legendChip(key, label, color, priceSpan) {
   const chip = el('button', { class: `perf-chip${hiddenSeries.has(key) ? ' is-off' : ''}`, type: 'button' });
   const sw = el('span', { class: 'perf-swatch' });
   if (color) sw.style.background = color;
   else sw.classList.add('perf-swatch-total');
   chip.appendChild(sw);
   chip.appendChild(el('span', { textContent: label }));
+  if (priceSpan) chip.appendChild(priceSpan);
   chip.addEventListener('click', () => toggleSeries(key));
   return chip;
 }
 
-// Toolbar above the chart: legend (left, line/area only) + chart-type toggle
-// (right).
-function buildChartToolbar(tickers, type) {
-  const bar = el('div', { class: 'perf-toolbar' });
-  const legend = el('div', { class: 'perf-legend' });
-  if (type !== 'candle') {
-    legend.appendChild(legendChip('total', 'Total', null));
-    for (const tk of tickers) legend.appendChild(legendChip(tk, `$${tk}`, seriesColor(tk)));
-  }
-  bar.appendChild(legend);
+// Chart-type toggle buttons (area / line / candlestick).
+function buildChartTypes(type) {
   const types = el('div', { class: 'perf-types' });
   for (const t of CHART_TYPES) {
     const b = el('button', { class: `perf-type-btn${t === type ? ' is-active' : ''}`, type: 'button', title: t, 'aria-label': `${t} chart` });
@@ -859,8 +873,7 @@ function buildChartToolbar(tickers, type) {
     b.addEventListener('click', () => setChartType(t));
     types.appendChild(b);
   }
-  bar.appendChild(types);
-  return bar;
+  return types;
 }
 
 function renderPerformanceChart(container, series) {
@@ -880,89 +893,118 @@ function renderPerformanceChart(container, series) {
     return e;
   };
 
+  // Legend-driven scope: which stocks the cost line / readout / y-domain
+  // reflect. 'Total' (or candlestick) means the whole portfolio; otherwise just
+  // the visible component stocks. Hiding everything falls back to Total. This
+  // is what makes isolating a small stock readable — and stops the total-cost
+  // line from dragging the axis negative.
   const visible = tickers.filter((tk) => !hiddenSeries.has(tk));
   const showTotal = !hiddenSeries.has('total');
+  const useTotal = type === 'candle' || showTotal || visible.length === 0;
+  const sumBy = (map) => {
+    let s = 0;
+    for (const tk of visible) s += map[tk] ?? 0;
+    return s;
+  };
+  const scopeValue = (p) => (useTotal ? p.value : sumBy(p.byTicker));
+  const scopeCost = (p) => (useTotal ? p.cost : sumBy(p.costByTicker));
+  const stackTop = (p) => sumBy(p.byTicker);
+
   const candlePts = pts.filter((p) => p.candle);
   const plot = type === 'candle' ? candlePts : pts;
+
+  // Toolbar (built first so an early return still shows the controls).
+  const priceSpans = {};
+  const legend = el('div', { class: 'perf-legend' });
+  if (type !== 'candle') {
+    legend.appendChild(legendChip('total', 'Total', null, null));
+    for (const tk of tickers) {
+      const ps = el('span', { class: 'perf-chip-price' });
+      priceSpans[tk] = ps;
+      legend.appendChild(legendChip(tk, `$${tk}`, seriesColor(tk), ps));
+    }
+  }
+  const toolbar = el('div', { class: 'perf-toolbar' }, [legend, buildChartTypes(type)]);
+
   if (plot.length < 2) {
-    container.replaceChildren(buildChartToolbar(tickers, type));
+    container.replaceChildren(toolbar);
     lastPerfRender = { container, series };
     return;
   }
   const defaultPt = plot[plot.length - 1];
-  const last = pts[pts.length - 1];
-
   const t0 = plot[0].t;
   const t1 = plot[plot.length - 1].t;
   const tSpan = Math.max(1, t1 - t0);
 
-  // Y domain per mode: area stacks from 0 (true proportions); line/candle zoom
-  // to the value range so the variation is legible.
-  let lo;
-  let hi;
-  if (type === 'area') {
-    lo = 0;
-    hi = 0;
-    for (const p of plot) {
-      let s = 0;
-      for (const tk of visible) s += p.byTicker[tk] ?? 0;
-      hi = Math.max(hi, s, showTotal ? p.value : 0, p.cost);
+  // Y domain — always zoomed to what's actually drawn (area no longer pinned to
+  // 0) and clamped ≥ 0 so an isolated small stock can't push the axis negative.
+  let lo = Infinity;
+  let hi = -Infinity;
+  const fit = (v) => {
+    if (Number.isFinite(v)) {
+      lo = Math.min(lo, v);
+      hi = Math.max(hi, v);
     }
-    hi = (hi || 1) * 1.04;
-  } else if (type === 'candle') {
-    lo = Infinity;
-    hi = -Infinity;
-    for (const p of candlePts) {
-      lo = Math.min(lo, p.candle.l, p.cost);
-      hi = Math.max(hi, p.candle.h, p.cost);
+  };
+  for (const p of plot) {
+    fit(scopeCost(p));
+    if (type === 'candle') {
+      fit(p.candle.h);
+      fit(p.candle.l);
+    } else if (type === 'area') {
+      fit(stackTop(p));
+      if (useTotal) fit(p.value);
+    } else {
+      if (useTotal) fit(p.value);
+      for (const tk of visible) fit(p.byTicker[tk] ?? 0);
     }
-    const vp = (hi - lo) * 0.08 || 1;
-    lo -= vp;
-    hi += vp;
-  } else {
-    lo = Infinity;
-    hi = -Infinity;
-    for (const p of plot) {
-      lo = Math.min(lo, p.cost);
-      hi = Math.max(hi, p.cost);
-      if (showTotal) {
-        lo = Math.min(lo, p.value);
-        hi = Math.max(hi, p.value);
-      }
-      for (const tk of visible) {
-        lo = Math.min(lo, p.byTicker[tk] ?? 0);
-        hi = Math.max(hi, p.byTicker[tk] ?? 0);
-      }
-    }
-    if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) {
-      lo = (Number.isFinite(lo) ? lo : 0) - 1;
-      hi = (Number.isFinite(hi) ? hi : 0) + 1;
-    }
-    const vp = (hi - lo) * 0.08;
-    lo -= vp;
-    hi += vp;
   }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) {
+    lo = Number.isFinite(lo) ? lo - 1 : 0;
+    hi = Number.isFinite(hi) ? hi + 1 : 1;
+  }
+  const vp = (hi - lo) * 0.08;
+  lo = Math.max(0, lo - vp);
+  hi += vp;
+
   const X = (t) => padL + ((t - t0) / tSpan) * (W - padL - padR);
   const Y = (v) => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
   const linePath = (acc) => plot.map((p, i) => `${i ? 'L' : 'M'}${X(p.t).toFixed(1)} ${Y(acc(p)).toFixed(1)}`).join(' ');
 
   const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: String(H), class: 'perf-chart' });
-  svg.appendChild(mk('path', { class: 'perf-cost', d: linePath((p) => p.cost) }));
+  svg.appendChild(mk('path', { class: 'perf-cost', d: linePath((p) => scopeCost(p)) }));
 
   if (type === 'area') {
-    let cum = plot.map(() => 0);
-    for (const tk of visible) {
-      const lower = cum;
-      const upper = plot.map((p, i) => cum[i] + (p.byTicker[tk] ?? 0));
+    if (visible.length === 0) {
       let d = '';
       plot.forEach((p, i) => {
-        d += `${i ? 'L' : 'M'}${X(p.t).toFixed(1)} ${Y(upper[i]).toFixed(1)}`;
+        d += `${i ? 'L' : 'M'}${X(p.t).toFixed(1)} ${Y(p.value).toFixed(1)}`;
       });
-      for (let i = plot.length - 1; i >= 0; i--) d += `L${X(plot[i].t).toFixed(1)} ${Y(lower[i]).toFixed(1)}`;
-      svg.appendChild(mk('path', { d: `${d}Z`, fill: seriesColor(tk), 'fill-opacity': '0.45', stroke: seriesColor(tk), 'stroke-width': '1' }));
-      cum = upper;
+      d += `L${X(t1).toFixed(1)} ${Y(lo).toFixed(1)} L${X(t0).toFixed(1)} ${Y(lo).toFixed(1)} Z`;
+      svg.appendChild(mk('path', { class: 'perf-total-fill', d }));
+    } else {
+      // Stacked, but proportional within the zoomed band [lo, stackTop] so the
+      // shape stays readable when one stock dwarfs another.
+      const valAt = (p, share) => {
+        const st = stackTop(p);
+        return lo + share * (st - lo);
+      };
+      let cum = plot.map(() => 0);
+      for (const tk of visible) {
+        const next = plot.map((p, i) => {
+          const st = stackTop(p);
+          return cum[i] + (st > 0 ? (p.byTicker[tk] ?? 0) / st : 0);
+        });
+        let d = '';
+        plot.forEach((p, i) => {
+          d += `${i ? 'L' : 'M'}${X(p.t).toFixed(1)} ${Y(valAt(p, next[i])).toFixed(1)}`;
+        });
+        for (let i = plot.length - 1; i >= 0; i--) d += `L${X(plot[i].t).toFixed(1)} ${Y(valAt(plot[i], cum[i])).toFixed(1)}`;
+        svg.appendChild(mk('path', { d: `${d}Z`, fill: seriesColor(tk), 'fill-opacity': '0.45', stroke: seriesColor(tk), 'stroke-width': '1' }));
+        cum = next;
+      }
     }
-    if (showTotal) svg.appendChild(mk('path', { class: 'perf-total-line', d: linePath((p) => p.value) }));
+    if (useTotal) svg.appendChild(mk('path', { class: 'perf-total-line', d: linePath((p) => p.value) }));
   } else if (type === 'candle') {
     const cw = Math.max(2, Math.min(13, ((W - padL - padR) / candlePts.length) * 0.6));
     for (const p of candlePts) {
@@ -977,11 +1019,12 @@ function renderPerformanceChart(container, series) {
     for (const tk of visible) {
       svg.appendChild(mk('path', { d: linePath((p) => p.byTicker[tk] ?? 0), fill: 'none', stroke: seriesColor(tk), 'stroke-width': '1.4' }));
     }
-    if (showTotal) {
-      const down = last.value < last.cost;
+    if (useTotal) {
+      const lastP = plot[plot.length - 1];
+      const down = lastP.value < lastP.cost;
       svg.appendChild(mk('path', { class: `perf-value${down ? ' is-down' : ''}`, d: linePath((p) => p.value) }));
       for (const p of plot) if (p.isLot) svg.appendChild(mk('circle', { class: `perf-lot${down ? ' is-down' : ''}`, cx: X(p.t).toFixed(1), cy: Y(p.value).toFixed(1), r: '2.6' }));
-      svg.appendChild(mk('circle', { class: `perf-now${down ? ' is-down' : ''}`, cx: X(last.t).toFixed(1), cy: Y(last.value).toFixed(1), r: '3.2' }));
+      svg.appendChild(mk('circle', { class: `perf-now${down ? ' is-down' : ''}`, cx: X(lastP.t).toFixed(1), cy: Y(lastP.value).toFixed(1), r: '3.2' }));
     }
   }
 
@@ -997,14 +1040,25 @@ function renderPerformanceChart(container, series) {
   svg.appendChild(sdot);
 
   const readout = el('div', { class: 'perf-readout' });
+  const setLegendPrices = (p) => {
+    for (const tk of tickers) {
+      const sp = priceSpans[tk];
+      if (!sp) continue;
+      const cl = p.closeByTicker ? p.closeByTicker[tk] : null;
+      sp.textContent = cl != null ? usd.format(cl) : '—';
+    }
+  };
   const setReadout = (p) => {
-    const pnl = p.value - p.cost;
-    const pct = p.cost > 0 ? (pnl / p.cost) * 100 : null;
+    const v = scopeValue(p);
+    const c = scopeCost(p);
+    const pnl = v - c;
+    const pct = c > 0 ? (pnl / c) * 100 : null;
     readout.replaceChildren(
       el('span', { class: 'perf-ro-date', textContent: p.now ? 'Today' : fmtChartDate(p.t) }),
-      el('span', { class: 'perf-ro-val', textContent: usd.format(p.value) }),
+      el('span', { class: 'perf-ro-val', textContent: usd.format(v) }),
       pnlNode(pnl, pct),
     );
+    setLegendPrices(p);
   };
   setReadout(defaultPt);
 
@@ -1030,7 +1084,7 @@ function renderPerformanceChart(container, series) {
     guide.setAttribute('x2', px);
     guide.setAttribute('opacity', '1');
     sdot.setAttribute('cx', px);
-    sdot.setAttribute('cy', Y(p.value).toFixed(1));
+    sdot.setAttribute('cy', Y(scopeValue(p)).toFixed(1));
     sdot.setAttribute('opacity', '1');
     setReadout(p);
   };
@@ -1046,7 +1100,7 @@ function renderPerformanceChart(container, series) {
   }, { passive: true });
   svg.addEventListener('touchend', clearScrub);
 
-  container.replaceChildren(buildChartToolbar(tickers, type), readout, svg);
+  container.replaceChildren(toolbar, readout, svg);
   lastPerfRender = { container, series };
 }
 
