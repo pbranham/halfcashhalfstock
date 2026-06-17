@@ -670,7 +670,7 @@ function renderHoldings() {
 let ohlcHistory = null;
 let lastPerfRender = null; // { container, series } for re-render on resize/toggle
 
-const CHART_TYPES = ['area', 'line', 'candle'];
+const CHART_TYPES = ['area', 'line', 'pct', 'candle'];
 const SERIES_COLOR = { EBAY: '#5aa9e6', GME: '#c792ea' };
 function seriesColor(key) {
   return SERIES_COLOR[key] || '#8b93a7';
@@ -680,6 +680,8 @@ const CHART_ICONS = {
     '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1 13 L5 7 L9 9 L15 3 V15 H1 Z" fill="currentColor" opacity="0.45"/><path d="M1 13 L5 7 L9 9 L15 3" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
   line:
     '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><polyline points="1,12 5,6 9,9 15,2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>',
+  pct:
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><line x1="1" y1="8.5" x2="15" y2="8.5" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.6"/><polyline points="1,11 5,5 9,9 15,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>',
   candle:
     '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><line x1="4.5" y1="1.5" x2="4.5" y2="14.5" stroke="currentColor" stroke-width="1"/><rect x="3" y="5" width="3" height="6" fill="currentColor"/><line x1="11.5" y1="3" x2="11.5" y2="13" stroke="currentColor" stroke-width="1"/><rect x="10" y="6" width="3" height="5" fill="currentColor"/></svg>',
 };
@@ -909,6 +911,13 @@ function renderPerformanceChart(container, series) {
   const scopeValue = (p) => (useTotal ? p.value : sumBy(p.byTicker));
   const scopeCost = (p) => (useTotal ? p.cost : sumBy(p.costByTicker));
   const stackTop = (p) => sumBy(p.byTicker);
+  // "%" mode plots return vs cost basis (value/cost − 1), so $EBAY and $GME are
+  // comparable regardless of absolute size. ret() guards divide-by-zero;
+  // scopePlotV is the y-value of the scope's main line in the active mode.
+  const ret = (v, c) => (c > 0 ? v / c - 1 : 0);
+  const isPct = type === 'pct';
+  const compVal = (p, tk) => (isPct ? ret(p.byTicker[tk] ?? 0, p.costByTicker[tk] ?? 0) : (p.byTicker[tk] ?? 0));
+  const scopePlotV = (p) => (isPct ? ret(scopeValue(p), scopeCost(p)) : scopeValue(p));
 
   const candlePts = pts.filter((p) => p.candle);
   const plot = type === 'candle' ? candlePts : pts;
@@ -947,14 +956,20 @@ function renderPerformanceChart(container, series) {
     }
   };
   for (const p of plot) {
-    fit(scopeCost(p));
     if (type === 'candle') {
+      fit(scopeCost(p));
       fit(p.candle.h);
       fit(p.candle.l);
     } else if (type === 'area') {
+      fit(scopeCost(p));
       fit(stackTop(p));
       if (useTotal) fit(p.value);
+    } else if (isPct) {
+      fit(0); // the 0% (break-even) baseline
+      if (useTotal) fit(scopePlotV(p));
+      for (const tk of visible) fit(compVal(p, tk));
     } else {
+      fit(scopeCost(p));
       if (useTotal) fit(p.value);
       for (const tk of visible) fit(p.byTicker[tk] ?? 0);
     }
@@ -964,7 +979,8 @@ function renderPerformanceChart(container, series) {
     hi = Number.isFinite(hi) ? hi + 1 : 1;
   }
   const vp = (hi - lo) * 0.08;
-  lo = Math.max(0, lo - vp);
+  // % returns can be negative; absolute-$ axes clamp at 0.
+  lo = isPct ? lo - vp : Math.max(0, lo - vp);
   hi += vp;
 
   const X = (t) => padL + ((t - t0) / tSpan) * (W - padL - padR);
@@ -972,7 +988,13 @@ function renderPerformanceChart(container, series) {
   const linePath = (acc) => plot.map((p, i) => `${i ? 'L' : 'M'}${X(p.t).toFixed(1)} ${Y(acc(p)).toFixed(1)}`).join(' ');
 
   const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: String(H), class: 'perf-chart' });
-  svg.appendChild(mk('path', { class: 'perf-cost', d: linePath((p) => scopeCost(p)) }));
+  // Reference line: the cost-basis line in $ modes; a flat 0% (break-even) line
+  // in % mode.
+  if (isPct) {
+    svg.appendChild(mk('line', { class: 'perf-cost', x1: X(t0).toFixed(1), x2: X(t1).toFixed(1), y1: Y(0).toFixed(1), y2: Y(0).toFixed(1) }));
+  } else {
+    svg.appendChild(mk('path', { class: 'perf-cost', d: linePath((p) => scopeCost(p)) }));
+  }
 
   if (type === 'area') {
     if (visible.length === 0) {
@@ -1016,20 +1038,22 @@ function renderPerformanceChart(container, series) {
       svg.appendChild(mk('rect', { class: cls, x: (x - cw / 2).toFixed(1), y: yTop.toFixed(1), width: cw.toFixed(1), height: bh.toFixed(1) }));
     }
   } else {
+    // line OR pct — same shape; compVal/scopePlotV swap absolute $ for return.
     for (const tk of visible) {
-      svg.appendChild(mk('path', { d: linePath((p) => p.byTicker[tk] ?? 0), fill: 'none', stroke: seriesColor(tk), 'stroke-width': '1.4' }));
+      svg.appendChild(mk('path', { d: linePath((p) => compVal(p, tk)), fill: 'none', stroke: seriesColor(tk), 'stroke-width': '1.4' }));
     }
     if (useTotal) {
       const lastP = plot[plot.length - 1];
-      const down = lastP.value < lastP.cost;
-      svg.appendChild(mk('path', { class: `perf-value${down ? ' is-down' : ''}`, d: linePath((p) => p.value) }));
-      for (const p of plot) if (p.isLot) svg.appendChild(mk('circle', { class: `perf-lot${down ? ' is-down' : ''}`, cx: X(p.t).toFixed(1), cy: Y(p.value).toFixed(1), r: '2.6' }));
-      svg.appendChild(mk('circle', { class: `perf-now${down ? ' is-down' : ''}`, cx: X(lastP.t).toFixed(1), cy: Y(lastP.value).toFixed(1), r: '3.2' }));
+      const down = scopeCost(lastP) > scopeValue(lastP);
+      svg.appendChild(mk('path', { class: `perf-value${down ? ' is-down' : ''}`, d: linePath((p) => scopePlotV(p)) }));
+      for (const p of plot) if (p.isLot) svg.appendChild(mk('circle', { class: `perf-lot${down ? ' is-down' : ''}`, cx: X(p.t).toFixed(1), cy: Y(scopePlotV(p)).toFixed(1), r: '2.6' }));
+      svg.appendChild(mk('circle', { class: `perf-now${down ? ' is-down' : ''}`, cx: X(lastP.t).toFixed(1), cy: Y(scopePlotV(lastP)).toFixed(1), r: '3.2' }));
     }
   }
 
-  svg.appendChild(mk('text', { class: 'perf-axis', x: String(padL), y: String(padT - 3) })).textContent = usd.format(hi);
-  svg.appendChild(mk('text', { class: 'perf-axis', x: String(padL), y: String(H - padB + 12) })).textContent = usd.format(lo);
+  const fmtY = isPct ? (v) => `${(v * 100).toFixed(v >= 0.1 || v <= -0.1 ? 0 : 1)}%` : (v) => usd.format(v);
+  svg.appendChild(mk('text', { class: 'perf-axis', x: String(padL), y: String(padT - 3) })).textContent = fmtY(hi);
+  svg.appendChild(mk('text', { class: 'perf-axis', x: String(padL), y: String(H - padB + 12) })).textContent = fmtY(lo);
   const dRange = mk('text', { class: 'perf-axis perf-axis-end', x: String(W - padR), y: String(H - padB + 12) });
   dRange.textContent = `${fmtChartDate(t0)} – ${type === 'candle' ? fmtChartDate(t1) : 'today'}`;
   svg.appendChild(dRange);
@@ -1084,7 +1108,7 @@ function renderPerformanceChart(container, series) {
     guide.setAttribute('x2', px);
     guide.setAttribute('opacity', '1');
     sdot.setAttribute('cx', px);
-    sdot.setAttribute('cy', Y(scopeValue(p)).toFixed(1));
+    sdot.setAttribute('cy', Y(scopePlotV(p)).toFixed(1));
     sdot.setAttribute('opacity', '1');
     setReadout(p);
   };

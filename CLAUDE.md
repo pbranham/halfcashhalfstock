@@ -319,7 +319,7 @@ header stays visible when collapsed so it's re-enableable.
   add it back.
 - **Performance chart (Phase 2)** above the table (`#brokerage-chart`): the
   stock-only portfolio value over time, with a **chart-type toggle** (top
-  right: **area / line / candlestick**, persisted) and an **interactive
+  right: **area / line / % / candlestick**, persisted) and an **interactive
   legend** (Total + each stock, click to hide, persisted; hidden in
   candlestick mode). Pure client transform —
   `buildPerformanceSeries(positions, ohlcHistory, priceForTicker, now)` marks
@@ -334,7 +334,12 @@ header stays visible when collapsed so it's re-enableable.
     zoomed band** (NOT pinned to 0 — that compressed the variation when one
     stock dwarfs another) + an optional total outline;
   - **line** draws the total (accent / red below cost) + lot markers + a now
-    dot + optional per-stock component lines;
+    dot + optional per-stock component lines (absolute $);
+  - **%** is the line shape but plots **return vs cost basis**
+    (`ret = value/cost − 1`) against a flat 0% baseline + a `%` axis — so
+    differently-sized stocks are comparable on one scale (`ret`/`compVal`/
+    `scopePlotV` swap absolute $ for return; the 0-clamp is skipped so
+    negatives show);
   - **candlestick** draws composite portfolio candles (green/red), completed
     days only.
   Everything is **legend-scoped**: the y-domain, the dashed cost line, the
@@ -777,7 +782,7 @@ Dashboard state lives in `localStorage`:
 - `hchs.aboutOpen` — `1` / `0` for the collapsible intro
 - `hchs.otherHalf` — `on` / `off` (default on): The Other Half brokerage
   enabled (body shown) vs collapsed
-- `hchs.otherHalf.chartType` — `area` (default) / `line` / `candle`:
+- `hchs.otherHalf.chartType` — `area` (default) / `line` / `pct` / `candle`:
   performance-chart type
 - `hchs.otherHalf.hidden` — CSV of legend series hidden on the performance
   chart (`total`, `EBAY`, `GME`)
