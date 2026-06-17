@@ -456,7 +456,7 @@ function buildLots(positions) {
       lot.worthNow += p.worthNow;
       lot.anyWorth = true;
     }
-    lot.items.push({ itemId: p.itemId, imageUrl: p.imageUrl, title: p.title });
+    lot.items.push({ itemId: p.itemId, imageUrl: p.imageUrl, title: p.title, cost: p.costBasis, shares: p.shares });
   }
   return [...byDay.values()]
     .sort((a, b) => b.dayMs - a.dayMs)
@@ -575,20 +575,135 @@ function positionStockCell(r, collapsed) {
   return btn;
 }
 
-// Full-width row of ALL the lot's funding-auction thumbnails (each → item
-// page). Uncapped — it wraps onto as many rows as it needs.
-function lotThumbRow(lot) {
-  const row = el('div', { class: 'lot-thumbs-row' });
-  for (const it of lot.items) {
-    const a = el('a', {
-      class: 'lot-thumb',
-      href: `/item.html?id=${encodeURIComponent(it.itemId)}`,
-      title: it.title,
-      'aria-label': it.title,
-    });
-    if (it.imageUrl) a.appendChild(el('img', { src: hiResImg(it.imageUrl, 140), alt: it.title, loading: 'lazy' }));
-    row.appendChild(a);
+// Squarified treemap (Bruls et al.): lay `items` (each {weight, ...}) into a
+// W×H rectangle so each tile's AREA ∝ weight and tiles stay near-square — which
+// keeps the auction photos inside them readable (object-fit: contain, no crop).
+// Returns [{ it, x, y, w, h }] in the same W×H units.
+function squarify(items, W, H) {
+  const nodes = items.filter((it) => it.weight > 0).map((it) => ({ it, area: 0 }));
+  const total = nodes.reduce((s, n) => s + n.it.weight, 0);
+  if (total <= 0 || W <= 0 || H <= 0) return [];
+  const scale = (W * H) / total;
+  for (const n of nodes) n.area = n.it.weight * scale;
+
+  const rowWorst = (i, end, rowArea, short) => {
+    const thick = rowArea / short;
+    let worst = 0;
+    for (let k = i; k < end; k++) {
+      const len = (nodes[k].area / rowArea) * short;
+      if (len <= 0 || thick <= 0) return Infinity;
+      worst = Math.max(worst, thick / len, len / thick);
+    }
+    return worst;
+  };
+
+  const out = [];
+  let x = 0;
+  let y = 0;
+  let w = W;
+  let h = H;
+  let i = 0;
+  while (i < nodes.length && w > 0 && h > 0) {
+    const short = Math.min(w, h);
+    let rowArea = nodes[i].area;
+    let end = i + 1;
+    let worst = rowWorst(i, end, rowArea, short);
+    while (end < nodes.length) {
+      const a2 = rowArea + nodes[end].area;
+      const w2 = rowWorst(i, end + 1, a2, short);
+      if (w2 > worst) break;
+      rowArea = a2;
+      worst = w2;
+      end += 1;
+    }
+    const thick = rowArea / short;
+    let pos = 0;
+    for (let k = i; k < end; k++) {
+      const len = (nodes[k].area / rowArea) * short;
+      out.push(
+        w >= h
+          ? { it: nodes[k].it, x, y: y + pos, w: thick, h: len }
+          : { it: nodes[k].it, x: x + pos, y, w: len, h: thick },
+      );
+      pos += len;
+    }
+    if (w >= h) {
+      x += thick;
+      w -= thick;
+    } else {
+      y += thick;
+      h -= thick;
+    }
+    i = end;
   }
+  return out;
+}
+
+// A lot's funding auctions as a treemap: each tile's area ∝ that item's buying
+// power (its half-stock dollars). The photo sits inside (contain, uncropped);
+// big-enough tiles caption the shares. Tiny slices below MIN_SHARE collapse
+// into one "+N" tile so the layout stays clean. Resolution-independent — tiles
+// are positioned in %, the container's aspect-ratio fixes the shape.
+function lotTreemapRow(lot) {
+  const row = el('div', { class: 'lot-treemap-row' });
+  const items = [...lot.items].filter((it) => it.cost > 0).sort((a, b) => b.cost - a.cost);
+  if (items.length === 0) return row;
+  // A one-item lot is 100% that item — a full-width treemap band would just be
+  // one heavily letterboxed photo, so show a single natural thumbnail instead.
+  if (items.length === 1) {
+    const it = items[0];
+    const a = el('a', { class: 'tm-single', href: `/item.html?id=${encodeURIComponent(it.itemId)}`, title: `${it.title} · ${sharesCompact.format(it.shares)} sh · ${usd.format(it.cost)}`, 'aria-label': it.title });
+    if (it.imageUrl) a.appendChild(el('img', { src: hiResImg(it.imageUrl, 200), alt: it.title, loading: 'lazy' }));
+    a.appendChild(el('span', { class: 'tm-single-label', textContent: `${sharesCompact.format(it.shares)} sh` }));
+    row.appendChild(a);
+    return row;
+  }
+  const total = items.reduce((s, it) => s + it.cost, 0);
+
+  const MIN_SHARE = 0.025;
+  const MAX_TILES = 14;
+  const shown = [];
+  const others = [];
+  for (const it of items) {
+    if (shown.length < MAX_TILES - 1 && it.cost / total >= MIN_SHARE) shown.push(it);
+    else others.push(it);
+  }
+  if (others.length === 1) shown.push(others.pop());
+  const tiles = shown.map((it) => ({ weight: it.cost, item: it }));
+  if (others.length > 0) tiles.push({ weight: others.reduce((s, it) => s + it.cost, 0), others });
+
+  const n = tiles.length;
+  // Wider band for few tiles, squarer (taller) as the count grows so tiles
+  // don't get too stretched. Clamped to keep the band a reasonable height.
+  const aspect = Math.max(1.9, Math.min(2.8, 2.9 - n * 0.1));
+  const tm = el('div', { class: 'lot-treemap' });
+  tm.style.aspectRatio = String(aspect);
+
+  for (const r of squarify(tiles, aspect, 1)) {
+    const left = (r.x / aspect) * 100;
+    const wpc = (r.w / aspect) * 100;
+    const top = r.y * 100;
+    const hpc = r.h * 100;
+    if (r.it.others) {
+      const cell = el('div', { class: 'tm-tile tm-more', title: `${r.it.others.length} smaller items` });
+      cell.style.cssText = `left:${left}%;top:${top}%;width:${wpc}%;height:${hpc}%`;
+      cell.appendChild(el('span', { textContent: `+${r.it.others.length}` }));
+      tm.appendChild(cell);
+    } else {
+      const it = r.it.item;
+      const cell = el('a', {
+        class: 'tm-tile',
+        href: `/item.html?id=${encodeURIComponent(it.itemId)}`,
+        title: `${it.title} · ${sharesCompact.format(it.shares)} sh · ${usd.format(it.cost)}`,
+        'aria-label': it.title,
+      });
+      cell.style.cssText = `left:${left}%;top:${top}%;width:${wpc}%;height:${hpc}%`;
+      if (it.imageUrl) cell.appendChild(el('img', { class: 'tm-img', src: hiResImg(it.imageUrl, 300), alt: it.title, loading: 'lazy' }));
+      if (wpc > 13 && hpc > 24) cell.appendChild(el('span', { class: 'tm-label', textContent: `${sharesCompact.format(it.shares)} sh` }));
+      tm.appendChild(cell);
+    }
+  }
+  row.appendChild(tm);
   return row;
 }
 
@@ -637,7 +752,7 @@ function renderHoldings() {
           { rowClass: 'bh-lot' },
         ),
       );
-      grid.appendChild(lotThumbRow(lot));
+      grid.appendChild(lotTreemapRow(lot));
       // The thumbnail strip spans all columns but the last (P&L). Drop an empty
       // filler into that trailing cell so grid auto-flow starts the next lot on
       // a fresh row instead of backfilling it (which shifted later lots over).

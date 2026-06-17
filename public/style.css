@@ -727,26 +727,73 @@ main {
 /* Thumbnail strip beneath a lot — every funding auction, wrapping onto as many
    rows as needed (no cap). Spans all columns EXCEPT the last (P&L), so photos
    never bleed under the P&L numbers. */
-.lot-thumbs-row {
+.lot-treemap-row {
   grid-column: 1 / -2;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 2px 0 8px 22px;
+  padding: 2px 0 10px 22px;
 }
-.lot-thumb {
-  width: 34px;
-  height: 34px;
-  border-radius: 6px;
+/* Squarified treemap of a lot's funding auctions — tile area ∝ buying power.
+   Tiles are positioned in % against the container's fixed aspect-ratio, so the
+   whole thing scales with width without re-layout. */
+.lot-treemap {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+}
+.tm-tile {
+  position: absolute;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 2px solid var(--bg);
+  border-radius: 5px;
   background: var(--bg-elev);
-  flex-shrink: 0;
+  text-decoration: none;
+  color: var(--fg);
 }
-.lot-thumb img {
+.tm-img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain; /* whole photo visible, never cropped or stretched */
+  display: block;
+}
+.tm-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 8px 3px 2px;
+  font-size: 10px;
+  text-align: center;
+  color: #fff;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.tm-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-card);
+  color: var(--fg-muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+/* One-item lot: a single natural thumbnail + its shares. */
+.tm-single {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  text-decoration: none;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.tm-single img {
+  width: 84px;
+  height: 84px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elev);
   display: block;
 }
 
@@ -785,8 +832,11 @@ main {
     float: left;
     color: var(--fg-muted);
   }
-  .lot-thumbs-row {
+  .lot-treemap-row {
     padding-left: 16px;
+  }
+  .lot-treemap {
+    max-width: none;
   }
   /* .bh-sep keeps working as a block divider in the stacked layout. */
   .bh-sep {

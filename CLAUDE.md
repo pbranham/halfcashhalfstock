@@ -308,9 +308,17 @@ header stays visible when collapsed so it's re-enableable.
     shown only when enabled + 2+ stocks.
   - Under each (when expanded): its **day-lots** as `.bh-lot` sub-rows (date
     indented in the Stock column, same money columns), each followed by a
-    `.lot-thumbs-row` of **every** funding auction's photo (uncapped, wraps;
-    each → item page; spans all columns except the last so photos never bleed
-    under the P&L). Lots are date-ordered, newest first.
+    `.lot-treemap-row` — a **squarified treemap** (`squarify()`,
+    `lotTreemapRow()`) of the funding auctions where each tile's AREA ∝ that
+    item's buying power (its half-stock $). Photos sit inside via
+    `object-fit: contain` (whole photo, never cropped/stretched — owner's
+    hard requirement); big-enough tiles caption the shares; tiny slices
+    (< 2.5%) collapse into one `+N` tile. Tiles are positioned in % against
+    the container's `aspect-ratio`, so it scales with width with no
+    re-layout. A one-item lot shows a single `.tm-single` thumbnail instead.
+    Each tile → item page. Lots are date-ordered, newest first. (Replaced the
+    equal-size thumbnail strip — see `~/.claude/plans/the-other-half.md`;
+    NEXT: per-position treemap when a position is collapsed.)
   - A composite **Total** row only when 2+ stocks (shares `—`). Full-width
     `.bh-sep` rules separate stock groups; `.bh-sep-strong` above Total.
   - Below 560px the grid reflows to stacked cards (data-label prefixes).
