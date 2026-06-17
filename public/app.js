@@ -670,7 +670,9 @@ function renderHoldings() {
 let ohlcHistory = null;
 let lastPerfRender = null; // { container, series } for re-render on resize/toggle
 
-const CHART_TYPES = ['area', 'line', 'pct', 'candle'];
+// The absolute "line" chart was dropped — it read poorly on its own; "pct"
+// (relative return) replaced it. 'line' is migrated to 'pct' on load below.
+const CHART_TYPES = ['area', 'pct', 'candle'];
 const SERIES_COLOR = { EBAY: '#5aa9e6', GME: '#c792ea' };
 function seriesColor(key) {
   return SERIES_COLOR[key] || '#8b93a7';
@@ -678,17 +680,17 @@ function seriesColor(key) {
 const CHART_ICONS = {
   area:
     '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1 13 L5 7 L9 9 L15 3 V15 H1 Z" fill="currentColor" opacity="0.45"/><path d="M1 13 L5 7 L9 9 L15 3" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
-  line:
-    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><polyline points="1,12 5,6 9,9 15,2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>',
   pct:
     '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><line x1="1" y1="8.5" x2="15" y2="8.5" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.6"/><polyline points="1,11 5,5 9,9 15,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>',
   candle:
     '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><line x1="4.5" y1="1.5" x2="4.5" y2="14.5" stroke="currentColor" stroke-width="1"/><rect x="3" y="5" width="3" height="6" fill="currentColor"/><line x1="11.5" y1="3" x2="11.5" y2="13" stroke="currentColor" stroke-width="1"/><rect x="10" y="6" width="3" height="5" fill="currentColor"/></svg>',
 };
 
-let chartType = CHART_TYPES.includes(localStorage.getItem('hchs.otherHalf.chartType'))
-  ? localStorage.getItem('hchs.otherHalf.chartType')
-  : 'area';
+let chartType = (() => {
+  const v = localStorage.getItem('hchs.otherHalf.chartType');
+  if (v === 'line') return 'pct'; // migrate the removed line chart to %
+  return CHART_TYPES.includes(v) ? v : 'area';
+})();
 function setChartType(v) {
   if (!CHART_TYPES.includes(v) || v === chartType) return;
   chartType = v;
