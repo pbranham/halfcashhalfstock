@@ -724,21 +724,27 @@ main {
   object-fit: contain;
 }
 
-/* Thumbnail strip beneath a lot — every funding auction, wrapping onto as many
-   rows as needed (no cap). Spans all columns EXCEPT the last (P&L), so photos
-   never bleed under the P&L numbers. */
-.lot-treemap-row {
-  grid-column: 1 / -2;
-  padding: 2px 0 10px 22px;
+/* Per-position image-treemap band, shown between a position row and its lot
+   sub-rows. Spans the FULL width (the whole table) — the per-ticker map wants
+   the room. */
+.pos-treemap-row {
+  grid-column: 1 / -1;
+  padding: 4px 0 14px 22px;
 }
-/* Squarified treemap of a lot's funding auctions — one SVG, tile area ∝ buying
-   power. SVG + viewBox so geometry is deterministic and scales cleanly at any
-   width (the old CSS-positioned divs overlapped on Safari). */
-.lot-treemap {
+/* Squarified treemap of a position's funding auctions (d3-hierarchy layout) —
+   one SVG, tile area ∝ buying power. SVG + viewBox so geometry is deterministic
+   and scales cleanly at any width (the old CSS-positioned divs overlapped on
+   Safari). The box grows taller with item count rather than shrinking tiles. */
+.pos-treemap {
   display: block;
   width: 100%;
   height: auto;
-  max-width: 660px;
+  max-width: 900px;
+}
+/* Blurred, dimmed cover of the same photo behind a big tile's sharp (uncropped)
+   image, so the letterbox bars read as intentional rather than dead space. */
+.tm-blur {
+  opacity: 0.45;
 }
 .tm-rect {
   fill: var(--bg-elev);
@@ -786,6 +792,11 @@ a.tm-tile:hover .tm-rect,
 .tm-toggle:hover {
   color: var(--accent);
 }
+.tm-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
 /* One-item lot: a single natural thumbnail + its shares. */
 .tm-single {
   display: inline-flex;
@@ -798,8 +809,8 @@ a.tm-tile:hover .tm-rect,
   font-variant-numeric: tabular-nums;
 }
 .tm-single img {
-  width: 84px;
-  height: 84px;
+  width: 160px;
+  height: 160px;
   object-fit: contain;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -842,10 +853,10 @@ a.tm-tile:hover .tm-rect,
     float: left;
     color: var(--fg-muted);
   }
-  .lot-treemap-row {
+  .pos-treemap-row {
     padding-left: 16px;
   }
-  .lot-treemap {
+  .pos-treemap {
     max-width: none;
   }
   /* .bh-sep keeps working as a block divider in the stacked layout. */

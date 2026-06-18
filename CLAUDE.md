@@ -39,10 +39,17 @@ https://halfcashhalfstock-dev.onrender.com (deploys from
   on startup by `src/db/migrate.ts`; latest is `017_feedback`.
 - Vanilla static frontend in `public/` — no bundler, no CDNs. Browser-native
   ESM modules (`<script type="module">`) for `app.js`/`item.js`; those import
-  `carousel.js` + `lightbox.js`.
-- Vitest for tests (currently **191**). ESLint + Prettier for lint/format.
+  `carousel.js` + `lightbox.js`. One vendored client lib:
+  `public/vendor/d3-hierarchy.js` (prebuilt ESM bundle via esbuild) for the
+  brokerage treemap layout — vendored, not a CDN, so CSP `script-src 'self'`
+  still holds.
+- Vitest for tests (currently **191**). ESLint + Prettier for lint/format
+  (Prettier `printWidth: 100`; `public/vendor` + `.tmp` are prettier-ignored).
+  Note: the repo is NOT fully prettier-clean, so do NOT run `prettier --write`
+  across whole files — format only the lines you touch.
 - `fast-xml-parser` (Trading API XML); no HTML parser dep (regex in
-  `viewbids.ts`).
+  `viewbids.ts`). `d3-hierarchy` is a build-time devDependency (vendored into
+  `public/vendor/`), not a server runtime dep.
 - Render hosts both web service and Postgres. Local dev works without DB
   (graceful degradation).
 
@@ -114,6 +121,7 @@ public/
   admin.html  admin.js       admin dashboard + maintenance actions
   carousel.js                attachCyclingCarousel: shared clone-pad cycling track
   lightbox.js                openImageLightbox: shared fullscreen modal
+  vendor/d3-hierarchy.js     vendored ESM treemap layout (esbuild bundle)
   *.css       theme-init.js
 test/
   one *.test.ts per src/ module; vitest, no jsdom
@@ -311,28 +319,35 @@ header stays visible when collapsed so it's re-enableable.
     rebuilds just the table. A header **Expand all / Collapse all** button
     (`#brokerage-expand`, `syncExpandAllButton()`) toggles them en masse;
     shown only when enabled + 2+ stocks.
-  - Under each (when expanded): its **day-lots** as `.bh-lot` sub-rows (date
-    indented in the Stock column, same money columns), each followed by a
-    `.lot-treemap-row` — a **squarified treemap** (`squarify()` does the
-    layout, `lotTreemapRow()` renders it) of the funding auctions where each
-    tile's AREA ∝ that item's buying power (its half-stock $). **Rendered as
-    ONE `<svg>` with a viewBox** (deterministic geometry, scales cleanly at
-    any width — an earlier CSS-positioned-`%`-div version overlapped on
-    Safari/iPad, don't go back to it). Photos are SVG `<image
-    preserveAspectRatio="xMidYMid meet">` (whole photo, never cropped or
-    stretched — owner's hard requirement); big-enough tiles caption the
-    shares; tiny slices (< 2%) collapse into one **`+N`** tile. **Interactive:**
-    item tiles are SVG `<a href>` → item page; clicking the `+N` tile (or the
-    "Show all N items" / "Show fewer" toggle under the map) drills in to show
-    every item, tracked in the module `expandedTreemaps` Set (`${ticker}:
-    ${dayMs}` keys, survives the 30s re-render). One-item lots show a single
-    `.tm-single` thumbnail. Lots are date-ordered, newest first. (Replaced the
-    equal-size thumbnail strip — see `~/.claude/plans/the-other-half.md`;
-    NEXT: per-position treemap when a position is collapsed. NOTE: layout is
-    the standard squarified algorithm, hand-rolled. A treemap library (e.g.
-    `d3-hierarchy`) CAN be used — the dev/bash env has network (verified:
-    `npm ping` works); the only constraint is no-bundler/no-CDN, so vendor a
-    prebuilt file into `public/` rather than a CDN link.)
+  - When a position is **expanded**, ONE full-width **per-position image
+    treemap** (`.pos-treemap-row`, `positionTreemapRow()`) sits between the
+    position row and its `.bh-lot` numeric sub-rows. It flattens ALL of that
+    stock's lot items (carrying each item's `dayMs`) into one squarified map —
+    each tile's AREA ∝ that item's buying power (its half-stock $). Layout is
+    **d3-hierarchy** (`treemap().tile(treemapSquarify)`), vendored as a
+    prebuilt ESM bundle at **`public/vendor/d3-hierarchy.js`** (esbuild;
+    `d3-hierarchy` is a devDependency for provenance — regenerate per the
+    banner in that file). **Rendered as ONE `<svg>` with a viewBox**
+    (deterministic integer geometry, scales cleanly at any width — an earlier
+    CSS-positioned-`%`-div version overlapped on Safari/iPad, don't go back to
+    it). The sharp tile photo is SVG `<image preserveAspectRatio="xMidYMid
+    meet">` (whole photo, never cropped or stretched — owner's hard
+    requirement); **big tiles** (`min(w,h) ≥ 150` user units) ALSO get a
+    blurred, dimmed cover of the same photo behind it (`.tm-blur`, `xMidYMid
+    slice` + a `feGaussianBlur` filter clamped to the tile bbox) so the
+    letterbox bars read as intentional, not dead space. **Per-ticker scaling
+    (the point of the redesign):** the box grows TALLER as item count rises
+    (`cols` from container width, `rows = ceil(n/cols)`, `H` clamped to
+    `0.45–2.2×W`), so ~36 items render as ~100px thumbnails instead of
+    slivers. Big tiles caption the shares; the long tail folds into one **`+N`**
+    tile (`MIN_SHARE = max(0.015, 0.6/n)`, `MAX_TILES` 24 desktop / 12 phone).
+    **Interactive:** item tiles are SVG `<a href>` → item page; clicking the
+    `+N` tile (or the "Show all N items" / "Show fewer" `.tm-toggle`) drills in
+    to give the whole position a taller canvas, tracked in the module
+    `expandedTreemaps` Set — **keyed by TICKER** now (was `${ticker}:${dayMs}`),
+    survives the 30s re-render. A 1-item position shows a single `.tm-single`
+    thumbnail (160px). (Replaced the per-LOT treemap, which crammed a tiny map
+    into every day-row — see `~/.claude/plans/the-other-half.md`.)
   - A composite **Total** row only when 2+ stocks (shares `—`). Full-width
     `.bh-sep` rules separate stock groups; `.bh-sep-strong` above Total.
   - Below 560px the grid reflows to stacked cards (data-label prefixes).
