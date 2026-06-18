@@ -9,7 +9,9 @@ import type { Pool } from 'pg';
 import {
   hasEbayCredentials,
   loadConfig,
+  mixedValuationTickers,
   resolveEbayTradingUserToken,
+  resolveSellerTicker,
   type Config,
 } from './config.js';
 import { createLogger, type Logger } from './log.js';
@@ -24,6 +26,7 @@ import {
   persistSnapshot,
   readAdditionalImagesByItemId,
   readBidsForItem,
+  readDailyOhlc,
   readEndedListings,
   readFeedbackForItem,
   readListingDetail,
@@ -42,6 +45,7 @@ import { createItemDetailsEnricher } from './item-details-enricher.js';
 import { reconcileFinalsForItems } from './reconcile-finals.js';
 import { startBackgroundListingPoll } from './listing-poll.js';
 import { startFeedbackSweep, sweepFeedbackOnce } from './feedback-sweep.js';
+import { startDailyOhlcRefresh } from './ohlc-refresh.js';
 import { fetchBidHistory } from './ebay/bid-history.js';
 import { normalizeTradingItemId } from './ebay/trading.js';
 import { parseViewbids, ViewbidsParseError } from './ebay/viewbids.js';
@@ -288,6 +292,11 @@ export function createApp(deps: Deps): express.Express {
 
   const snapshotCache = new TtlCache<Snapshot>();
 
+  // Daily OHLC history for the performance chart. Changes at most once per
+  // trading day, so a coarse TTL is plenty; keyed by `${tickers}:${days}`.
+  const ohlcHistoryCache = new TtlCache<Awaited<ReturnType<typeof readDailyOhlc>>>();
+  const OHLC_HISTORY_TTL_MS = 60 * 60 * 1000;
+
   // Cache for end-time stock closes: the OHLC close for a fixed (item,
   // ticker) pair never changes — the past doesn't change — so look it up
   // once and reuse forever. Lost on process restart, which is fine; the
@@ -301,6 +310,11 @@ export function createApp(deps: Deps): express.Express {
     try {
       const rawSymbol = typeof req.query.symbol === 'string' ? req.query.symbol.trim().toUpperCase() : '';
       const symbol = rawSymbol && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(rawSymbol) ? rawSymbol : deps.config.STOCK_SYMBOL;
+      // "By seller" mode: value each item in its seller's paired stock instead
+      // of one ticker for everyone. MIXED isn't a real symbol, so it bypasses
+      // ticker validation; the snapshot fetches every seller-paired ticker.
+      const isMixed = symbol === 'MIXED';
+      const valuationTickers = isMixed ? mixedValuationTickers(deps.config) : [symbol];
 
       // Window of ended listings to include. Defaults to 14 days (the
       // "Recently ended" view); the dashboard's "All time" toggle passes a
@@ -312,12 +326,15 @@ export function createApp(deps: Deps): express.Express {
         ? rawEndedDays
         : 14;
 
-      // Record the view so the passive poll keeps this ticker warm for the
+      // Record the view so the passive poll keeps these tickers warm for the
       // request window (known tickers skip submitForValidation below, so this
-      // is the only recency signal for them).
-      deps.tickerQueue?.markRequested(symbol);
+      // is the only recency signal for them). In "By seller" mode both real
+      // tickers ($EBAY, $GME) get marked.
+      for (const t of valuationTickers) deps.tickerQueue?.markRequested(t);
 
-      if (deps.tickerQueue && !deps.tickerQueue.isKnown(symbol)) {
+      // Validate only real single tickers — MIXED resolves to already-known
+      // tickers, so it never needs (or passes) symbol validation.
+      if (!isMixed && deps.tickerQueue && !deps.tickerQueue.isKnown(symbol)) {
         if (deps.tickerQueue.isBlacklisted(symbol)) {
           res.status(400).json({ error: 'invalid_ticker', symbol });
           return;
@@ -331,7 +348,23 @@ export function createApp(deps: Deps): express.Express {
       }
 
       const snapshot = await snapshotCache.get(`snapshot:${symbol}:ed${endedDays}`, SNAPSHOT_TTL_MS, async () => {
-        const [listings, quote] = await Promise.all([deps.fetchListings(), deps.fetchQuote(symbol)]);
+        const [listings, quotes] = await Promise.all([
+          deps.fetchListings(),
+          Promise.all(valuationTickers.map((t) => deps.fetchQuote(t))),
+        ]);
+        const quoteByTicker = new Map(valuationTickers.map((t, i) => [t, quotes[i]!]));
+        // Primary quote: the default stock in mixed mode (kept on snapshot.stock
+        // for back-compat), else the single requested ticker.
+        const primaryQuote = quoteByTicker.get(isMixed ? deps.config.STOCK_SYMBOL : symbol) ?? quotes[0]!;
+        // In "By seller" mode, hand composeSnapshot a resolver so each item is
+        // valued in its seller's ticker; otherwise leave it single-ticker.
+        const valuation = isMixed
+          ? {
+              tickerForSeller: (sellerId: string): string => resolveSellerTicker(deps.config, sellerId),
+              quoteForTicker: (ticker: string): PriceQuote => quoteByTicker.get(ticker) ?? primaryQuote,
+              quotes,
+            }
+          : undefined;
         const enriched = await enrichWithBidHistory(deps, listings);
         const ended = deps.db ? await readEndedListings(deps.db, endedDays) : [];
         // Best-effort gallery + description backfill for any item in this
@@ -347,26 +380,31 @@ export function createApp(deps: Deps): express.Express {
         // (itemId, ticker) pair, so consult the process-level cache first
         // and only DB-query the misses. Misses are queried in parallel so
         // a cold start doesn't serialize round-trips.
+        // The close is looked up in each item's valuation ticker — the same
+        // ticker its endTimeSplit is denominated in (the seller's stock in "By
+        // seller" mode, else the single requested ticker). The (itemId, ticker)
+        // cache key keeps mixed/single lookups from colliding.
         const endTimeClosesByItemId = new Map<string, number | null>();
         if (deps.db) {
           const db = deps.db;
           const usdEnded = ended.filter((e) => e.currency === 'USD');
-          const misses: Array<{ itemId: string; endedAt: string }> = [];
+          const misses: Array<{ itemId: string; endedAt: string; ticker: string }> = [];
           for (const e of usdEnded) {
-            const key = `${e.itemId}:${quote.symbol}`;
+            const ticker = isMixed ? resolveSellerTicker(deps.config, e.sellerId) : primaryQuote.symbol;
+            const key = `${e.itemId}:${ticker}`;
             if (endClosesCache.has(key)) {
               endTimeClosesByItemId.set(e.itemId, endClosesCache.get(key) ?? null);
             } else {
-              misses.push({ itemId: e.itemId, endedAt: e.endedAt });
+              misses.push({ itemId: e.itemId, endedAt: e.endedAt, ticker });
             }
           }
           if (misses.length > 0) {
             const fetched = await Promise.all(
-              misses.map((m) => getClosingPriceAt(db, quote.symbol, new Date(m.endedAt))),
+              misses.map((m) => getClosingPriceAt(db, m.ticker, new Date(m.endedAt))),
             );
             misses.forEach((m, i) => {
               const close = fetched[i] ?? null;
-              endClosesCache.set(`${m.itemId}:${quote.symbol}`, close);
+              endClosesCache.set(`${m.itemId}:${m.ticker}`, close);
               endTimeClosesByItemId.set(m.itemId, close);
             });
           }
@@ -379,7 +417,7 @@ export function createApp(deps: Deps): express.Express {
         const additionalImagesByItemId = deps.db
           ? await readAdditionalImagesByItemId(deps.db, allItemIds)
           : new Map<string, string[]>();
-        return composeSnapshot(enriched, quote, ended, endTimeClosesByItemId, additionalImagesByItemId);
+        return composeSnapshot(enriched, primaryQuote, ended, endTimeClosesByItemId, additionalImagesByItemId, valuation);
       });
       // Computed per-request (not baked into the cached snapshot) so the
       // "live updates delayed" signal reflects current cache health rather
@@ -388,9 +426,13 @@ export function createApp(deps: Deps): express.Express {
       // When the logo.dev token is configured, point the client at our own
       // proxy endpoint — the token never leaves the server, and the image
       // bytes are cached process-side so logo.dev is hit roughly once per
-      // ticker per day regardless of how many users browse.
+      // ticker per day regardless of how many users browse. In "By seller"
+      // mode this points at the default stock's logo (a sane non-null signal
+      // that logos are enabled); the dashboard builds per-ticker logo URLs
+      // itself for the two-stock display.
+      const logoSymbol = isMixed ? deps.config.STOCK_SYMBOL : symbol;
       const tickerLogoUrl = deps.config.LOGO_DEV_TOKEN
-        ? `/api/ticker-logo?symbol=${encodeURIComponent(symbol)}`
+        ? `/api/ticker-logo?symbol=${encodeURIComponent(logoSymbol)}`
         : null;
       res
         .status(200)
@@ -475,6 +517,44 @@ export function createApp(deps: Deps): express.Express {
       }
       const entry = await inflight;
       serve(entry);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Daily-close history for "The Other Half" performance chart. The dashboard
+  // fetches this once and reconstructs portfolio value over time client-side
+  // (so the seller filter re-derives instantly with no refetch). Reads only
+  // the retained 1d OHLC rows, so it's cheap and cached an hour.
+  app.get('/api/ohlc-history', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const raw = typeof req.query.tickers === 'string' ? req.query.tickers : '';
+      const tickers = Array.from(
+        new Set(
+          raw
+            .split(',')
+            .map((s) => s.trim().toUpperCase())
+            .filter((s) => /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(s)),
+        ),
+      ).slice(0, 5);
+      const rawDays = typeof req.query.days === 'string' ? Number.parseInt(req.query.days, 10) : 180;
+      const days = Number.isFinite(rawDays) && rawDays > 0 && rawDays <= 3650 ? rawDays : 180;
+
+      if (tickers.length === 0 || !deps.db) {
+        res.status(200).json({ ohlc: {}, asOf: new Date().toISOString() });
+        return;
+      }
+      const db = deps.db;
+      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const ohlc = await ohlcHistoryCache.get(
+        `ohlc-history:${tickers.join(',')}:${days}`,
+        OHLC_HISTORY_TTL_MS,
+        () => readDailyOhlc(db, tickers, since),
+      );
+      res
+        .status(200)
+        .set('Cache-Control', 'public, max-age=1800')
+        .json({ ohlc, asOf: new Date().toISOString() });
     } catch (err) {
       next(err);
     }
@@ -1340,10 +1420,26 @@ async function main(): Promise<void> {
     });
   }
 
+  // Daily 1d-OHLC refresh so the performance chart + end-time valuations stay
+  // current automatically (previously the 1d history only grew when someone
+  // clicked the backfill_ohlc_history admin action). Immediate first tick
+  // self-heals any gap on deploy. NOT prod-gated — idempotent + tiny.
+  let stopOhlcRefresh: (() => void) | null = null;
+  if (db) {
+    stopOhlcRefresh = startDailyOhlcRefresh({
+      pool: db,
+      tickers: mixedValuationTickers(config),
+      log,
+    });
+  } else {
+    log.info('daily ohlc refresh disabled', { reason: 'no database' });
+  }
+
   const shutdown = (signal: string): void => {
     log.info('shutting down', { signal });
     if (stopBackgroundPoll) stopBackgroundPoll();
     if (stopFeedbackSweep) stopFeedbackSweep();
+    if (stopOhlcRefresh) stopOhlcRefresh();
     if (tickerQueue) tickerQueue.stop();
     if (requestStats) requestStats.stop();
     server.close(() => {

@@ -58,9 +58,13 @@
       </button>
       <div id="last-updated" class="last-updated" aria-live="polite"></div>
       <div id="ticker" class="ticker" aria-live="polite">
-        <div class="ticker-quote">
-          <span class="ticker-symbol"></span>
-          <span class="ticker-price">—</span>
+        <!-- One .ticker-quote in normal mode; "By seller" mode renders one per
+             stock ($EBAY + $GME). renderTicker rebuilds this list each refresh. -->
+        <div class="ticker-quotes">
+          <div class="ticker-quote">
+            <span class="ticker-symbol"></span>
+            <span class="ticker-price">—</span>
+          </div>
         </div>
         <div class="ticker-meta">
           <span class="ticker-status"></span>
@@ -87,14 +91,20 @@
       <section id="totals" class="totals" aria-live="polite"></section>
 
       <section id="brokerage-section" class="brokerage" hidden>
-        <h2 class="totals-heading">The Imaginary Brokerage</h2>
-        <p class="brokerage-tagline" id="brokerage-tagline"></p>
-        <div id="brokerage-stats" class="totals"></div>
-        <details class="brokerage-statement" id="brokerage-statement">
-          <summary id="brokerage-summary">Statement</summary>
-          <div id="brokerage-table" class="brokerage-table"></div>
+        <header class="brokerage-head">
+          <h2 class="totals-heading">The Other Half</h2>
+          <div class="brokerage-head-actions">
+            <button id="brokerage-expand" class="ended-toggle" type="button" hidden>Collapse all</button>
+            <button id="brokerage-toggle" class="ended-toggle" type="button" aria-expanded="true">Hide</button>
+          </div>
+        </header>
+        <div id="brokerage-body">
+          <p class="brokerage-tagline" id="brokerage-tagline"></p>
+          <div id="brokerage-chart" class="brokerage-chart" hidden></div>
+          <p id="brokerage-pending" class="brokerage-pending" hidden></p>
+          <div id="brokerage-table"></div>
           <p class="brokerage-footnote" id="brokerage-footnote" hidden></p>
-        </details>
+        </div>
       </section>
 
       <div id="most-recent-bid" class="most-recent-bid" aria-live="polite"></div>
@@ -108,6 +118,7 @@
           </div>
           <div class="stock-bar" role="group" aria-label="Choose stock">
             <span class="sort-label">Stock:</span>
+            <button class="stock-btn" data-symbol="MIXED" title="Value each seller's auctions in their own stock — Ryan's in $EBAY, mine in $GME">By seller</button>
             <button class="stock-btn is-active" data-symbol="EBAY">$EBAY</button>
             <button class="stock-btn" data-symbol="GME">$GME</button>
             <input

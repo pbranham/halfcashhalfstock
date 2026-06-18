@@ -6,7 +6,9 @@ import {
   hasEbayCredentials,
   hasEbayTradingCredentials,
   loadConfig,
+  mixedValuationTickers,
   resolveEbayTradingUserToken,
+  resolveSellerTicker,
 } from '../src/config.js';
 
 describe('loadConfig', () => {
@@ -46,6 +48,27 @@ describe('loadConfig', () => {
 
   it('rejects an empty seller list', () => {
     expect(() => loadConfig({ EBAY_SELLER_IDS: ', , ' })).toThrow(/empty list/);
+  });
+
+  it('defaults the seller→ticker pairing (boilerpaulie→GME, ryan_5050→EBAY)', () => {
+    const cfg = loadConfig({});
+    expect(resolveSellerTicker(cfg, 'boilerpaulie')).toBe('GME');
+    expect(resolveSellerTicker(cfg, 'ryan_5050')).toBe('EBAY');
+    // Unknown seller falls back to the site default stock.
+    expect(resolveSellerTicker(cfg, 'someone_else')).toBe('EBAY');
+  });
+
+  it('lists distinct mixed-valuation tickers, default stock first', () => {
+    expect(mixedValuationTickers(loadConfig({}))).toEqual(['EBAY', 'GME']);
+  });
+
+  it('parses and validates EBAY_SELLER_TICKERS overrides', () => {
+    const cfg = loadConfig({ EBAY_SELLER_TICKERS: 'alice:tsla, bob:NVDA' });
+    expect(resolveSellerTicker(cfg, 'alice')).toBe('TSLA');
+    expect(resolveSellerTicker(cfg, 'bob')).toBe('NVDA');
+    expect(() => loadConfig({ EBAY_SELLER_TICKERS: 'alice:not a ticker' })).toThrow(
+      /Invalid entry in EBAY_SELLER_TICKERS/,
+    );
   });
 
   it('coerces PORT from string to number', () => {

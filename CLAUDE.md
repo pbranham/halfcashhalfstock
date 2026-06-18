@@ -10,9 +10,12 @@ A Node 20 / TypeScript / Express + Postgres app that monitors **multiple eBay
 seller accounts** (`boilerpaulie` + `ryan_5050` by default; configurable via
 `EBAY_SELLER_IDS`) and converts each live auction bid into a "half cash + half
 EBAY stock" equivalent at the live market price. The dashboard has a seller
-filter (`[All] [Mine] [Ryan]`), a per-card seller badge, and a `[Live] [At
-auction end]` toggle on the ended-auctions section that revalues each closed
-auction using the EBAY close at the moment it ended. Per-card image
+filter (`[All] [Mine] [Ryan]`), a per-card seller badge, a stock control
+(`[By seller] [$EBAY] [$GME]` + custom) where **By seller** values each
+seller's auctions in their own paired stock (Ryan→$EBAY, mine→$GME) and shows
+both live prices, and a `[Live] [At auction end]` toggle on the ended-auctions
+section that revalues each closed auction using the stock close at the moment
+it ended. Per-card image
 carousels + a click-to-zoom lightbox surface every gallery photo each listing
 carries; the item-audit page also renders the seller's HTML description in a
 sandboxed iframe.
@@ -37,7 +40,10 @@ https://halfcashhalfstock-dev.onrender.com (deploys from
 - Vanilla static frontend in `public/` — no bundler, no CDNs. Browser-native
   ESM modules (`<script type="module">`) for `app.js`/`item.js`; those import
   `carousel.js` + `lightbox.js`.
-- Vitest for tests (currently **177**). ESLint + Prettier for lint/format.
+- Vitest for tests (currently **191**). ESLint + Prettier for lint/format
+  (Prettier `printWidth: 100`). Note: the repo is NOT fully prettier-clean, so
+  do NOT run `prettier --write` across whole files — it reflows hundreds of
+  unrelated lines; format only the lines you touch.
 - `fast-xml-parser` (Trading API XML); no HTML parser dep (regex in
   `viewbids.ts`).
 - Render hosts both web service and Postgres. Local dev works without DB
@@ -89,6 +95,7 @@ src/
   reconcile-finals.ts        reconcileFinalsForItems: GetItem → updateEndedListingFinals
   listing-poll.ts            startBackgroundListingPoll: always-on 30s loop (prod only)
   feedback-sweep.ts          hourly GetFeedback sweep → feedback table (prod only)
+  ohlc-refresh.ts            startDailyOhlcRefresh: daily 1d-OHLC pull from Yahoo (any env w/ DB)
   db/
     pool.ts                  pg.Pool factory
     migrate.ts               filesystem-driven migration runner (atomic per file)
@@ -137,11 +144,20 @@ comfortably under it:
 - **Ticker queue scoping** (`TickerQueue`): the passive price-poll refreshes
   only EBAY + GME forever, plus any custom ticker viewed within the last
   30 min. Custom tickers age out so we don't hammer Finnhub for every
-  symbol ever typed into the dropdown.
+  symbol ever typed into the dropdown. "By seller" mode (`?symbol=MIXED`)
+  fetches both EBAY + GME per snapshot, but both are already always-warm,
+  so it adds no Finnhub cost beyond what single-ticker viewing already
+  incurs (and `fetchQuote` is itself cached per symbol).
 - **Per-item details enrichment** (`createItemDetailsEnricher`): the per-
   item Browse `/item/{id}` call (gallery + description) runs only for rows
   missing details OR older than 7 days, concurrency capped at 4. After the
   initial backfill it amortises to near-zero/day.
+- **`/api/ohlc-history`** (The Other Half performance chart) hits no eBay
+  or Finnhub upstream at all — it reads only the retained 1d OHLC rows from
+  Postgres, is cached ~1h, and is fetched once per page load. Zero external
+  API cost. The 1d rows themselves are kept current by `startDailyOhlcRefresh`
+  — a **daily** Yahoo `getHistoricalCandles('1d')` pull for the seller
+  tickers (≈2 calls/day/env), entirely separate from the eBay Browse quota.
 
 Remaining headroom (~2,000 calls/day under the 5,000 cap at the current
 30s cadence) is intentional — reserved for a future last-60s endgame
@@ -179,8 +195,13 @@ hits when the snapshot cache misses.
 
 ## Live-environment limitations
 
-- The Claude sandbox **blocks all outbound HTTP** (even no-auth /healthz).
-  All eBay/Finnhub/Yahoo verification must happen on the deployed dev site.
+- The dev/bash environment **does have outbound network** (verified: `npm
+  ping` / `registry.npmjs.org` reachable) — so packages CAN be installed and
+  a library vendored. An older note here claimed "blocks all outbound HTTP";
+  that's wrong for package access. eBay/Finnhub *live* verification is still
+  best on the deployed dev site (it needs credentials/tokens, and the Render
+  datacenter IP is what gets the eBay challenge below) — but don't repeat the
+  blanket "no network" claim.
 - The Render dev IP is a datacenter; eBay typically returns a 200 "Pardon
   Our Interruption" challenge page for `/bfl/viewbids/*` from this IP, so
   the reconcile loop falls back to paste mode for nearly every item.
@@ -243,28 +264,170 @@ For an auction that ended during market hours, finer-grain candles (if still
 within retention) give a more accurate price; for older auctions only the
 daily close at market open exists, which is good enough for the visualization.
 
-## The Imaginary Brokerage (Phase 4)
+## The Other Half (brokerage; Phase 4 + "The Other Half" v2)
 
 Dashboard section between Totals and the most-recent-bid widget — the
 site's core hypothetical, resolved: if every winning buyer had really
-paid half in stock at the close-of-auction price, here's how that stock
-is doing today.
+paid half in stock at the close-of-auction price, here's how that **other
+half** is doing today. (Was "The Imaginary Brokerage"; renamed per owner.
+Full roadmap for the v2 evolution — performance chart, item-level P&L,
+item-page conversion chart — in `~/.claude/plans/the-other-half.md`.)
+
+**Model:** ONE position per stock, made of **lots** grouped by the day
+auctions ended (tax-lot style); each lot is funded by the auction items
+whose thumbnails sit beneath it. Items are lots/auctions, NOT "positions".
+Decisions locked: track **stock value only** (cash half deferred);
+**ended-only** (active auctions are a future "pending" callout); eBay
+fees + payout lag are out of scope.
+
+**Enable toggle:** the section header carries a Hide/Show button
+(`#brokerage-toggle`, mirrors the ended section). `otherHalfEnabled` is
+persisted in `localStorage.hchs.otherHalf` (`on`/`off`, default on) and
+collapses/expands `#brokerage-body` via `applyOtherHalfEnabled()`. (Phase
+3 will also gate per-item P&L on ended cards off this flag.) The slim
+header stays visible when collapsed so it's re-enableable.
 
 - Pure frontend transform of data already on the snapshot:
-  `aggregateBrokerage(endedItems, livePrice)` in `app.js` marks each sold
-  item's `endTimeSplit` (shares + stock-half dollars at its end-time
-  close) to the live price. No server changes, no new data.
-- Respects the seller filter + selected ticker like everything else in
+  `aggregateBrokerage(endedItems, priceForTicker, tickerOrder)` in `app.js`
+  marks each sold item's `endTimeSplit` (shares + stock-half dollars at its
+  end-time close) to the live price of its `valuationTicker`. No new data.
+  Returns `{ positions, byTicker, total, excludedCount }`: `byTicker` is a
+  per-stock rollup (each stock's own cost/worth/P&L + `sellers` + `lots`,
+  ordered by `tickerOrder`), `total` the USD composite. `withPnl(base,
+  cost, worth)` attaches `pnl`/`pnlPct`; `buildLots(positions)` groups a
+  stock's items into day-lots (most recent first). Positions preserve INPUT
+  order, so `renderBrokerage` sorts `endedItems` by the page Sort pill (via
+  `sortEndedItems`) before calling.
+- Respects the seller filter + selected stock like everything else in
   `renderFilteredView`. Hidden entirely when no sold item has an
   end-time close or the price feed is down (no dashes-on-display).
-- Four stat cards (Shares held / Cost basis / Worth today / Unrealized
-  P&L with ▲/▼ + % in `.pnl-up`/`.pnl-down` colors) reusing the
-  `.totals` card grid; a native `<details>` "Statement (N positions)"
-  expands the per-item rows (title links to the item page; shares @
-  close, cost, now, ±). Items lacking an end-time close are counted in
-  a footnote, mirroring the ended-totals "Missing end-time price"
-  pattern. Head-to-head seller comparison was considered and CUT at the
-  owner's request — don't add it back.
+- **One unified table** (`renderHoldings()` → `.brokerage-holdings`, a CSS
+  grid; rows are `display:contents` so cells align). NOT a separate stats
+  block + "Position detail" anymore — the lots roll into the holdings table:
+  - Columns: **Stock/Date · Shares · Avg cost · Cost basis · Worth today ·
+    Unrealized P&L** (`pnlNode` = ▲/▼ dollar amount with the % stacked
+    directly beneath it, `.pnl` flex-column; colours in `.pnl-up`/`.pnl-down`).
+  - Per stock: a **position row** (`.bh-pos`, bold) whose Stock cell is a
+    disclosure button (`.pos-toggle`, caret + $TICKER + logo + @seller).
+    Clicking collapses/expands that stock's lots; `collapsedPositions` (a
+    module Set, default expanded) survives the 30s re-render and a toggle
+    rebuilds just the table. A header **Expand all / Collapse all** button
+    (`#brokerage-expand`, `syncExpandAllButton()`) toggles them en masse;
+    shown only when enabled + 2+ stocks.
+  - Under each (when expanded): its **day-lots** as `.bh-lot` sub-rows (date
+    indented in the Stock column, same money columns), each followed by a
+    `.lot-thumbs-row` — a **simple wrapping strip of every funding auction's
+    thumbnail** (`lotThumbRow()`, 34px `.lot-thumb` squares, `object-fit:
+    cover`, each `<a>` → item page). Uncapped; wraps to as many rows as needed.
+    A one-item lot just shows its single thumb. **Treemap dead end — do not
+    re-attempt without a clear visual win:** a squarified image-treemap was
+    built here (first per-lot, then a per-position d3-hierarchy version with a
+    blurred-photo backdrop + `+N` drill) and the owner rejected BOTH as not
+    working — too much crammed per row, and the per-position map didn't read
+    either. We reverted to this plain thumbnail strip (`git checkout f79850b --
+    public/app.js public/style.css` + removed the vendored `d3-hierarchy`). The
+    full saga is in `~/.claude/plans/the-other-half.md`.
+  - A composite **Total** row only when 2+ stocks (shares `—`). Full-width
+    `.bh-sep` rules separate stock groups; `.bh-sep-strong` above Total.
+  - Below 560px the grid reflows to stacked cards (data-label prefixes).
+- Items lacking an end-time close are counted in a footnote. Head-to-head
+  seller comparison was considered and CUT at the owner's request — don't
+  add it back.
+- **Performance chart (Phase 2)** above the table (`#brokerage-chart`): the
+  stock-only portfolio value over time, with a **chart-type toggle** (top
+  right: **area / % / candlestick**, persisted) and an **interactive
+  legend** (Total + each stock, click to hide, persisted; hidden in
+  candlestick mode). Pure client transform —
+  `buildPerformanceSeries(positions, ohlcHistory, priceForTicker, now)` marks
+  each lot's shares to the **daily bar** on every day since the earliest lot,
+  producing per-stock component values, the total, running cost basis (Σ
+  stock-halves), and a composite portfolio **OHLC candle** (shares-weighted
+  combine of the stocks' bars — high/low are approximations), plus a final
+  **live** point (no candle) so the last value matches "worth today".
+  `renderPerformanceChart` draws an SVG (measured to container width, so a
+  resize / section-expand / toggle re-renders via `lastPerfRender`):
+  - **area** stacks the visible stock components, **proportional within a
+    zoomed band** (NOT pinned to 0 — that compressed the variation when one
+    stock dwarfs another) + an optional total outline;
+  - **%** (a line of returns; total accent/red + per-stock component lines +
+    lot markers + now dot) plots **return vs cost basis** (`ret = value/cost
+    − 1`) against a flat 0% baseline + a `%` axis — so differently-sized
+    stocks are comparable on one scale (`ret`/`compVal`/`scopePlotV` give the
+    return; the 0-clamp is skipped so negatives show). (The absolute-$ "line"
+    chart was REMOVED — it read poorly alone; % replaced it and a persisted
+    `line` migrates to `pct`.)
+  - **candlestick** draws composite portfolio candles (green/red), completed
+    days only.
+  Everything is **legend-scoped**: the y-domain, the dashed cost line, the
+  scrub readout, and the now/value all reflect only the visible series (so
+  isolating one small stock is readable, and the total-cost line can't drag
+  the axis negative — `lo` is also clamped ≥ 0). `useTotal` = candlestick OR
+  the Total chip on OR nothing selected. Each ticker legend chip shows its
+  **close**, updating on hover. Hidden when <2 points
+  of history (graceful when OHLC isn't backfilled). Bars come from **`GET
+  /api/ohlc-history?tickers=EBAY,GME&days=N`** (server reads the retained 1d
+  OHLC via `readDailyOhlc` → `{ ticker: [{t,o,h,l,c}] }`, cached ~1h); the
+  dashboard fetches it once (`refreshOhlcHistory`) and reconstructs
+  client-side, so the seller filter / mode toggle re-derive with no refetch.
+  **Data:** 1d candles are kept current
+  automatically by `startDailyOhlcRefresh` (`ohlc-refresh.ts`) — a daily
+  Yahoo pull that excludes today's partial candle and runs on any env with a
+  DB, with an immediate first tick so a deploy self-heals gaps. The
+  `backfill_ohlc_history` admin action remains for an immediate fill or a
+  longer seed range. (1d candles used to grow ONLY when someone clicked that
+  button, which is why history could stall — fixed by the daily refresh.)
+- **Pending callout** (`#brokerage-pending`): open (still-running) auctions
+  aren't realized lots, so they sit OUTSIDE the position as a quiet line —
+  total bids + the shares they'd buy at today's price if they closed now.
+  Decision locked: ended-only for the position; this is the "pending" view.
+- Decisions locked (see `~/.claude/plans/the-other-half.md`): **stock value
+  only** (cash half deferred), **ended-only** lots, eBay fees + payout lag
+  out of scope.
+
+## "By seller" mixed valuation
+
+Default stock mode for the **All** seller view: instead of valuing every
+auction in one ticker, value each in its seller's paired stock — Ryan's
+(`ryan_5050`) in **$EBAY**, mine (`boilerpaulie`) in **$GME** (the same
+thematic pairing the seller-filter pill swap already used). A
+`[By seller] [$EBAY] [$GME]` pill sits at the head of the stock control;
+choosing a specific ticker overrides to single-stock for everyone (the
+old behavior). The label is "By seller"; the wire/`localStorage` value is
+`MIXED`.
+
+- **Server**: `?symbol=MIXED` is handled in `/api/snapshot`. It bypasses
+  ticker validation (MIXED isn't a real symbol), fetches a quote for every
+  ticker in `mixedValuationTickers(config)` (= `[EBAY, GME]`, default stock
+  first), and hands `composeSnapshot` a `ValuationContext`
+  (`tickerForSeller` / `quoteForTicker` / `quotes`). Each item's `split`
+  and `endTimeSplit` are then denominated in its seller ticker, and
+  end-time OHLC closes are looked up per seller ticker (cache key is
+  `${itemId}:${ticker}`). The seller→ticker map lives in `config.ts`
+  (`resolveSellerTicker`, default `boilerpaulie:GME,ryan_5050:EBAY`,
+  overridable via `EBAY_SELLER_TICKERS`).
+- **Snapshot shape** (additive — existing single-ticker callers unaffected):
+  every `ListingView`/`EndedListingView` carries `valuationTicker`; the
+  snapshot root carries `stocks: PriceQuote[]` (one entry in single mode,
+  two in mixed) and `valuationMode: 'single' | 'mixed'`. The rolled-up
+  `totals.split.shares` mixes tickers in mixed mode and is NOT rendered —
+  the dashboard regroups per-item by `valuationTicker`.
+- **Dashboard**: the header shows one live price per stock
+  (`.ticker-quotes`, inline on wide screens / stacked under 720px — owner's
+  choice). The **Totals** "Half Stock" stat becomes one shares row per
+  stock via `sharesCard`; cash/dollar figures stay single (USD is
+  additive). The **brokerage** goes further — a full per-stock holdings
+  table + composite Total + per-stock-grouped Statement (see The Imaginary
+  Brokerage section). Each tile shows its seller stock's shares + logo
+  (`splitBox(cash, shares, ticker)`; per-ticker logos built on the fly via
+  `logoUrlFor(ticker)` since the proxy keys off `?symbol=`). The Totals
+  aggregates (`aggregateActiveTotals`/`aggregateEndedTotals`) sum per-item
+  splits grouped by ticker via `sumSplitsByTicker`.
+- The **item page is unaffected** — it never read the dashboard's stored
+  ticker, and each item belongs to exactly one seller (one stock) anyway.
+- If you add a third seller, the pairing comes from `EBAY_SELLER_TICKERS`
+  (or the default map); the header/totals/brokerage already render N stock
+  rows, but the brokerage tagline hard-codes "$EBAY / $GME" copy — update
+  it there.
 
 ## Per-item gallery + description (PR #26)
 
@@ -633,10 +796,19 @@ Dashboard state lives in `localStorage`:
 - `hchs.viewMode` — `list` / `grid-sm` / `grid-md` / `grid-lg`
 - `hchs.sort` — one of the five sort modes
 - `hchs.aboutOpen` — `1` / `0` for the collapsible intro
+- `hchs.otherHalf` — `on` / `off` (default on): The Other Half brokerage
+  enabled (body shown) vs collapsed
+- `hchs.otherHalf.chartType` — `area` (default) / `pct` / `candle` (legacy
+  `line` migrates to `pct`):
+  performance-chart type
+- `hchs.otherHalf.hidden` — CSV of legend series hidden on the performance
+  chart (`total`, `EBAY`, `GME`)
 - `hchs.chart.zoom` — item-page chart time lens: `full` / `start` /
   `snipe` (the old `hchs.chart.yScale` / `hchs.chart.xScale` keys are
   dead — y-log was cut in Phase 3; orphaned values are ignored)
-- `ticker` — the custom ticker selected in the input
+- `ticker` — the selected stock: `EBAY` / `GME` / a custom ticker, or
+  `MIXED` for "By seller" mode (values each seller's auctions in their own
+  stock)
 - `theme` — `dark` / `light` override (icon-toggle)
 
 ## Efficient workflows
@@ -659,6 +831,10 @@ Dashboard state lives in `localStorage`:
 - `EBAY_SELLER_IDS` — comma-separated list of sellers to poll. Defaults to
   `boilerpaulie,ryan_5050`. Legacy `EBAY_SELLER_ID` (single value) is
   accepted as a fallback when `EBAY_SELLER_IDS` is unset.
+- `EBAY_SELLER_TICKERS` — seller→stock pairing for "By seller" valuation
+  mode, `seller:TICKER,seller:TICKER`. Defaults to
+  `boilerpaulie:GME,ryan_5050:EBAY`. Sellers absent from the map fall back
+  to `STOCK_SYMBOL`.
 - `FINNHUB_API_KEY` — stock prices; the SOLE live-quote provider (Yahoo
   was cut from the chain — see "Dead code"). Without the key, startup
   still works: a stub provider fails every quote and the DbBackedCache /

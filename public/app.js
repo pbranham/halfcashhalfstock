@@ -6,6 +6,13 @@ const QUICK_RETRY_MS = 4_000;
 const STALE_MS = 120_000;
 
 const SUPPORTED_SYMBOLS = ['EBAY', 'GME'];
+// "By seller" valuation mode: not a real ticker. The server values each item
+// in its seller's paired stock and returns one live price per stock. It has a
+// pill but never goes in the custom-ticker input.
+const MIXED_SYMBOL = 'MIXED';
+function isPillSymbol(s) {
+  return SUPPORTED_SYMBOLS.includes(s) || s === MIXED_SYMBOL;
+}
 let activeSymbol = SUPPORTED_SYMBOLS[0];
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
@@ -44,7 +51,7 @@ const SELLER_PILL_TO_ID = {
 // still manually pick a different ticker afterward — the auto-swap only
 // fires on filter changes.
 const SELLER_FILTER_DEFAULT_TICKER = {
-  all: 'EBAY',
+  all: 'MIXED',
   mine: 'GME',
   ryan: 'EBAY',
 };
@@ -79,6 +86,47 @@ function saveEndedPriceMode(value) {
   if (ENDED_MODES.includes(value)) localStorage.setItem('hchs.endedPriceMode', value);
 }
 let currentEndedPriceMode = loadEndedPriceMode();
+
+// --- "The Other Half" enable toggle ---
+// On = the brokerage body shows (and, later, per-item P&L on ended cards).
+// Off = collapsed to the slim header, reclaiming space. Default on.
+function loadOtherHalfEnabled() {
+  return localStorage.getItem('hchs.otherHalf') !== 'off';
+}
+function saveOtherHalfEnabled(on) {
+  localStorage.setItem('hchs.otherHalf', on ? 'on' : 'off');
+}
+let otherHalfEnabled = loadOtherHalfEnabled();
+
+// Reflect the enabled state: show/hide the brokerage body + sync the toggle.
+function applyOtherHalfEnabled() {
+  const body = document.getElementById('brokerage-body');
+  const btn = document.getElementById('brokerage-toggle');
+  if (body) body.hidden = !otherHalfEnabled;
+  if (btn) {
+    btn.textContent = otherHalfEnabled ? 'Hide' : 'Show';
+    btn.setAttribute('aria-expanded', otherHalfEnabled ? 'true' : 'false');
+  }
+  syncExpandAllButton();
+  // The chart measures its container width; if it rendered while collapsed
+  // (width 0), redraw now that the body is visible and has a real width.
+  if (otherHalfEnabled && lastPerfRender && !lastPerfRender.container.hidden) {
+    renderPerformanceChart(lastPerfRender.container, lastPerfRender.series);
+  }
+}
+
+// Expand-all / collapse-all control: shown only when the brokerage is enabled
+// and has 2+ stock positions. Label tracks the current state.
+function syncExpandAllButton() {
+  const btn = document.getElementById('brokerage-expand');
+  if (!btn) return;
+  const byTicker = lastBrokerageVM?.byTicker ?? [];
+  btn.hidden = !otherHalfEnabled || byTicker.length < 2;
+  if (!btn.hidden) {
+    const allCollapsed = byTicker.every((r) => collapsedPositions.has(r.ticker));
+    btn.textContent = allCollapsed ? 'Expand all' : 'Collapse all';
+  }
+}
 
 // --- Ended-section time window ("Recently ended" vs "All time") ---
 // The "all" value caps at the server's 36500-day max (~100 years) so we
@@ -218,176 +266,946 @@ function sortEndedItems(items, sort) {
   }
 }
 
+// Sum per-item splits into a cash half + a per-ticker shares breakdown.
+// `getSplit(item)` returns the relevant pre-computed HalfSplit (live or
+// at-end). Cash/stock dollars are additive (USD); shares are grouped by
+// item.valuationTicker because you can't add $EBAY shares to $GME shares. In
+// normal mode every item shares one ticker, so sharesByTicker has one entry.
+function sumSplitsByTicker(items, getSplit) {
+  const byTicker = new Map();
+  let cashUsd = 0;
+  for (const i of items) {
+    const s = getSplit(i);
+    if (!s) continue;
+    cashUsd += s.cashUsd;
+    const t = i.valuationTicker || currentTickerSymbol;
+    byTicker.set(t, (byTicker.get(t) ?? 0) + s.shares);
+  }
+  const sharesByTicker = [...byTicker.entries()].map(([ticker, shares]) => ({ ticker, shares }));
+  return { cashUsd, sharesByTicker };
+}
+
 // Recompute totals from a filtered subset so the on-page numbers reflect the
 // active seller filter. Mirrors the server-side composeSnapshot math:
 // no-bid items are excluded from the dollar totals (their priceUsd is just
 // the starting price, which shouldn't count until someone bids).
-function aggregateActiveTotals(items, stockPrice) {
+function aggregateActiveTotals(items) {
   const priced = items.filter(
     (i) =>
       i.priceUsd !== null && i.priceUsd !== undefined && (i.bidCount ?? 0) > 0,
   );
   const bidUsd = priced.reduce((sum, i) => sum + i.priceUsd, 0);
-  const cashUsd = bidUsd / 2;
-  const stockUsd = bidUsd / 2;
-  const shares = stockPrice > 0 ? stockUsd / stockPrice : 0;
+  const { cashUsd, sharesByTicker } = sumSplitsByTicker(priced, (i) => i.split);
   return {
     listingsCount: items.length,
     pricedCount: priced.length,
     bidsCount: items.reduce((sum, i) => sum + (i.bidCount ?? 0), 0),
     bidUsd,
-    split: { cashUsd, stockUsd, shares },
+    cashUsd,
+    sharesByTicker,
   };
 }
 
-function aggregateEndedTotals(items, stockPrice) {
+function aggregateEndedTotals(items) {
   // No-bid auctions (finalBidCount === 0) didn't actually clear at any real
   // price, so they shouldn't roll into the ended totals.
   const hasBid = (i) => (i.finalBidCount ?? 0) > 0;
 
-  // Live split: every USD-priced item with at least one bid contributes at
-  // the current stock price.
+  // Live: every USD-priced item with at least one bid contributes at the
+  // current stock price (its seller's stock in "By seller" mode).
   const priced = items.filter((i) => i.split !== null && i.split !== undefined && hasBid(i));
   const bidUsd = priced.reduce((sum, i) => sum + i.finalPriceUsd, 0);
-  const cashUsd = bidUsd / 2;
-  const stockUsd = bidUsd / 2;
-  const shares = stockPrice > 0 ? stockUsd / stockPrice : 0;
+  const live = sumSplitsByTicker(priced, (i) => i.split);
 
-  // End-time split: sum each item's pre-computed endTimeSplit. Items where
-  // OHLC history is missing OR that never received a bid drop out of this
-  // aggregate.
+  // At end: each item's pre-computed endTimeSplit. Items missing OHLC history
+  // (or with no bid) drop out of this aggregate.
   const pricedAtEnd = items.filter(
     (i) => i.endTimeSplit !== null && i.endTimeSplit !== undefined && hasBid(i),
   );
-  const splitAtEnd = pricedAtEnd.reduce(
-    (acc, i) => ({
-      cashUsd: acc.cashUsd + i.endTimeSplit.cashUsd,
-      stockUsd: acc.stockUsd + i.endTimeSplit.stockUsd,
-      shares: acc.shares + i.endTimeSplit.shares,
-    }),
-    { cashUsd: 0, stockUsd: 0, shares: 0 },
-  );
+  const atEnd = sumSplitsByTicker(pricedAtEnd, (i) => i.endTimeSplit);
 
   return {
     listingsCount: items.length,
     bidsCount: items.reduce((sum, i) => sum + (i.finalBidCount ?? 0), 0),
     bidUsd,
-    split: { cashUsd, stockUsd, shares },
-    splitAtEnd,
+    live,
+    atEnd,
     pricedAtEndCount: pricedAtEnd.length,
   };
 }
 
-// --- The Imaginary Brokerage ---
+// --- The Other Half ---
 // The site's core hypothetical, resolved: if every winning buyer had really
-// paid half in stock at the close-of-auction price, here's how that stock
-// is doing today. Pure transform of data already on the snapshot — each
+// paid half in stock at the close-of-auction price, here's how that other
+// half is doing today. Pure transform of data already on the snapshot — each
 // sold item's endTimeSplit (shares + stock-half dollars at its end-time
-// close) marked to the live price.
-function aggregateBrokerage(endedItems, livePrice) {
+// close) marked to the live price. One POSITION per stock, made of LOTS
+// grouped by the day auctions ended (tax-lot style), each lot funded by the
+// auction items whose thumbnails sit beneath it.
+// `priceForTicker(ticker)` returns the live price for a stock. In normal mode
+// every position resolves the same price; in "By seller" mode each marks to
+// its own stock. Cost basis / worth / P&L roll up in USD (additive across
+// stocks); shares stay grouped by ticker.
+// Attach costBasis / worthNow / pnl / pnlPct to a base object. worthNow null
+// (price feed down) makes pnl/pnlPct null too.
+function withPnl(base, costBasis, worthNow) {
+  const pnl = worthNow !== null ? worthNow - costBasis : null;
+  return {
+    ...base,
+    costBasis,
+    worthNow,
+    pnl,
+    pnlPct: worthNow !== null && costBasis > 0 ? (pnl / costBasis) * 100 : null,
+  };
+}
+
+// Builds the brokerage view-model. `priceForTicker(ticker)` gives a stock's
+// live price; `tickerOrder` (e.g. the snapshot's stock symbols) fixes the row
+// order of the per-stock table so it stays stable regardless of the sort pill.
+// Positions preserve INPUT order, so callers sort `endedItems` (by the page's
+// Sort pill) first. USD figures (cost/worth/P&L) roll up both per-stock and as
+// a composite total; shares stay per-stock (you can't add $EBAY to $GME
+// shares).
+function aggregateBrokerage(endedItems, priceForTicker, tickerOrder = []) {
   const sold = endedItems.filter((i) => (i.finalBidCount ?? 0) > 0);
   const positions = sold
     .filter((i) => i.endTimeSplit && Number.isFinite(i.endTimeSplit.shares))
     .map((i) => {
+      const ticker = i.valuationTicker || currentTickerSymbol;
+      const livePrice = priceForTicker(ticker);
       const shares = i.endTimeSplit.shares;
       const costBasis = i.endTimeSplit.stockUsd;
       const worthNow = livePrice > 0 ? shares * livePrice : null;
       return {
         itemId: i.itemId,
         title: i.title,
+        imageUrl: i.imageUrl,
         endedAt: i.endedAt,
+        ticker,
+        sellerId: i.sellerId,
         shares,
         closePrice: i.endTimePriceUsd,
         costBasis,
         worthNow,
         pnl: worthNow !== null ? worthNow - costBasis : null,
       };
-    })
-    .sort((a, b) => (a.endedAt < b.endedAt ? 1 : -1));
-  const shares = positions.reduce((sum, p) => sum + p.shares, 0);
+    });
+
+  // Per-stock rollup. A missing live price counts as 0 worth so one down
+  // stock doesn't blank the row (matches the composite total below).
+  const groups = new Map();
+  for (const p of positions) {
+    let g = groups.get(p.ticker);
+    if (!g) {
+      g = { ticker: p.ticker, shares: 0, costBasis: 0, worthNow: 0, anyWorth: false, count: 0 };
+      groups.set(p.ticker, g);
+    }
+    g.shares += p.shares;
+    g.costBasis += p.costBasis;
+    g.count += 1;
+    if (p.worthNow !== null) {
+      g.worthNow += p.worthNow;
+      g.anyWorth = true;
+    }
+  }
+  const rank = (t) => {
+    const i = tickerOrder.indexOf(t);
+    return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+  };
+  const byTicker = [...groups.values()]
+    .sort((a, b) => rank(a.ticker) - rank(b.ticker))
+    .map((g) => {
+      const ps = positions.filter((p) => p.ticker === g.ticker);
+      const sellers = [...new Set(ps.map((p) => p.sellerId).filter(Boolean))];
+      return withPnl(
+        { ticker: g.ticker, count: g.count, shares: g.shares, sellers, lots: buildLots(ps) },
+        g.costBasis,
+        g.anyWorth ? g.worthNow : null,
+      );
+    });
+
   const costBasis = positions.reduce((sum, p) => sum + p.costBasis, 0);
-  const worthNow = livePrice > 0 ? shares * livePrice : null;
+  const anyWorth = positions.some((p) => p.worthNow !== null);
+  const worthNow = anyWorth ? positions.reduce((sum, p) => sum + (p.worthNow ?? 0), 0) : null;
+
   return {
     positions,
     excludedCount: sold.length - positions.length,
-    shares,
-    costBasis,
-    worthNow,
-    pnl: worthNow !== null ? worthNow - costBasis : null,
-    pnlPct: worthNow !== null && costBasis > 0 ? ((worthNow - costBasis) / costBasis) * 100 : null,
+    byTicker,
+    total: withPnl({}, costBasis, worthNow),
   };
 }
 
-function pnlNode(pnl, pct) {
-  const up = pnl >= 0;
-  const cls = up ? 'pnl-up' : 'pnl-down';
-  const arrow = up ? '\u25b2' : '\u25bc';
-  const pctStr = pct !== null && Number.isFinite(pct) ? ` (${up ? '+' : ''}${pct.toFixed(1)}%)` : '';
-  return el('span', { class: cls, textContent: `${arrow} ${up ? '+' : '\u2212'}${usd.format(Math.abs(pnl))}${pctStr}` });
+// Group a stock's positions into LOTS by the local day the auction ended
+// (tax-lot style). Each lot sums shares/cost/worth across that day's items and
+// keeps their {itemId, imageUrl, title} for the thumbnail strip. Most-recent
+// day first, so the position reads newest → oldest.
+function buildLots(positions) {
+  const byDay = new Map();
+  for (const p of positions) {
+    const d = new Date(p.endedAt);
+    const dayMs = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    let lot = byDay.get(dayMs);
+    if (!lot) {
+      lot = { dayMs, shares: 0, costBasis: 0, worthNow: 0, anyWorth: false, items: [] };
+      byDay.set(dayMs, lot);
+    }
+    lot.shares += p.shares;
+    lot.costBasis += p.costBasis;
+    if (p.worthNow !== null) {
+      lot.worthNow += p.worthNow;
+      lot.anyWorth = true;
+    }
+    lot.items.push({ itemId: p.itemId, imageUrl: p.imageUrl, title: p.title });
+  }
+  return [...byDay.values()]
+    .sort((a, b) => b.dayMs - a.dayMs)
+    .map((lot) =>
+      withPnl(
+        {
+          dayMs: lot.dayMs,
+          shares: lot.shares,
+          avgPrice: lot.shares > 0 ? lot.costBasis / lot.shares : null,
+          items: lot.items,
+        },
+        lot.costBasis,
+        lot.anyWorth ? lot.worthNow : null,
+      ),
+    );
 }
 
-function renderBrokerage(snapshot, filteredEnded, livePrice) {
+// P&L value as the dollar amount with the percent stacked directly beneath it
+// (uniform two-line cell across position / lot / total rows).
+function pnlNode(pnl, pct) {
+  const up = pnl >= 0;
+  const arrow = up ? '\u25b2' : '\u25bc';
+  const node = el('span', { class: `pnl ${up ? 'pnl-up' : 'pnl-down'}` });
+  node.appendChild(el('span', { class: 'pnl-amt', textContent: `${arrow} ${up ? '+' : '\u2212'}${usd.format(Math.abs(pnl))}` }));
+  if (pct !== null && Number.isFinite(pct)) {
+    node.appendChild(el('span', { class: 'pnl-pct', textContent: `(${up ? '+' : ''}${pct.toFixed(1)}%)` }));
+  }
+  return node;
+}
+
+// A single `.stat` card. `value` is a string or a DOM node.
+function statCard(label, value) {
+  const valueEl = el('div', { class: 'stat-value' });
+  if (typeof value === 'string') valueEl.textContent = value;
+  else valueEl.appendChild(value);
+  return el('div', { class: 'stat' }, [
+    el('div', { class: 'stat-label', textContent: label }),
+    valueEl,
+  ]);
+}
+
+// A `.stat` card whose value is one shares line per ticker. One line in normal
+// mode (reads identically to before); two in "By seller" mode ($EBAY / $GME).
+function sharesCard(label, sharesByTicker) {
+  const rows = sharesByTicker && sharesByTicker.length
+    ? sharesByTicker
+    : [{ ticker: currentTickerSymbol, shares: 0 }];
+  const valueEl = el('div', { class: `stat-value${rows.length > 1 ? ' stat-value-multi' : ''}` });
+  for (const { ticker, shares: n } of rows) {
+    valueEl.appendChild(el('div', { class: 'shares-row' }, [sharesValue(n, { ticker })]));
+  }
+  return el('div', { class: 'stat' }, [
+    el('div', { class: 'stat-label', textContent: label }),
+    valueEl,
+  ]);
+}
+
+// "$TICKER" + logo cell for the holdings table's Stock column.
+function tickerCell(ticker) {
+  const cell = el('span', { class: 'bh-ticker' }, [`$${ticker}`]);
+  const logo = tickerLogoImg(ticker);
+  if (logo) {
+    logo.classList.add('bh-logo');
+    cell.appendChild(logo);
+  }
+  return cell;
+}
+
+function moneyOrDash(n) {
+  return n !== null && n !== undefined ? usd.format(n) : '—';
+}
+function pnlCell(pnl, pct) {
+  return pnl !== null && pnl !== undefined ? pnlNode(pnl, pct) : el('span', { textContent: '—' });
+}
+
+// One holdings-table row. Cells are a flat list that flows into the parent
+// grid (rows are `display: contents`); numeric cells carry a data-label so the
+// mobile stacked layout can prefix "Cost basis: …".
+function holdingsRow(cells, { head = false, total = false, rowClass = '' } = {}) {
+  const row = el('div', {
+    class: `bh-row${head ? ' bh-head' : ''}${total ? ' bh-total' : ''}${rowClass ? ` ${rowClass}` : ''}`,
+  });
+  for (const c of cells) {
+    const span = el('span', c.cls ? { class: c.cls } : {});
+    if (c.label) span.setAttribute('data-label', c.label);
+    if (typeof c.value === 'string') span.textContent = c.value;
+    else if (c.value) span.appendChild(c.value);
+    row.appendChild(span);
+  }
+  return row;
+}
+
+// --- Holdings table (positions + expandable lot sub-rows, one grid) ---
+// `lastBrokerageVM` + `collapsedPositions` are module-scope so the collapse
+// state survives the 30s re-render and a toggle can rebuild just the table.
+// Positions default to EXPANDED (their lots showing inline).
+let lastBrokerageVM = null;
+const collapsedPositions = new Set();
+
+const HOLDINGS_HEAD = ['Stock', 'Shares', 'Avg cost', 'Cost basis', 'Worth today', 'Unrealized P&L'];
+
+// Stock cell of a position row: a disclosure button (caret + $TICKER + logo +
+// @seller) that collapses/expands this stock's lots.
+function positionStockCell(r, collapsed) {
+  const btn = el('button', { class: 'pos-toggle', type: 'button', 'aria-expanded': collapsed ? 'false' : 'true' });
+  btn.appendChild(el('span', { class: `pos-caret${collapsed ? ' is-collapsed' : ''}`, 'aria-hidden': 'true', textContent: '▾' }));
+  btn.appendChild(tickerCell(r.ticker));
+  if (r.sellers.length) {
+    btn.appendChild(el('span', { class: 'pos-seller', textContent: r.sellers.map((s) => `@${s}`).join(', ') }));
+  }
+  btn.addEventListener('click', () => {
+    if (collapsedPositions.has(r.ticker)) collapsedPositions.delete(r.ticker);
+    else collapsedPositions.add(r.ticker);
+    renderHoldings();
+  });
+  return btn;
+}
+
+// Full-width row of ALL the lot's funding-auction thumbnails (each → item
+// page). Uncapped — it wraps onto as many rows as it needs.
+function lotThumbRow(lot) {
+  const row = el('div', { class: 'lot-thumbs-row' });
+  for (const it of lot.items) {
+    const a = el('a', {
+      class: 'lot-thumb',
+      href: `/item.html?id=${encodeURIComponent(it.itemId)}`,
+      title: it.title,
+      'aria-label': it.title,
+    });
+    if (it.imageUrl) a.appendChild(el('img', { src: hiResImg(it.imageUrl, 140), alt: it.title, loading: 'lazy' }));
+    row.appendChild(a);
+  }
+  return row;
+}
+
+// The unified holdings table: per-stock position rows (expandable) with their
+// day-lots as indented sub-rows in the SAME columns + a thumbnail row each,
+// then a composite Total (only when 2+ stocks). Rebuilt from lastBrokerageVM
+// on every collapse toggle.
+function renderHoldings() {
+  const container = document.getElementById('brokerage-table');
+  if (!container || !lastBrokerageVM) return;
+  const { byTicker, total } = lastBrokerageVM;
+  const grid = el('div', { class: 'brokerage-holdings' });
+  grid.appendChild(
+    holdingsRow(HOLDINGS_HEAD.map((h, i) => ({ value: h, cls: i === 0 ? 'bh-stock' : '' })), { head: true }),
+  );
+  for (const r of byTicker) {
+    grid.appendChild(el('div', { class: 'bh-sep' }));
+    const collapsed = collapsedPositions.has(r.ticker);
+    const avg = r.shares > 0 ? r.costBasis / r.shares : null;
+    grid.appendChild(
+      holdingsRow(
+        [
+          { value: positionStockCell(r, collapsed), cls: 'bh-stock' },
+          { value: shares.format(r.shares), label: 'Shares' },
+          { value: moneyOrDash(avg), label: 'Avg cost' },
+          { value: moneyOrDash(r.costBasis), label: 'Cost basis' },
+          { value: moneyOrDash(r.worthNow), label: 'Worth today' },
+          { value: pnlCell(r.pnl, r.pnlPct), label: 'Unrealized P&L' },
+        ],
+        { rowClass: 'bh-pos' },
+      ),
+    );
+    if (collapsed) continue;
+    for (const lot of r.lots) {
+      const dateStr = new Date(lot.dayMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      grid.appendChild(
+        holdingsRow(
+          [
+            { value: dateStr, cls: 'bh-stock bh-lot-date' },
+            { value: sharesCompact.format(lot.shares), label: 'Shares' },
+            { value: moneyOrDash(lot.avgPrice), label: 'Avg cost' },
+            { value: moneyOrDash(lot.costBasis), label: 'Cost basis' },
+            { value: moneyOrDash(lot.worthNow), label: 'Worth today' },
+            { value: pnlCell(lot.pnl, lot.pnlPct), label: 'Unrealized P&L' },
+          ],
+          { rowClass: 'bh-lot' },
+        ),
+      );
+      grid.appendChild(lotThumbRow(lot));
+      // The thumbnail strip spans all columns but the last (P&L). Drop an empty
+      // filler into that trailing cell so grid auto-flow starts the next lot on
+      // a fresh row instead of backfilling it (which shifted later lots over).
+      grid.appendChild(el('span', { class: 'bh-fill', 'aria-hidden': 'true' }));
+    }
+  }
+  if (byTicker.length > 1) {
+    grid.appendChild(el('div', { class: 'bh-sep bh-sep-strong' }));
+    grid.appendChild(
+      holdingsRow(
+        [
+          { value: 'Total', cls: 'bh-stock' },
+          { value: '—', label: 'Shares' },
+          { value: '—', label: 'Avg cost' },
+          { value: moneyOrDash(total.costBasis), label: 'Cost basis' },
+          { value: moneyOrDash(total.worthNow), label: 'Worth today' },
+          { value: pnlCell(total.pnl, total.pnlPct), label: 'Unrealized P&L' },
+        ],
+        { total: true },
+      ),
+    );
+  }
+  container.replaceChildren(grid);
+  syncExpandAllButton();
+}
+
+// --- Performance over time (The Other Half) ---
+// Daily OHLC history, fetched once and reused; the chart reconstructs from it
+// client-side so the seller filter / chart mode re-derive instantly.
+let ohlcHistory = null;
+let lastPerfRender = null; // { container, series } for re-render on resize/toggle
+
+// The absolute "line" chart was dropped — it read poorly on its own; "pct"
+// (relative return) replaced it. 'line' is migrated to 'pct' on load below.
+const CHART_TYPES = ['area', 'pct', 'candle'];
+const SERIES_COLOR = { EBAY: '#5aa9e6', GME: '#c792ea' };
+function seriesColor(key) {
+  return SERIES_COLOR[key] || '#8b93a7';
+}
+const CHART_ICONS = {
+  area:
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1 13 L5 7 L9 9 L15 3 V15 H1 Z" fill="currentColor" opacity="0.45"/><path d="M1 13 L5 7 L9 9 L15 3" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
+  pct:
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><line x1="1" y1="8.5" x2="15" y2="8.5" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.6"/><polyline points="1,11 5,5 9,9 15,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>',
+  candle:
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><line x1="4.5" y1="1.5" x2="4.5" y2="14.5" stroke="currentColor" stroke-width="1"/><rect x="3" y="5" width="3" height="6" fill="currentColor"/><line x1="11.5" y1="3" x2="11.5" y2="13" stroke="currentColor" stroke-width="1"/><rect x="10" y="6" width="3" height="5" fill="currentColor"/></svg>',
+};
+
+let chartType = (() => {
+  const v = localStorage.getItem('hchs.otherHalf.chartType');
+  if (v === 'line') return 'pct'; // migrate the removed line chart to %
+  return CHART_TYPES.includes(v) ? v : 'area';
+})();
+function setChartType(v) {
+  if (!CHART_TYPES.includes(v) || v === chartType) return;
+  chartType = v;
+  localStorage.setItem('hchs.otherHalf.chartType', v);
+  if (lastPerfRender) renderPerformanceChart(lastPerfRender.container, lastPerfRender.series);
+}
+
+// Series the legend can hide (line/area only): 'total' + each ticker.
+let hiddenSeries = new Set((localStorage.getItem('hchs.otherHalf.hidden') || '').split(',').filter(Boolean));
+function toggleSeries(key) {
+  if (hiddenSeries.has(key)) hiddenSeries.delete(key);
+  else hiddenSeries.add(key);
+  localStorage.setItem('hchs.otherHalf.hidden', [...hiddenSeries].join(','));
+  if (lastPerfRender) renderPerformanceChart(lastPerfRender.container, lastPerfRender.series);
+}
+
+async function refreshOhlcHistory() {
+  try {
+    const res = await fetch(`/api/ohlc-history?tickers=${SUPPORTED_SYMBOLS.join(',')}&days=240`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return;
+    const body = await res.json();
+    ohlcHistory = body.ohlc ?? {};
+    // Redraw now that history is available (the chart was skipped until now).
+    if (lastSnapshot) renderFilteredView(lastSnapshot, new Map());
+  } catch {
+    /* leave ohlcHistory null; the chart just stays hidden */
+  }
+}
+
+// Reconstruct the portfolio over time. For each day since the earliest lot:
+// per-stock value (active shares × that stock's close), the total, cost basis,
+// and a composite portfolio OHLC candle (shares-weighted combine of the
+// stocks' daily bars — high/low are approximations since the stocks' intraday
+// extremes don't co-occur). A final live point (no candle) ties the last value
+// to "worth today". Returns null when there isn't enough history (≥2 points).
+function buildPerformanceSeries(positions, history, priceForTicker, nowMs) {
+  if (!history) return null;
+  const lots = positions
+    .filter((p) => Array.isArray(history[p.ticker]) && history[p.ticker].length > 0)
+    .map((p) => ({ t: Date.parse(p.endedAt), ticker: p.ticker, shares: p.shares, cost: p.costBasis }))
+    .filter((a) => Number.isFinite(a.t))
+    .sort((a, b) => a.t - b.t);
+  if (lots.length === 0) return null;
+  const firstT = lots[0].t;
+  const tickers = [...new Set(lots.map((a) => a.ticker))];
+  const grid = [...new Set(tickers.flatMap((tk) => history[tk].map((c) => c.t)))]
+    .filter((t) => t >= firstT)
+    .sort((a, b) => a - b);
+
+  // Pointer sweep: bar[tk] = the most recent daily bar at or before `t`.
+  const ptr = {};
+  const bar = {};
+  for (const tk of tickers) {
+    ptr[tk] = 0;
+    bar[tk] = null;
+  }
+  const advanceTo = (t) => {
+    for (const tk of tickers) {
+      const arr = history[tk];
+      while (ptr[tk] < arr.length && arr[ptr[tk]].t <= t) {
+        bar[tk] = arr[ptr[tk]];
+        ptr[tk] += 1;
+      }
+    }
+  };
+
+  const points = [];
+  let prevCost = -1;
+  for (const t of grid) {
+    advanceTo(t);
+    const shares = {};
+    const costByTicker = {};
+    let cost = 0;
+    for (const a of lots) {
+      if (a.t > t) break; // sorted; nothing later contributes yet
+      cost += a.cost;
+      shares[a.ticker] = (shares[a.ticker] ?? 0) + a.shares;
+      costByTicker[a.ticker] = (costByTicker[a.ticker] ?? 0) + a.cost;
+    }
+    const byTicker = {};
+    const closeByTicker = {};
+    let value = 0;
+    let o = 0;
+    let h = 0;
+    let l = 0;
+    let c = 0;
+    let ok = true;
+    for (const tk of tickers) {
+      const sh = shares[tk] ?? 0;
+      const b = bar[tk];
+      closeByTicker[tk] = b ? b.c : null;
+      if (sh === 0) {
+        byTicker[tk] = 0;
+        continue;
+      }
+      if (!b) {
+        ok = false; // history doesn't reach this day for a held stock yet
+        break;
+      }
+      byTicker[tk] = sh * b.c;
+      value += sh * b.c;
+      o += sh * b.o;
+      h += sh * b.h;
+      l += sh * b.l;
+      c += sh * b.c;
+    }
+    if (!ok) continue;
+    points.push({
+      t,
+      value,
+      cost,
+      byTicker,
+      costByTicker,
+      closeByTicker,
+      candle: { o, h, l, c },
+      isLot: prevCost < 0 ? true : cost > prevCost + 1e-9,
+    });
+    prevCost = cost;
+  }
+
+  // Final live point (line/area only; no candle) — matches "worth today".
+  const nowBy = {};
+  const nowCostBy = {};
+  const nowCloseBy = {};
+  const nowShares = {};
+  let nowValue = 0;
+  let nowCost = 0;
+  let nowOk = true;
+  for (const a of lots) {
+    nowCost += a.cost;
+    nowShares[a.ticker] = (nowShares[a.ticker] ?? 0) + a.shares;
+    nowCostBy[a.ticker] = (nowCostBy[a.ticker] ?? 0) + a.cost;
+  }
+  for (const tk of tickers) {
+    const sh = nowShares[tk] ?? 0;
+    const lp = priceForTicker(tk);
+    if (sh > 0 && !(lp > 0)) {
+      nowOk = false;
+      break;
+    }
+    nowBy[tk] = sh * (lp > 0 ? lp : 0);
+    nowCloseBy[tk] = lp > 0 ? lp : null;
+    nowValue += nowBy[tk];
+  }
+  if (nowOk && (points.length === 0 || nowMs > points[points.length - 1].t)) {
+    points.push({
+      t: nowMs,
+      value: nowValue,
+      cost: nowCost,
+      byTicker: nowBy,
+      costByTicker: nowCostBy,
+      closeByTicker: nowCloseBy,
+      candle: null,
+      isLot: false,
+      now: true,
+    });
+  }
+
+  return points.length >= 2 ? { points, tickers } : null;
+}
+
+// Legend chip (line/area only): toggles a series; ticker chips carry a close
+// that updates on hover.
+function legendChip(key, label, color, priceSpan) {
+  const chip = el('button', { class: `perf-chip${hiddenSeries.has(key) ? ' is-off' : ''}`, type: 'button' });
+  const sw = el('span', { class: 'perf-swatch' });
+  if (color) sw.style.background = color;
+  else sw.classList.add('perf-swatch-total');
+  chip.appendChild(sw);
+  chip.appendChild(el('span', { textContent: label }));
+  if (priceSpan) chip.appendChild(priceSpan);
+  chip.addEventListener('click', () => toggleSeries(key));
+  return chip;
+}
+
+// Chart-type toggle buttons (area / line / candlestick).
+function buildChartTypes(type) {
+  const types = el('div', { class: 'perf-types' });
+  for (const t of CHART_TYPES) {
+    const b = el('button', { class: `perf-type-btn${t === type ? ' is-active' : ''}`, type: 'button', title: t, 'aria-label': `${t} chart` });
+    b.innerHTML = CHART_ICONS[t];
+    b.addEventListener('click', () => setChartType(t));
+    types.appendChild(b);
+  }
+  return types;
+}
+
+function renderPerformanceChart(container, series) {
+  const pts = series.points;
+  const tickers = series.tickers;
+  const type = chartType;
+  const W = Math.max(320, Math.round(container.clientWidth || 700));
+  const H = 200;
+  const padL = 10;
+  const padR = 10;
+  const padT = 14;
+  const padB = 22;
+  const NS = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs) => {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  };
+
+  // Legend-driven scope: which stocks the cost line / readout / y-domain
+  // reflect. 'Total' (or candlestick) means the whole portfolio; otherwise just
+  // the visible component stocks. Hiding everything falls back to Total. This
+  // is what makes isolating a small stock readable — and stops the total-cost
+  // line from dragging the axis negative.
+  const visible = tickers.filter((tk) => !hiddenSeries.has(tk));
+  const showTotal = !hiddenSeries.has('total');
+  const useTotal = type === 'candle' || showTotal || visible.length === 0;
+  const sumBy = (map) => {
+    let s = 0;
+    for (const tk of visible) s += map[tk] ?? 0;
+    return s;
+  };
+  const scopeValue = (p) => (useTotal ? p.value : sumBy(p.byTicker));
+  const scopeCost = (p) => (useTotal ? p.cost : sumBy(p.costByTicker));
+  const stackTop = (p) => sumBy(p.byTicker);
+  // "%" mode plots return vs cost basis (value/cost − 1), so $EBAY and $GME are
+  // comparable regardless of absolute size. ret() guards divide-by-zero;
+  // scopePlotV is the y-value of the scope's main line in the active mode.
+  const ret = (v, c) => (c > 0 ? v / c - 1 : 0);
+  const isPct = type === 'pct';
+  const compVal = (p, tk) => (isPct ? ret(p.byTicker[tk] ?? 0, p.costByTicker[tk] ?? 0) : (p.byTicker[tk] ?? 0));
+  const scopePlotV = (p) => (isPct ? ret(scopeValue(p), scopeCost(p)) : scopeValue(p));
+
+  const candlePts = pts.filter((p) => p.candle);
+  const plot = type === 'candle' ? candlePts : pts;
+
+  // Toolbar (built first so an early return still shows the controls).
+  const priceSpans = {};
+  const legend = el('div', { class: 'perf-legend' });
+  if (type !== 'candle') {
+    legend.appendChild(legendChip('total', 'Total', null, null));
+    for (const tk of tickers) {
+      const ps = el('span', { class: 'perf-chip-price' });
+      priceSpans[tk] = ps;
+      legend.appendChild(legendChip(tk, `$${tk}`, seriesColor(tk), ps));
+    }
+  }
+  const toolbar = el('div', { class: 'perf-toolbar' }, [legend, buildChartTypes(type)]);
+
+  if (plot.length < 2) {
+    container.replaceChildren(toolbar);
+    lastPerfRender = { container, series };
+    return;
+  }
+  const defaultPt = plot[plot.length - 1];
+  const t0 = plot[0].t;
+  const t1 = plot[plot.length - 1].t;
+  const tSpan = Math.max(1, t1 - t0);
+
+  // Y domain — always zoomed to what's actually drawn (area no longer pinned to
+  // 0) and clamped ≥ 0 so an isolated small stock can't push the axis negative.
+  let lo = Infinity;
+  let hi = -Infinity;
+  const fit = (v) => {
+    if (Number.isFinite(v)) {
+      lo = Math.min(lo, v);
+      hi = Math.max(hi, v);
+    }
+  };
+  for (const p of plot) {
+    if (type === 'candle') {
+      fit(scopeCost(p));
+      fit(p.candle.h);
+      fit(p.candle.l);
+    } else if (type === 'area') {
+      fit(scopeCost(p));
+      fit(stackTop(p));
+      if (useTotal) fit(p.value);
+    } else if (isPct) {
+      fit(0); // the 0% (break-even) baseline
+      if (useTotal) fit(scopePlotV(p));
+      for (const tk of visible) fit(compVal(p, tk));
+    } else {
+      fit(scopeCost(p));
+      if (useTotal) fit(p.value);
+      for (const tk of visible) fit(p.byTicker[tk] ?? 0);
+    }
+  }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) {
+    lo = Number.isFinite(lo) ? lo - 1 : 0;
+    hi = Number.isFinite(hi) ? hi + 1 : 1;
+  }
+  const vp = (hi - lo) * 0.08;
+  // % returns can be negative; absolute-$ axes clamp at 0.
+  lo = isPct ? lo - vp : Math.max(0, lo - vp);
+  hi += vp;
+
+  const X = (t) => padL + ((t - t0) / tSpan) * (W - padL - padR);
+  const Y = (v) => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+  const linePath = (acc) => plot.map((p, i) => `${i ? 'L' : 'M'}${X(p.t).toFixed(1)} ${Y(acc(p)).toFixed(1)}`).join(' ');
+
+  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: String(H), class: 'perf-chart' });
+  // Reference line: the cost-basis line in $ modes; a flat 0% (break-even) line
+  // in % mode.
+  if (isPct) {
+    svg.appendChild(mk('line', { class: 'perf-cost', x1: X(t0).toFixed(1), x2: X(t1).toFixed(1), y1: Y(0).toFixed(1), y2: Y(0).toFixed(1) }));
+  } else {
+    svg.appendChild(mk('path', { class: 'perf-cost', d: linePath((p) => scopeCost(p)) }));
+  }
+
+  if (type === 'area') {
+    if (visible.length === 0) {
+      let d = '';
+      plot.forEach((p, i) => {
+        d += `${i ? 'L' : 'M'}${X(p.t).toFixed(1)} ${Y(p.value).toFixed(1)}`;
+      });
+      d += `L${X(t1).toFixed(1)} ${Y(lo).toFixed(1)} L${X(t0).toFixed(1)} ${Y(lo).toFixed(1)} Z`;
+      svg.appendChild(mk('path', { class: 'perf-total-fill', d }));
+    } else {
+      // Stacked, but proportional within the zoomed band [lo, stackTop] so the
+      // shape stays readable when one stock dwarfs another.
+      const valAt = (p, share) => {
+        const st = stackTop(p);
+        return lo + share * (st - lo);
+      };
+      let cum = plot.map(() => 0);
+      for (const tk of visible) {
+        const next = plot.map((p, i) => {
+          const st = stackTop(p);
+          return cum[i] + (st > 0 ? (p.byTicker[tk] ?? 0) / st : 0);
+        });
+        let d = '';
+        plot.forEach((p, i) => {
+          d += `${i ? 'L' : 'M'}${X(p.t).toFixed(1)} ${Y(valAt(p, next[i])).toFixed(1)}`;
+        });
+        for (let i = plot.length - 1; i >= 0; i--) d += `L${X(plot[i].t).toFixed(1)} ${Y(valAt(plot[i], cum[i])).toFixed(1)}`;
+        svg.appendChild(mk('path', { d: `${d}Z`, fill: seriesColor(tk), 'fill-opacity': '0.45', stroke: seriesColor(tk), 'stroke-width': '1' }));
+        cum = next;
+      }
+    }
+    if (useTotal) svg.appendChild(mk('path', { class: 'perf-total-line', d: linePath((p) => p.value) }));
+  } else if (type === 'candle') {
+    const cw = Math.max(2, Math.min(13, ((W - padL - padR) / candlePts.length) * 0.6));
+    for (const p of candlePts) {
+      const x = X(p.t);
+      const cls = p.candle.c >= p.candle.o ? 'perf-candle-up' : 'perf-candle-down';
+      svg.appendChild(mk('line', { class: cls, x1: x.toFixed(1), x2: x.toFixed(1), y1: Y(p.candle.h).toFixed(1), y2: Y(p.candle.l).toFixed(1) }));
+      const yTop = Math.min(Y(p.candle.o), Y(p.candle.c));
+      const bh = Math.max(1, Math.abs(Y(p.candle.o) - Y(p.candle.c)));
+      svg.appendChild(mk('rect', { class: cls, x: (x - cw / 2).toFixed(1), y: yTop.toFixed(1), width: cw.toFixed(1), height: bh.toFixed(1) }));
+    }
+  } else {
+    // line OR pct — same shape; compVal/scopePlotV swap absolute $ for return.
+    for (const tk of visible) {
+      svg.appendChild(mk('path', { d: linePath((p) => compVal(p, tk)), fill: 'none', stroke: seriesColor(tk), 'stroke-width': '1.4' }));
+    }
+    if (useTotal) {
+      const lastP = plot[plot.length - 1];
+      const down = scopeCost(lastP) > scopeValue(lastP);
+      svg.appendChild(mk('path', { class: `perf-value${down ? ' is-down' : ''}`, d: linePath((p) => scopePlotV(p)) }));
+      for (const p of plot) if (p.isLot) svg.appendChild(mk('circle', { class: `perf-lot${down ? ' is-down' : ''}`, cx: X(p.t).toFixed(1), cy: Y(scopePlotV(p)).toFixed(1), r: '2.6' }));
+      svg.appendChild(mk('circle', { class: `perf-now${down ? ' is-down' : ''}`, cx: X(lastP.t).toFixed(1), cy: Y(scopePlotV(lastP)).toFixed(1), r: '3.2' }));
+    }
+  }
+
+  const fmtY = isPct ? (v) => `${(v * 100).toFixed(v >= 0.1 || v <= -0.1 ? 0 : 1)}%` : (v) => usd.format(v);
+  svg.appendChild(mk('text', { class: 'perf-axis', x: String(padL), y: String(padT - 3) })).textContent = fmtY(hi);
+  svg.appendChild(mk('text', { class: 'perf-axis', x: String(padL), y: String(H - padB + 12) })).textContent = fmtY(lo);
+  const dRange = mk('text', { class: 'perf-axis perf-axis-end', x: String(W - padR), y: String(H - padB + 12) });
+  dRange.textContent = `${fmtChartDate(t0)} – ${type === 'candle' ? fmtChartDate(t1) : 'today'}`;
+  svg.appendChild(dRange);
+
+  const guide = mk('line', { class: 'perf-guide', x1: '0', y1: String(padT), x2: '0', y2: String(H - padB), opacity: '0' });
+  const sdot = mk('circle', { class: 'perf-scrub-dot', r: '3.5', opacity: '0' });
+  svg.appendChild(guide);
+  svg.appendChild(sdot);
+
+  const readout = el('div', { class: 'perf-readout' });
+  const setLegendPrices = (p) => {
+    for (const tk of tickers) {
+      const sp = priceSpans[tk];
+      if (!sp) continue;
+      const cl = p.closeByTicker ? p.closeByTicker[tk] : null;
+      sp.textContent = cl != null ? usd.format(cl) : '—';
+    }
+  };
+  const setReadout = (p) => {
+    const v = scopeValue(p);
+    const c = scopeCost(p);
+    const pnl = v - c;
+    const pct = c > 0 ? (pnl / c) * 100 : null;
+    readout.replaceChildren(
+      el('span', { class: 'perf-ro-date', textContent: p.now ? 'Today' : fmtChartDate(p.t) }),
+      el('span', { class: 'perf-ro-val', textContent: usd.format(v) }),
+      pnlNode(pnl, pct),
+    );
+    setLegendPrices(p);
+  };
+  setReadout(defaultPt);
+
+  const nearest = (clientX) => {
+    const rect = svg.getBoundingClientRect();
+    if (rect.width === 0) return defaultPt;
+    const px = ((clientX - rect.left) / rect.width) * W;
+    let best = plot[0];
+    let bd = Infinity;
+    for (const p of plot) {
+      const dx = Math.abs(X(p.t) - px);
+      if (dx < bd) {
+        bd = dx;
+        best = p;
+      }
+    }
+    return best;
+  };
+  const move = (clientX) => {
+    const p = nearest(clientX);
+    const px = X(p.t).toFixed(1);
+    guide.setAttribute('x1', px);
+    guide.setAttribute('x2', px);
+    guide.setAttribute('opacity', '1');
+    sdot.setAttribute('cx', px);
+    sdot.setAttribute('cy', Y(scopePlotV(p)).toFixed(1));
+    sdot.setAttribute('opacity', '1');
+    setReadout(p);
+  };
+  const clearScrub = () => {
+    guide.setAttribute('opacity', '0');
+    sdot.setAttribute('opacity', '0');
+    setReadout(defaultPt);
+  };
+  svg.addEventListener('mousemove', (e) => move(e.clientX));
+  svg.addEventListener('mouseleave', clearScrub);
+  svg.addEventListener('touchmove', (e) => {
+    if (e.touches[0]) move(e.touches[0].clientX);
+  }, { passive: true });
+  svg.addEventListener('touchend', clearScrub);
+
+  container.replaceChildren(toolbar, readout, svg);
+  lastPerfRender = { container, series };
+}
+
+function fmtChartDate(t) {
+  return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+// Open auctions aren't realized lots, so they sit OUTSIDE the position — a
+// quiet "what's pending" line: total bids + the shares they'd buy at today's
+// price if they closed now.
+function renderPendingCallout(el2, filteredActive, priceForTicker) {
+  const live = filteredActive.filter((i) => (i.bidCount ?? 0) > 0 && i.priceUsd != null);
+  if (live.length === 0) {
+    el2.hidden = true;
+    return;
+  }
+  let cost = 0;
+  const byTicker = new Map();
+  for (const i of live) {
+    const half = i.priceUsd / 2;
+    cost += half;
+    const tk = i.valuationTicker || currentTickerSymbol;
+    const lp = priceForTicker(tk);
+    if (lp > 0) byTicker.set(tk, (byTicker.get(tk) ?? 0) + half / lp);
+  }
+  const sharesStr = [...byTicker.entries()].map(([tk, sh]) => `+${sharesCompact.format(sh)} $${tk}`).join(' · ');
+  setText(
+    el2,
+    `${live.length} open auction${live.length === 1 ? '' : 's'} · ${usd.format(cost)} in bids${sharesStr ? ` → ${sharesStr} if they close now` : ''}`,
+  );
+  el2.hidden = false;
+}
+
+function renderBrokerage(snapshot, filteredEnded, filteredActive, priceForTicker) {
   const section = document.getElementById('brokerage-section');
   if (!section) return;
-  const b = aggregateBrokerage(filteredEnded, livePrice);
+  const tickerOrder = (snapshot.stocks ?? [snapshot.stock]).filter(Boolean).map((q) => q.symbol);
+  // Sort positions by the page's Sort pill (same logic as the ended list) so
+  // the Statement orders/regroups in lockstep with the rest of the page.
+  const sortedEnded = sortEndedItems(filteredEnded, currentSort);
+  const b = aggregateBrokerage(sortedEnded, priceForTicker, tickerOrder);
   // Nothing sold with an end-time price yet (or price feed down) — the
   // hypothetical has nothing to say; hide rather than show dashes.
-  if (b.positions.length === 0 || b.worthNow === null) {
+  if (b.positions.length === 0 || b.total.worthNow === null) {
     section.hidden = true;
     return;
   }
-  const symbol = snapshot.stock?.symbol ?? activeSymbol;
+  // One unified table: per-stock position rows (the summary) with their
+  // day-lots expandable inline beneath, then a composite Total. The old
+  // separate "Position detail" section rolls into this table now.
+  const multi = b.byTicker.length > 1;
+  const only = b.byTicker[0];
 
   setText(
     document.getElementById('brokerage-tagline'),
-    `If every buyer had really paid half in $${symbol} stock, here\u2019s how their shares are doing:`,
+    multi
+      ? 'If every buyer had really paid half in stock \u2014 Ryan\u2019s in $EBAY, mine in $GME \u2014 here\u2019s how that other half is doing today:'
+      : `If every buyer had really paid half in $${only?.ticker ?? activeSymbol} stock, here\u2019s how that other half is doing today:`,
   );
 
-  const stats = document.getElementById('brokerage-stats');
-  stats.replaceChildren();
-  const cards = [
-    { label: 'Shares held', value: sharesValue(b.shares) },
-    { label: 'Cost basis', value: usd.format(b.costBasis) },
-    { label: 'Worth today', value: usd.format(b.worthNow) },
-    { label: 'Unrealized P&L', value: pnlNode(b.pnl, b.pnlPct) },
-  ];
-  for (const stat of cards) {
-    const valueEl = el('div', { class: 'stat-value' });
-    if (typeof stat.value === 'string') valueEl.textContent = stat.value;
-    else valueEl.appendChild(stat.value);
-    stats.appendChild(
-      el('div', { class: 'stat' }, [
-        el('div', { class: 'stat-label', textContent: stat.label }),
-        valueEl,
-      ]),
-    );
+  lastBrokerageVM = b;
+  renderHoldings();
+
+  // Performance-over-time chart (hidden until daily OHLC history is available).
+  const chart = document.getElementById('brokerage-chart');
+  if (chart) {
+    const series = buildPerformanceSeries(b.positions, ohlcHistory, priceForTicker, Date.now());
+    if (series) {
+      chart.hidden = false;
+      renderPerformanceChart(chart, series);
+    } else {
+      chart.hidden = true;
+      chart.replaceChildren();
+      lastPerfRender = null;
+    }
   }
 
-  setText(
-    document.getElementById('brokerage-summary'),
-    `Statement (${b.positions.length} position${b.positions.length === 1 ? '' : 's'})`,
-  );
-
-  const table = document.getElementById('brokerage-table');
-  table.replaceChildren();
-  for (const p of b.positions) {
-    const row = el('div', { class: 'brokerage-row' });
-    row.appendChild(
-      el('a', {
-        class: 'brokerage-item',
-        href: `/item.html?id=${encodeURIComponent(p.itemId)}`,
-        textContent: p.title,
-      }),
-    );
-    const detail = el('div', { class: 'brokerage-detail' });
-    const closeStr = p.closePrice !== null ? ` @ ${usd.format(p.closePrice)}` : '';
-    detail.appendChild(el('span', { textContent: `${sharesCompact.format(p.shares)} sh${closeStr}` }));
-    detail.appendChild(el('span', { textContent: `cost ${usd.format(p.costBasis)}` }));
-    detail.appendChild(el('span', { textContent: `now ${usd.format(p.worthNow)}` }));
-    detail.appendChild(pnlNode(p.pnl, p.costBasis > 0 ? (p.pnl / p.costBasis) * 100 : null));
-    row.appendChild(detail);
-    table.appendChild(row);
-  }
+  const pending = document.getElementById('brokerage-pending');
+  if (pending) renderPendingCallout(pending, filteredActive ?? [], priceForTicker);
 
   const footnote = document.getElementById('brokerage-footnote');
   if (b.excludedCount > 0) {
@@ -471,10 +1289,26 @@ function formatPriceAsOf(asOfDate, marketOpen) {
 function renderTicker(snapshot) {
   const ticker = document.getElementById('ticker');
   if (!ticker) return;
-  const price = snapshot?.stock?.price;
-  const symbol = snapshot?.stock?.symbol ?? activeSymbol;
-  setText(ticker.querySelector('.ticker-symbol'), `$${symbol}`);
-  setText(ticker.querySelector('.ticker-price'), price ? usd.format(price) : '—');
+  // One quote in normal mode; one per stock in "By seller" mode ($EBAY, $GME).
+  let stocks =
+    snapshot?.valuationMode === 'mixed' && Array.isArray(snapshot.stocks) && snapshot.stocks.length
+      ? snapshot.stocks
+      : [snapshot?.stock].filter(Boolean);
+  if (stocks.length === 0) {
+    stocks = [{ symbol: activeSymbol === MIXED_SYMBOL ? 'EBAY' : activeSymbol, price: null, asOf: null }];
+  }
+  const quotesWrap = ticker.querySelector('.ticker-quotes');
+  if (quotesWrap) {
+    quotesWrap.classList.toggle('is-multi', stocks.length > 1);
+    quotesWrap.replaceChildren(
+      ...stocks.map((q) =>
+        el('div', { class: 'ticker-quote' }, [
+          el('span', { class: 'ticker-symbol', textContent: `$${q.symbol}` }),
+          el('span', { class: 'ticker-price', textContent: q.price ? usd.format(q.price) : '—' }),
+        ]),
+      ),
+    );
+  }
   const generated = snapshot?.generatedAt ? new Date(snapshot.generatedAt) : null;
   const isStale = generated ? Date.now() - generated.getTime() > STALE_MS : false;
   ticker.classList.toggle('is-stale', isStale);
@@ -483,7 +1317,10 @@ function renderTicker(snapshot) {
   // Price-feed timestamp lives directly below the market-status line so the
   // user can tell at a glance how stale the stock value is (especially over
   // a weekend, when the close from Friday afternoon should be unambiguous).
-  const asOf = snapshot?.stock?.asOf ? new Date(snapshot.stock.asOf) : null;
+  // Both stocks are US equities sharing one market clock — show the freshest
+  // as-of across them.
+  const asOfMs = stocks.map((q) => (q.asOf ? Date.parse(q.asOf) : NaN)).filter((n) => !Number.isNaN(n));
+  const asOf = asOfMs.length ? new Date(Math.max(...asOfMs)) : null;
   setText(ticker.querySelector('.ticker-as-of'), formatPriceAsOf(asOf, marketOpen));
 }
 
@@ -539,26 +1376,12 @@ function renderTotals(snapshot, totals) {
   if (!root) return;
   root.replaceChildren();
   if (!snapshot || !totals) return;
-  const { listingsCount, bidsCount, bidUsd, split } = totals;
-  const symbol = snapshot.stock?.symbol ?? activeSymbol;
-  const items = [
-    { label: 'Active listings', value: integer.format(listingsCount) },
-    { label: 'Bids', value: integer.format(bidsCount ?? 0) },
-    { label: 'Sum of current bids', value: usd.format(bidUsd) },
-    { label: 'Half Cash', value: usd.format(split.cashUsd) },
-    { label: 'Half Stock', value: sharesValue(split.shares) },
-  ];
-  for (const stat of items) {
-    const valueEl = el('div', { class: 'stat-value' });
-    if (typeof stat.value === 'string') valueEl.textContent = stat.value;
-    else valueEl.appendChild(stat.value);
-    root.appendChild(
-      el('div', { class: 'stat' }, [
-        el('div', { class: 'stat-label', textContent: stat.label }),
-        valueEl,
-      ]),
-    );
-  }
+  const { listingsCount, bidsCount, bidUsd, cashUsd, sharesByTicker } = totals;
+  root.appendChild(statCard('Active listings', integer.format(listingsCount)));
+  root.appendChild(statCard('Bids', integer.format(bidsCount ?? 0)));
+  root.appendChild(statCard('Sum of current bids', usd.format(bidUsd)));
+  root.appendChild(statCard('Half Cash', usd.format(cashUsd)));
+  root.appendChild(sharesCard('Half Stock', sharesByTicker));
 }
 
 // Inline icon markup. Sale-mode icons replace the spelled-out tag on the
@@ -604,23 +1427,31 @@ function historyLink(itemId) {
   return a;
 }
 
-// Ticker-logo state, refreshed from each /api/snapshot response. When the
-// server has a logo.dev token, this is the image URL for the currently
-// selected stock; otherwise null and we fall back to a spelled-out "shares"
-// unit.
-let currentTickerLogoUrl = null;
+// Ticker-logo state, refreshed from each /api/snapshot response. `logosEnabled`
+// reflects whether the server has a logo.dev token; per-ticker URLs are built
+// on demand (the proxy keys off ?symbol=) so "By seller" mode can show each
+// stock's own logo. currentTickerSymbol is the single active symbol used as a
+// default when an item carries no valuationTicker.
+let logosEnabled = false;
 let currentTickerSymbol = '';
+
+// Logo proxy URL for a ticker, or null when logos are disabled.
+function logoUrlFor(ticker) {
+  if (!logosEnabled || !ticker) return null;
+  return `/api/ticker-logo?symbol=${encodeURIComponent(ticker)}`;
+}
 
 // The ticker logo <img>, or null when no logo is configured. Callers decide
 // the fallback: the inline "shares" unit (sharesUnit) or simply nothing (the
 // split's "Half Stock" label, which already names the asset).
-function tickerLogoImg() {
-  if (!currentTickerLogoUrl) return null;
+function tickerLogoImg(ticker) {
+  const url = logoUrlFor(ticker);
+  if (!url) return null;
   return el('img', {
     class: 'ticker-logo',
-    src: currentTickerLogoUrl,
-    alt: currentTickerSymbol,
-    title: currentTickerSymbol,
+    src: url,
+    alt: ticker,
+    title: ticker,
     loading: 'lazy',
   });
 }
@@ -629,8 +1460,8 @@ function tickerLogoImg() {
 // (mirrors a currency glyph), otherwise the spelled-out word "shares". The
 // img onerror handler downgrades to the text unit if the logo fails to
 // load (network error, unknown ticker, etc.) without leaving a broken icon.
-function sharesUnit() {
-  const img = tickerLogoImg();
+function sharesUnit(ticker) {
+  const img = tickerLogoImg(ticker);
   if (img) {
     img.addEventListener('error', () => {
       img.replaceWith(el('span', { class: 'unit', textContent: 'shares' }));
@@ -716,7 +1547,7 @@ function imageGallery(images, alt) {
 // overflowing into the neighbouring value or off the tile edge. One value
 // per atomic unit, free to reflow, is the only layout that holds at every
 // tile width (the values themselves are intrinsically wide).
-function splitBox(cashUsd, sharesAmount) {
+function splitBox(cashUsd, sharesAmount, ticker) {
   const split = el('div', { class: 'item-split' });
   split.appendChild(
     el('div', { class: 'split-half' }, [
@@ -727,7 +1558,7 @@ function splitBox(cashUsd, sharesAmount) {
   split.appendChild(
     el('div', { class: 'split-half' }, [
       el('span', { class: 'label', textContent: 'Half Stock' }),
-      el('span', { class: 'value' }, [sharesValue(sharesAmount, { compact: true })]),
+      el('span', { class: 'value' }, [sharesValue(sharesAmount, { compact: true, ticker })]),
     ]),
   );
   return split;
@@ -736,10 +1567,11 @@ function splitBox(cashUsd, sharesAmount) {
 // Format a shares amount as "{N} <unit>" where the unit is the ticker logo
 // or the word "shares". `compact: true` uses 4 significant digits (for
 // narrow tile splits); default uses the full 4-decimal form (for totals).
-function sharesValue(n, { compact = false } = {}) {
+// `ticker` selects which stock's logo to show (defaults to the active one).
+function sharesValue(n, { compact = false, ticker = currentTickerSymbol } = {}) {
   return el('span', {}, [
     compact ? sharesCompact.format(n) : shares.format(n),
-    sharesUnit(),
+    sharesUnit(ticker),
   ]);
 }
 
@@ -796,7 +1628,7 @@ function renderItem(item, symbol) {
   if (stats.children.length) bidRow.appendChild(stats);
   body.appendChild(bidRow);
   if (item.split) {
-    body.appendChild(splitBox(item.split.cashUsd, item.split.shares));
+    body.appendChild(splitBox(item.split.cashUsd, item.split.shares, item.valuationTicker));
   }
   card.appendChild(body);
   return card;
@@ -828,27 +1660,13 @@ function renderEndedSection(snapshot, endedItems, totals) {
 
   totalsRoot.replaceChildren();
   if (totals) {
-    const symbol = snapshot.stock?.symbol ?? activeSymbol;
-    const displaySplit = atEnd ? totals.splitAtEnd : totals.split;
+    const display = atEnd ? totals.atEnd : totals.live;
     const sharesSuffix = atEnd ? ' (at end)' : ' (live)';
-    const stats = [
-      { label: 'Ended listings', value: integer.format(totals.listingsCount) },
-      { label: 'Bids', value: integer.format(totals.bidsCount) },
-      { label: 'Sum of final bids', value: usd.format(totals.bidUsd) },
-      { label: 'Half Cash', value: usd.format(displaySplit.cashUsd) },
-      { label: `Half Stock${sharesSuffix}`, value: sharesValue(displaySplit.shares) },
-    ];
-    for (const stat of stats) {
-      const valueEl = el('div', { class: 'stat-value' });
-      if (typeof stat.value === 'string') valueEl.textContent = stat.value;
-      else valueEl.appendChild(stat.value);
-      totalsRoot.appendChild(
-        el('div', { class: 'stat' }, [
-          el('div', { class: 'stat-label', textContent: stat.label }),
-          valueEl,
-        ]),
-      );
-    }
+    totalsRoot.appendChild(statCard('Ended listings', integer.format(totals.listingsCount)));
+    totalsRoot.appendChild(statCard('Bids', integer.format(totals.bidsCount)));
+    totalsRoot.appendChild(statCard('Sum of final bids', usd.format(totals.bidUsd)));
+    totalsRoot.appendChild(statCard('Half Cash', usd.format(display.cashUsd)));
+    totalsRoot.appendChild(sharesCard(`Half Stock${sharesSuffix}`, display.sharesByTicker));
     // When some ended items lack OHLC history, flag the gap so users know
     // the at-end aggregate is a subset.
     if (atEnd && totals.pricedAtEndCount < totals.listingsCount) {
@@ -911,7 +1729,7 @@ function renderEndedItem(item) {
   body.appendChild(bidRow);
 
   if (displaySplit) {
-    body.appendChild(splitBox(displaySplit.cashUsd, displaySplit.shares));
+    body.appendChild(splitBox(displaySplit.cashUsd, displaySplit.shares, item.valuationTicker));
   }
   card.appendChild(body);
   return card;
@@ -1078,9 +1896,19 @@ function renderError(message) {
 // or sort: filters items, recomputes totals from the filtered set, then
 // renders both active and ended sections. Called on snapshot refresh and on
 // filter/sort changes.
+// Live price lookup by ticker. One quote in normal mode; one per stock in
+// "By seller" mode. Unknown tickers fall back to the primary quote's price so
+// a stray valuationTicker never zeroes a split.
+function priceForTickerFromSnapshot(snapshot) {
+  const quotes = (snapshot.stocks ?? [snapshot.stock]).filter(Boolean);
+  const byTicker = new Map(quotes.map((q) => [q.symbol, q.price ?? 0]));
+  const fallback = snapshot.stock?.price ?? 0;
+  return (ticker) => byTicker.get(ticker) ?? fallback;
+}
+
 function renderFilteredView(snapshot, bidDiff) {
   if (!snapshot) return;
-  const stockPrice = snapshot.stock?.price ?? 0;
+  const priceForTicker = priceForTickerFromSnapshot(snapshot);
   const filteredActive = filterBySeller(snapshot.items ?? []);
   // 0-bid ended auctions are unsold listings — they didn't clear and they
   // don't contribute to any of the dollar totals (composeSnapshot already
@@ -1089,15 +1917,15 @@ function renderFilteredView(snapshot, bidDiff) {
   const filteredEnded = filterBySeller(snapshot.endedItems ?? []).filter(
     (i) => (i.finalBidCount ?? 0) > 0,
   );
-  renderTotals(snapshot, aggregateActiveTotals(filteredActive, stockPrice));
-  renderBrokerage(snapshot, filteredEnded, stockPrice);
+  renderTotals(snapshot, aggregateActiveTotals(filteredActive));
+  renderBrokerage(snapshot, filteredEnded, filteredActive, priceForTicker);
   renderMostRecentBid(snapshot, filteredActive);
   renderItems(snapshot, filteredActive, bidDiff);
-  renderEndedSection(snapshot, filteredEnded, aggregateEndedTotals(filteredEnded, stockPrice));
+  renderEndedSection(snapshot, filteredEnded, aggregateEndedTotals(filteredEnded));
 }
 
 function updateIntroSymbol(symbol) {
-  const display = `$${symbol}`;
+  const display = symbol === MIXED_SYMBOL ? '$EBAY + $GME' : `$${symbol}`;
   setText(document.getElementById('intro-symbol-2'), display);
 }
 
@@ -1150,11 +1978,11 @@ async function refresh() {
     lastKnownGoodSymbol = activeSymbol;
     saveTickerToStorage(activeSymbol);
     // Update logo state BEFORE any render that calls sharesValue().
-    currentTickerLogoUrl = snapshot.tickerLogoUrl ?? null;
-    currentTickerSymbol = snapshot.stock?.symbol ?? activeSymbol;
+    logosEnabled = Boolean(snapshot.tickerLogoUrl);
+    currentTickerSymbol = snapshot.stock?.symbol ?? (activeSymbol === MIXED_SYMBOL ? 'EBAY' : activeSymbol);
     renderDegradedBanner(snapshot);
     renderTicker(snapshot);
-    updateIntroSymbol(snapshot.stock?.symbol ?? activeSymbol);
+    updateIntroSymbol(snapshot.valuationMode === 'mixed' ? MIXED_SYMBOL : (snapshot.stock?.symbol ?? activeSymbol));
     renderLastUpdated(snapshot);
     renderPriceSource(snapshot);
     renderFilteredView(snapshot, prevBidCounts);
@@ -1220,7 +2048,7 @@ document.querySelectorAll('.stock-btn').forEach((btn) => {
 // Custom ticker input wiring
 const tickerInput = document.getElementById('ticker-input');
 if (tickerInput) {
-  if (!SUPPORTED_SYMBOLS.includes(activeSymbol)) {
+  if (!isPillSymbol(activeSymbol)) {
     tickerInput.value = activeSymbol;
   }
   tickerInput.addEventListener('input', () => {
@@ -1244,7 +2072,7 @@ if (tickerInput) {
     }
   });
   tickerInput.addEventListener('blur', () => {
-    if (!SUPPORTED_SYMBOLS.includes(activeSymbol)) {
+    if (!isPillSymbol(activeSymbol)) {
       tickerInput.value = activeSymbol;
     } else {
       tickerInput.value = '';
@@ -1387,6 +2215,30 @@ if (endedToggle) {
   });
 }
 
+// "The Other Half" enable toggle — collapse/expand the brokerage, persisted.
+const brokerageToggle = document.getElementById('brokerage-toggle');
+if (brokerageToggle) {
+  brokerageToggle.addEventListener('click', () => {
+    otherHalfEnabled = !otherHalfEnabled;
+    saveOtherHalfEnabled(otherHalfEnabled);
+    applyOtherHalfEnabled();
+  });
+}
+
+// Expand-all / collapse-all every position in the holdings table at once.
+const brokerageExpand = document.getElementById('brokerage-expand');
+if (brokerageExpand) {
+  brokerageExpand.addEventListener('click', () => {
+    if (!lastBrokerageVM) return;
+    const tickers = lastBrokerageVM.byTicker.map((r) => r.ticker);
+    const allCollapsed = tickers.every((t) => collapsedPositions.has(t));
+    if (allCollapsed) collapsedPositions.clear();
+    else tickers.forEach((t) => collapsedPositions.add(t));
+    renderHoldings();
+  });
+}
+applyOtherHalfEnabled();
+
 // Brand-icon click toggles theme. Precedence: localStorage > OS preference > dark default.
 const brand = document.querySelector('.brand');
 if (brand) {
@@ -1417,3 +2269,17 @@ document.addEventListener('visibilitychange', () => {
 
 refresh();
 schedule();
+refreshOhlcHistory();
+
+// Re-render the performance chart on resize (it's measured to the container
+// width). Debounced; only when a chart is currently shown.
+let perfResizeTimer = null;
+window.addEventListener('resize', () => {
+  if (perfResizeTimer !== null) return;
+  perfResizeTimer = window.setTimeout(() => {
+    perfResizeTimer = null;
+    if (lastPerfRender && !lastPerfRender.container.hidden) {
+      renderPerformanceChart(lastPerfRender.container, lastPerfRender.series);
+    }
+  }, 200);
+});

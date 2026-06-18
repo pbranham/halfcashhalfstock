@@ -6,6 +6,7 @@ import {
   insertBids,
   persistSnapshot,
   readBidsForItem,
+  readDailyOhlc,
   reconcileItemBids,
   upsertListing,
 } from '../src/db/persist.js';
@@ -340,6 +341,47 @@ describe('getClosingPriceAt', () => {
     pool.query.mockResolvedValueOnce({ rows: [{ close: 'not-a-number' }], rowCount: 1 });
     const price = await getClosingPriceAt(pool as unknown as Pool, 'EBAY', new Date());
     expect(price).toBeNull();
+  });
+});
+
+describe('readDailyOhlc', () => {
+  it('groups 1d bars per ticker as { t, o, h, l, c }, ascending', async () => {
+    const pool = makePool();
+    pool.query.mockResolvedValueOnce({
+      rows: [
+        { ticker: 'EBAY', period_start: new Date('2026-05-12T20:00:00Z'), open: '109.0', high: '111.0', low: '108.5', close: '110.20' },
+        { ticker: 'GME', period_start: new Date('2026-05-13T20:00:00Z'), open: '21.0', high: '22.1', low: '20.9', close: '21.77' },
+      ],
+      rowCount: 2,
+    });
+    const since = new Date('2026-05-01T00:00:00Z');
+    const out = await readDailyOhlc(pool as unknown as Pool, ['EBAY', 'GME'], since);
+    expect(out.EBAY).toEqual([{ t: Date.parse('2026-05-12T20:00:00Z'), o: 109, h: 111, l: 108.5, c: 110.2 }]);
+    expect(out.GME).toEqual([{ t: Date.parse('2026-05-13T20:00:00Z'), o: 21, h: 22.1, l: 20.9, c: 21.77 }]);
+    const [sql, params] = pool.query.mock.calls[0];
+    expect(sql).toMatch(/interval = '1d'/);
+    expect(params).toEqual([['EBAY', 'GME'], since]);
+  });
+
+  it('falls back o/h/l to close when missing, and skips non-finite close', async () => {
+    const pool = makePool();
+    pool.query.mockResolvedValueOnce({
+      rows: [
+        { ticker: 'EBAY', period_start: new Date('2026-05-13T20:00:00Z'), open: null, high: null, low: null, close: '108.61' },
+        { ticker: 'EBAY', period_start: new Date('2026-05-14T20:00:00Z'), open: '1', high: '1', low: '1', close: 'NaN' },
+      ],
+      rowCount: 2,
+    });
+    const out = await readDailyOhlc(pool as unknown as Pool, ['EBAY', 'GME'], new Date());
+    expect(out.EBAY).toEqual([{ t: Date.parse('2026-05-13T20:00:00Z'), o: 108.61, h: 108.61, l: 108.61, c: 108.61 }]);
+    expect(out.GME).toEqual([]);
+  });
+
+  it('short-circuits to {} without querying when no tickers given', async () => {
+    const pool = makePool();
+    const out = await readDailyOhlc(pool as unknown as Pool, [], new Date());
+    expect(out).toEqual({});
+    expect(pool.query).not.toHaveBeenCalled();
   });
 });
 
