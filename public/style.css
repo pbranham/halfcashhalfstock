@@ -724,97 +724,29 @@ main {
   object-fit: contain;
 }
 
-/* Per-position image-treemap band, shown between a position row and its lot
-   sub-rows. Spans the FULL width (the whole table) — the per-ticker map wants
-   the room. */
-.pos-treemap-row {
-  grid-column: 1 / -1;
-  padding: 4px 0 14px 22px;
+/* Thumbnail strip beneath a lot — every funding auction, wrapping onto as many
+   rows as needed (no cap). Spans all columns EXCEPT the last (P&L), so photos
+   never bleed under the P&L numbers. */
+.lot-thumbs-row {
+  grid-column: 1 / -2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 0 8px 22px;
 }
-/* Squarified treemap of a position's funding auctions (d3-hierarchy layout) —
-   one SVG, tile area ∝ buying power. SVG + viewBox so geometry is deterministic
-   and scales cleanly at any width (the old CSS-positioned divs overlapped on
-   Safari). The box grows taller with item count rather than shrinking tiles. */
-.pos-treemap {
-  display: block;
-  width: 100%;
-  height: auto;
-  max-width: 900px;
-}
-/* Blurred, dimmed cover of the same photo behind a big tile's sharp (uncropped)
-   image, so the letterbox bars read as intentional rather than dead space. */
-.tm-blur {
-  opacity: 0.45;
-}
-.tm-rect {
-  fill: var(--bg-elev);
-  stroke: var(--border);
-  stroke-width: 1.5;
-  transition: stroke 0.1s ease;
-}
-.tm-more .tm-rect {
-  fill: var(--bg-card);
-}
-a.tm-tile,
-.tm-more {
-  cursor: pointer;
-}
-a.tm-tile:hover .tm-rect,
-.tm-more:hover .tm-rect,
-.tm-more:focus-visible .tm-rect {
-  stroke: var(--accent);
-  stroke-width: 2.5;
-}
-.tm-label-bg {
-  fill: rgba(0, 0, 0, 0.5);
-}
-.tm-txt {
-  fill: #fff;
-  font-variant-numeric: tabular-nums;
-}
-.tm-txt-more {
-  fill: var(--fg-muted);
-  font-weight: 700;
-}
-/* Drill-in / collapse toggle under the treemap. */
-.tm-toggle {
-  display: inline-block;
-  margin-top: 4px;
-  padding: 0;
-  background: none;
-  border: 0;
-  color: var(--fg-muted);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  text-decoration: underline;
-}
-.tm-toggle:hover {
-  color: var(--accent);
-}
-.tm-toggle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 3px;
-}
-/* One-item lot: a single natural thumbnail + its shares. */
-.tm-single {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
-  text-decoration: none;
-  color: var(--fg-muted);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-.tm-single img {
-  width: 160px;
-  height: 160px;
-  object-fit: contain;
-  border: 1px solid var(--border);
+.lot-thumb {
+  width: 34px;
+  height: 34px;
   border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
   background: var(--bg-elev);
+  flex-shrink: 0;
+}
+.lot-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   display: block;
 }
 
@@ -853,11 +785,8 @@ a.tm-tile:hover .tm-rect,
     float: left;
     color: var(--fg-muted);
   }
-  .pos-treemap-row {
+  .lot-thumbs-row {
     padding-left: 16px;
-  }
-  .pos-treemap {
-    max-width: none;
   }
   /* .bh-sep keeps working as a block divider in the stacked layout. */
   .bh-sep {

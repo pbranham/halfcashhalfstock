@@ -1,6 +1,5 @@
 import { openImageLightbox } from '/lightbox.js';
 import { attachCyclingCarousel } from '/carousel.js';
-import { hierarchy, treemap, treemapSquarify } from '/vendor/d3-hierarchy.js';
 
 const POLL_MS = 30_000;
 const QUICK_RETRY_MS = 4_000;
@@ -457,7 +456,7 @@ function buildLots(positions) {
       lot.worthNow += p.worthNow;
       lot.anyWorth = true;
     }
-    lot.items.push({ itemId: p.itemId, imageUrl: p.imageUrl, title: p.title, cost: p.costBasis, shares: p.shares });
+    lot.items.push({ itemId: p.itemId, imageUrl: p.imageUrl, title: p.title });
   }
   return [...byDay.values()]
     .sort((a, b) => b.dayMs - a.dayMs)
@@ -556,9 +555,6 @@ function holdingsRow(cells, { head = false, total = false, rowClass = '' } = {})
 // Positions default to EXPANDED (their lots showing inline).
 let lastBrokerageVM = null;
 const collapsedPositions = new Set();
-// Ticker keys whose position treemap is drilled-in to show every item on a
-// taller canvas (vs the default big-items + "+N" grouped view).
-const expandedTreemaps = new Set();
 
 const HOLDINGS_HEAD = ['Stock', 'Shares', 'Avg cost', 'Cost basis', 'Worth today', 'Unrealized P&L'];
 
@@ -579,168 +575,19 @@ function positionStockCell(r, collapsed) {
   return btn;
 }
 
-// A position's funding auctions as ONE squarified image-treemap (d3-hierarchy
-// layout): every item across all of this stock's day-lots, each tile's AREA ∝
-// that item's buying power (its half-stock dollars). The WHOLE photo sits inside
-// the tile uncropped (xMidYMid meet); big tiles also get a blurred, dimmed cover
-// of the same photo behind it so the letterbox bars read as intentional, never
-// empty. Tiny slices fold into one "+N" tile; the drill key is the ticker, so
-// drilling gives the whole position a taller canvas. Rendered as one <svg
-// viewBox> — deterministic geometry, safe on Safari/iPad.
-function positionTreemapRow(r) {
-  const row = el('div', { class: 'pos-treemap-row' });
-  const items = r.lots
-    .flatMap((lot) => lot.items.map((it) => ({ ...it, dayMs: lot.dayMs })))
-    .filter((it) => it.cost > 0)
-    .sort((a, b) => b.cost - a.cost);
-  if (items.length === 0) return row;
-  // One item is 100% of the position — a full treemap would be one heavily
-  // letterboxed photo, so show a single natural thumbnail instead.
-  if (items.length === 1) {
-    const it = items[0];
-    const a = el('a', { class: 'tm-single', href: `/item.html?id=${encodeURIComponent(it.itemId)}`, title: `${it.title} · ${sharesCompact.format(it.shares)} sh · ${usd.format(it.cost)}`, 'aria-label': it.title });
-    if (it.imageUrl) a.appendChild(el('img', { src: hiResImg(it.imageUrl, 300), alt: it.title, loading: 'lazy' }));
-    a.appendChild(el('span', { class: 'tm-single-label', textContent: `${sharesCompact.format(it.shares)} sh` }));
+// Full-width row of ALL the lot's funding-auction thumbnails (each → item
+// page). Uncapped — it wraps onto as many rows as it needs.
+function lotThumbRow(lot) {
+  const row = el('div', { class: 'lot-thumbs-row' });
+  for (const it of lot.items) {
+    const a = el('a', {
+      class: 'lot-thumb',
+      href: `/item.html?id=${encodeURIComponent(it.itemId)}`,
+      title: it.title,
+      'aria-label': it.title,
+    });
+    if (it.imageUrl) a.appendChild(el('img', { src: hiResImg(it.imageUrl, 140), alt: it.title, loading: 'lazy' }));
     row.appendChild(a);
-    return row;
-  }
-
-  const container = document.getElementById('brokerage-table');
-  const widthPx = (container && container.clientWidth) || 700;
-  const phone = widthPx <= 520;
-  const total = items.reduce((s, it) => s + it.cost, 0);
-  const drilled = expandedTreemaps.has(r.ticker);
-
-  // Tiles: drilled → every item (capped); else the big contributors + one "+N"
-  // tile collecting the tiny slices (click it / the toggle to drill in).
-  let tiles;
-  let groupedCount = 0;
-  if (drilled) {
-    tiles = items.slice(0, 80).map((it) => ({ weight: it.cost, item: it }));
-  } else {
-    const MIN_SHARE = Math.max(0.015, 0.6 / items.length);
-    const MAX_TILES = phone ? 12 : 24;
-    const shown = [];
-    const others = [];
-    for (const it of items) {
-      if (shown.length < MAX_TILES - 1 && it.cost / total >= MIN_SHARE) shown.push(it);
-      else others.push(it);
-    }
-    if (others.length === 1) shown.push(others.pop());
-    tiles = shown.map((it) => ({ weight: it.cost, item: it }));
-    if (others.length > 0) {
-      groupedCount = others.length;
-      tiles.push({ weight: others.reduce((s, it) => s + it.cost, 0), more: others.length });
-    }
-  }
-
-  // Per-ticker scaling — the core fix: the box grows TALLER as item count rises
-  // (more rows), so tiles stay ~natural-thumbnail size instead of shrinking to
-  // slivers. Geometry is integer viewBox units, so the Safari/iPad overlap that
-  // killed the CSS-% version cannot recur.
-  const W = 1000;
-  const cols = phone
-    ? Math.min(3, Math.max(2, Math.round(widthPx / 150)))
-    : Math.max(2, Math.min(8, Math.round(widthPx / 110)));
-  const rows = Math.max(1, Math.ceil(tiles.length / cols));
-  const rawH = (rows * 100 * W) / widthPx;
-  const H = Math.round(Math.max(0.45 * W, Math.min(2.2 * W, rawH)));
-  const pxScale = widthPx / W;
-
-  const root = hierarchy({ children: tiles })
-    .sum((d) => d.weight || 0)
-    .sort((a, b) => b.value - a.value);
-  treemap().tile(treemapSquarify).size([W, H]).padding(0)(root);
-
-  const NS = 'http://www.w3.org/2000/svg';
-  const mk = (tag, attrs) => {
-    const e = document.createElementNS(NS, tag);
-    for (const k in attrs) e.setAttribute(k, attrs[k]);
-    return e;
-  };
-  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, class: 'pos-treemap', preserveAspectRatio: 'xMidYMid meet' });
-  // Blur filter for big-tile backdrops; region clamped to the tile bbox
-  // (x/y/width/height in objectBoundingBox units) so the halo can't bleed onto
-  // neighbours — no per-tile clipPath needed.
-  const blurId = `tm-blur-${r.ticker}`;
-  const defs = mk('defs', {});
-  const filt = mk('filter', { id: blurId, x: '0', y: '0', width: '1', height: '1' });
-  filt.appendChild(mk('feGaussianBlur', { stdDeviation: '16' }));
-  defs.appendChild(filt);
-  svg.appendChild(defs);
-
-  const drill = () => {
-    expandedTreemaps.add(r.ticker);
-    renderHoldings();
-  };
-  const PAD = 6;
-  const BLUR_MIN = 150;
-  for (const leaf of root.leaves()) {
-    const x = leaf.x0;
-    const y = leaf.y0;
-    const w = leaf.x1 - leaf.x0;
-    const h = leaf.y1 - leaf.y0;
-    const data = leaf.data;
-    if (data.more) {
-      const g = mk('g', { class: 'tm-tile tm-more', role: 'button', tabindex: '0', 'aria-label': `Show ${data.more} smaller items` });
-      g.appendChild(mk('rect', { class: 'tm-rect', x: x + 1, y: y + 1, width: Math.max(0, w - 2), height: Math.max(0, h - 2), rx: 9 }));
-      const t = mk('text', { class: 'tm-txt-more', x: x + w / 2, y: y + h / 2, 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-size': Math.min(34, h * 0.3).toFixed(0) });
-      t.textContent = `+${data.more}`;
-      g.appendChild(t);
-      g.addEventListener('click', drill);
-      g.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          drill();
-        }
-      });
-      svg.appendChild(g);
-      continue;
-    }
-    const it = data.item;
-    const a = mk('a', { class: 'tm-tile', href: `/item.html?id=${encodeURIComponent(it.itemId)}` });
-    const dateStr = new Date(it.dayMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    a.setAttribute('aria-label', `${it.title} — ${sharesCompact.format(it.shares)} shares`);
-    const ttl = mk('title', {});
-    ttl.textContent = `${it.title} · ${sharesCompact.format(it.shares)} sh · ${usd.format(it.cost)} · ended ${dateStr}`;
-    a.appendChild(ttl);
-    a.appendChild(mk('rect', { class: 'tm-rect', x: x + 1, y: y + 1, width: Math.max(0, w - 2), height: Math.max(0, h - 2), rx: 9 }));
-    if (it.imageUrl) {
-      const ix = x + PAD;
-      const iy = y + PAD;
-      const iw = Math.max(0, w - 2 * PAD);
-      const ih = Math.max(0, h - 2 * PAD);
-      // Big tiles: a blurred, dimmed cover of the same photo fills the matte
-      // bars so the sharp (uncropped) photo on top never floats in dead space.
-      if (Math.min(w, h) >= BLUR_MIN) {
-        a.appendChild(mk('image', { class: 'tm-blur', href: hiResImg(it.imageUrl, 200), x: ix, y: iy, width: iw, height: ih, preserveAspectRatio: 'xMidYMid slice', filter: `url(#${blurId})` }));
-      }
-      const onEdge = Math.sqrt(w * h) * pxScale;
-      a.appendChild(mk('image', { href: hiResImg(it.imageUrl, onEdge >= 150 ? 500 : 300), x: ix, y: iy, width: iw, height: ih, preserveAspectRatio: 'xMidYMid meet' }));
-    }
-    if (w > 110 && h > 70) {
-      const lh = Math.min(26, h * 0.24);
-      a.appendChild(mk('rect', { class: 'tm-label-bg', x: x + 1, y: y + h - 1 - lh, width: Math.max(0, w - 2), height: lh }));
-      const t = mk('text', { class: 'tm-txt', x: x + w / 2, y: y + h - 1 - lh / 2, 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-size': Math.min(20, lh * 0.6).toFixed(0) });
-      t.textContent = `${sharesCompact.format(it.shares)} sh`;
-      a.appendChild(t);
-    }
-    svg.appendChild(a);
-  }
-  row.appendChild(svg);
-
-  if (drilled || groupedCount > 0) {
-    const toggle = el('button', {
-      class: 'tm-toggle',
-      type: 'button',
-      textContent: drilled ? 'Show fewer' : `Show all ${items.length} items`,
-    });
-    toggle.addEventListener('click', () => {
-      if (drilled) expandedTreemaps.delete(r.ticker);
-      else expandedTreemaps.add(r.ticker);
-      renderHoldings();
-    });
-    row.appendChild(toggle);
   }
   return row;
 }
@@ -775,7 +622,6 @@ function renderHoldings() {
       ),
     );
     if (collapsed) continue;
-    grid.appendChild(positionTreemapRow(r));
     for (const lot of r.lots) {
       const dateStr = new Date(lot.dayMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
       grid.appendChild(
@@ -791,6 +637,11 @@ function renderHoldings() {
           { rowClass: 'bh-lot' },
         ),
       );
+      grid.appendChild(lotThumbRow(lot));
+      // The thumbnail strip spans all columns but the last (P&L). Drop an empty
+      // filler into that trailing cell so grid auto-flow starts the next lot on
+      // a fresh row instead of backfilling it (which shifted later lots over).
+      grid.appendChild(el('span', { class: 'bh-fill', 'aria-hidden': 'true' }));
     }
   }
   if (byTicker.length > 1) {
