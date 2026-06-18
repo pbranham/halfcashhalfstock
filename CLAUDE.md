@@ -192,8 +192,13 @@ hits when the snapshot cache misses.
 
 ## Live-environment limitations
 
-- The Claude sandbox **blocks all outbound HTTP** (even no-auth /healthz).
-  All eBay/Finnhub/Yahoo verification must happen on the deployed dev site.
+- The dev/bash environment **does have outbound network** (verified: `npm
+  ping` / `registry.npmjs.org` reachable) — so packages CAN be installed and
+  a library vendored. An older note here claimed "blocks all outbound HTTP";
+  that's wrong for package access. eBay/Finnhub *live* verification is still
+  best on the deployed dev site (it needs credentials/tokens, and the Render
+  datacenter IP is what gets the eBay challenge below) — but don't repeat the
+  blanket "no network" claim.
 - The Render dev IP is a datacenter; eBay typically returns a 200 "Pardon
   Our Interruption" challenge page for `/bfl/viewbids/*` from this IP, so
   the reconcile loop falls back to paste mode for nearly every item.
@@ -323,10 +328,11 @@ header stays visible when collapsed so it's re-enableable.
     ${dayMs}` keys, survives the 30s re-render). One-item lots show a single
     `.tm-single` thumbnail. Lots are date-ordered, newest first. (Replaced the
     equal-size thumbnail strip — see `~/.claude/plans/the-other-half.md`;
-    NEXT: per-position treemap when a position is collapsed. NOTE: no
-    treemap library — the sandbox has no network to vendor one, and the
-    project is no-bundler/no-CDN; the layout math is the standard squarified
-    algorithm.)
+    NEXT: per-position treemap when a position is collapsed. NOTE: layout is
+    the standard squarified algorithm, hand-rolled. A treemap library (e.g.
+    `d3-hierarchy`) CAN be used — the dev/bash env has network (verified:
+    `npm ping` works); the only constraint is no-bundler/no-CDN, so vendor a
+    prebuilt file into `public/` rather than a CDN link.)
   - A composite **Total** row only when 2+ stocks (shares `—`). Full-width
     `.bh-sep` rules separate stock groups; `.bh-sep-strong` above Total.
   - Below 560px the grid reflows to stacked cards (data-label prefixes).
