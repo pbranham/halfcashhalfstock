@@ -731,50 +731,60 @@ main {
   grid-column: 1 / -2;
   padding: 2px 0 10px 22px;
 }
-/* Squarified treemap of a lot's funding auctions — tile area ∝ buying power.
-   Tiles are positioned in % against the container's fixed aspect-ratio, so the
-   whole thing scales with width without re-layout. */
+/* Squarified treemap of a lot's funding auctions — one SVG, tile area ∝ buying
+   power. SVG + viewBox so geometry is deterministic and scales cleanly at any
+   width (the old CSS-positioned divs overlapped on Safari). */
 .lot-treemap {
-  position: relative;
-  width: 100%;
-  max-width: 640px;
-}
-.tm-tile {
-  position: absolute;
-  overflow: hidden;
-  border: 2px solid var(--bg);
-  border-radius: 5px;
-  background: var(--bg-elev);
-  text-decoration: none;
-  color: var(--fg);
-}
-.tm-img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain; /* whole photo visible, never cropped or stretched */
   display: block;
+  width: 100%;
+  height: auto;
+  max-width: 660px;
 }
-.tm-label {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 8px 3px 2px;
-  font-size: 10px;
-  text-align: center;
-  color: #fff;
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
+.tm-rect {
+  fill: var(--bg-elev);
+  stroke: var(--border);
+  stroke-width: 1.5;
+  transition: stroke 0.1s ease;
 }
+.tm-more .tm-rect {
+  fill: var(--bg-card);
+}
+a.tm-tile,
 .tm-more {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-card);
+  cursor: pointer;
+}
+a.tm-tile:hover .tm-rect,
+.tm-more:hover .tm-rect,
+.tm-more:focus-visible .tm-rect {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+.tm-label-bg {
+  fill: rgba(0, 0, 0, 0.5);
+}
+.tm-txt {
+  fill: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.tm-txt-more {
+  fill: var(--fg-muted);
+  font-weight: 700;
+}
+/* Drill-in / collapse toggle under the treemap. */
+.tm-toggle {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 0;
+  background: none;
+  border: 0;
   color: var(--fg-muted);
-  font-size: 13px;
-  font-weight: 600;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.tm-toggle:hover {
+  color: var(--accent);
 }
 /* One-item lot: a single natural thumbnail + its shares. */
 .tm-single {

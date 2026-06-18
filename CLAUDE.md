@@ -308,17 +308,25 @@ header stays visible when collapsed so it's re-enableable.
     shown only when enabled + 2+ stocks.
   - Under each (when expanded): its **day-lots** as `.bh-lot` sub-rows (date
     indented in the Stock column, same money columns), each followed by a
-    `.lot-treemap-row` — a **squarified treemap** (`squarify()`,
-    `lotTreemapRow()`) of the funding auctions where each tile's AREA ∝ that
-    item's buying power (its half-stock $). Photos sit inside via
-    `object-fit: contain` (whole photo, never cropped/stretched — owner's
-    hard requirement); big-enough tiles caption the shares; tiny slices
-    (< 2.5%) collapse into one `+N` tile. Tiles are positioned in % against
-    the container's `aspect-ratio`, so it scales with width with no
-    re-layout. A one-item lot shows a single `.tm-single` thumbnail instead.
-    Each tile → item page. Lots are date-ordered, newest first. (Replaced the
+    `.lot-treemap-row` — a **squarified treemap** (`squarify()` does the
+    layout, `lotTreemapRow()` renders it) of the funding auctions where each
+    tile's AREA ∝ that item's buying power (its half-stock $). **Rendered as
+    ONE `<svg>` with a viewBox** (deterministic geometry, scales cleanly at
+    any width — an earlier CSS-positioned-`%`-div version overlapped on
+    Safari/iPad, don't go back to it). Photos are SVG `<image
+    preserveAspectRatio="xMidYMid meet">` (whole photo, never cropped or
+    stretched — owner's hard requirement); big-enough tiles caption the
+    shares; tiny slices (< 2%) collapse into one **`+N`** tile. **Interactive:**
+    item tiles are SVG `<a href>` → item page; clicking the `+N` tile (or the
+    "Show all N items" / "Show fewer" toggle under the map) drills in to show
+    every item, tracked in the module `expandedTreemaps` Set (`${ticker}:
+    ${dayMs}` keys, survives the 30s re-render). One-item lots show a single
+    `.tm-single` thumbnail. Lots are date-ordered, newest first. (Replaced the
     equal-size thumbnail strip — see `~/.claude/plans/the-other-half.md`;
-    NEXT: per-position treemap when a position is collapsed.)
+    NEXT: per-position treemap when a position is collapsed. NOTE: no
+    treemap library — the sandbox has no network to vendor one, and the
+    project is no-bundler/no-CDN; the layout math is the standard squarified
+    algorithm.)
   - A composite **Total** row only when 2+ stocks (shares `—`). Full-width
     `.bh-sep` rules separate stock groups; `.bh-sep-strong` above Total.
   - Below 560px the grid reflows to stacked cards (data-label prefixes).

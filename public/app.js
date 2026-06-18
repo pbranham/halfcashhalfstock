@@ -555,6 +555,9 @@ function holdingsRow(cells, { head = false, total = false, rowClass = '' } = {})
 // Positions default to EXPANDED (their lots showing inline).
 let lastBrokerageVM = null;
 const collapsedPositions = new Set();
+// Lot keys (`${ticker}:${dayMs}`) whose treemap is drilled-in to show every
+// item (vs the default big-items + "+N" grouped view).
+const expandedTreemaps = new Set();
 
 const HOLDINGS_HEAD = ['Stock', 'Shares', 'Avg cost', 'Cost basis', 'Worth today', 'Unrealized P&L'];
 
@@ -644,12 +647,12 @@ function squarify(items, W, H) {
 // big-enough tiles caption the shares. Tiny slices below MIN_SHARE collapse
 // into one "+N" tile so the layout stays clean. Resolution-independent — tiles
 // are positioned in %, the container's aspect-ratio fixes the shape.
-function lotTreemapRow(lot) {
+function lotTreemapRow(lot, lotKey) {
   const row = el('div', { class: 'lot-treemap-row' });
   const items = [...lot.items].filter((it) => it.cost > 0).sort((a, b) => b.cost - a.cost);
   if (items.length === 0) return row;
-  // A one-item lot is 100% that item — a full-width treemap band would just be
-  // one heavily letterboxed photo, so show a single natural thumbnail instead.
+  // A one-item lot is 100% that item — a full treemap band would just be one
+  // heavily letterboxed photo, so show a single natural thumbnail instead.
   if (items.length === 1) {
     const it = items[0];
     const a = el('a', { class: 'tm-single', href: `/item.html?id=${encodeURIComponent(it.itemId)}`, title: `${it.title} · ${sharesCompact.format(it.shares)} sh · ${usd.format(it.cost)}`, 'aria-label': it.title });
@@ -659,51 +662,101 @@ function lotTreemapRow(lot) {
     return row;
   }
   const total = items.reduce((s, it) => s + it.cost, 0);
+  const drilled = expandedTreemaps.has(lotKey);
 
-  const MIN_SHARE = 0.025;
-  const MAX_TILES = 14;
-  const shown = [];
-  const others = [];
-  for (const it of items) {
-    if (shown.length < MAX_TILES - 1 && it.cost / total >= MIN_SHARE) shown.push(it);
-    else others.push(it);
-  }
-  if (others.length === 1) shown.push(others.pop());
-  const tiles = shown.map((it) => ({ weight: it.cost, item: it }));
-  if (others.length > 0) tiles.push({ weight: others.reduce((s, it) => s + it.cost, 0), others });
-
-  const n = tiles.length;
-  // Wider band for few tiles, squarer (taller) as the count grows so tiles
-  // don't get too stretched. Clamped to keep the band a reasonable height.
-  const aspect = Math.max(1.9, Math.min(2.8, 2.9 - n * 0.1));
-  const tm = el('div', { class: 'lot-treemap' });
-  tm.style.aspectRatio = String(aspect);
-
-  for (const r of squarify(tiles, aspect, 1)) {
-    const left = (r.x / aspect) * 100;
-    const wpc = (r.w / aspect) * 100;
-    const top = r.y * 100;
-    const hpc = r.h * 100;
-    if (r.it.others) {
-      const cell = el('div', { class: 'tm-tile tm-more', title: `${r.it.others.length} smaller items` });
-      cell.style.cssText = `left:${left}%;top:${top}%;width:${wpc}%;height:${hpc}%`;
-      cell.appendChild(el('span', { textContent: `+${r.it.others.length}` }));
-      tm.appendChild(cell);
-    } else {
-      const it = r.it.item;
-      const cell = el('a', {
-        class: 'tm-tile',
-        href: `/item.html?id=${encodeURIComponent(it.itemId)}`,
-        title: `${it.title} · ${sharesCompact.format(it.shares)} sh · ${usd.format(it.cost)}`,
-        'aria-label': it.title,
-      });
-      cell.style.cssText = `left:${left}%;top:${top}%;width:${wpc}%;height:${hpc}%`;
-      if (it.imageUrl) cell.appendChild(el('img', { class: 'tm-img', src: hiResImg(it.imageUrl, 300), alt: it.title, loading: 'lazy' }));
-      if (wpc > 13 && hpc > 24) cell.appendChild(el('span', { class: 'tm-label', textContent: `${sharesCompact.format(it.shares)} sh` }));
-      tm.appendChild(cell);
+  // Tiles: drilled-in → every item; else the big contributors + one "+N" tile
+  // collecting the tiny slices (click it / the toggle to drill in).
+  let tiles;
+  let groupedCount = 0;
+  if (drilled) {
+    tiles = items.slice(0, 80).map((it) => ({ weight: it.cost, item: it }));
+  } else {
+    const MIN_SHARE = 0.02;
+    const MAX_TILES = 16;
+    const shown = [];
+    const others = [];
+    for (const it of items) {
+      if (shown.length < MAX_TILES - 1 && it.cost / total >= MIN_SHARE) shown.push(it);
+      else others.push(it);
+    }
+    if (others.length === 1) shown.push(others.pop());
+    tiles = shown.map((it) => ({ weight: it.cost, item: it }));
+    if (others.length > 0) {
+      groupedCount = others.length;
+      tiles.push({ weight: others.reduce((s, it) => s + it.cost, 0), more: others.length });
     }
   }
-  row.appendChild(tm);
+
+  // Render as ONE SVG with a viewBox — geometry is deterministic and scales
+  // cleanly at any width (the old CSS-positioned divs overlapped on Safari).
+  const n = tiles.length;
+  const aspect = Math.max(1.9, Math.min(2.9, 3.0 - n * 0.08));
+  const W = 1000;
+  const H = Math.round(W / aspect);
+  const NS = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs) => {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  };
+  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, class: 'lot-treemap', preserveAspectRatio: 'xMidYMid meet' });
+  const drill = () => {
+    expandedTreemaps.add(lotKey);
+    renderHoldings();
+  };
+  const PAD = 5;
+  for (const r of squarify(tiles, W, H)) {
+    const { x, y, w, h } = r;
+    if (r.it.more) {
+      const g = mk('g', { class: 'tm-tile tm-more', role: 'button', tabindex: '0', 'aria-label': `Show ${r.it.more} smaller items` });
+      g.appendChild(mk('rect', { class: 'tm-rect', x: x + 1, y: y + 1, width: Math.max(0, w - 2), height: Math.max(0, h - 2), rx: 9 }));
+      const t = mk('text', { class: 'tm-txt-more', x: x + w / 2, y: y + h / 2, 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-size': Math.min(34, h * 0.3).toFixed(0) });
+      t.textContent = `+${r.it.more}`;
+      g.appendChild(t);
+      g.addEventListener('click', drill);
+      g.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          drill();
+        }
+      });
+      svg.appendChild(g);
+    } else {
+      const it = r.it.item;
+      const a = mk('a', { class: 'tm-tile', href: `/item.html?id=${encodeURIComponent(it.itemId)}` });
+      a.setAttribute('aria-label', `${it.title} — ${sharesCompact.format(it.shares)} shares`);
+      const ttl = mk('title', {});
+      ttl.textContent = `${it.title} · ${sharesCompact.format(it.shares)} sh · ${usd.format(it.cost)}`;
+      a.appendChild(ttl);
+      a.appendChild(mk('rect', { class: 'tm-rect', x: x + 1, y: y + 1, width: Math.max(0, w - 2), height: Math.max(0, h - 2), rx: 9 }));
+      if (it.imageUrl) {
+        a.appendChild(mk('image', { href: hiResImg(it.imageUrl, 300), x: x + PAD, y: y + PAD, width: Math.max(0, w - 2 * PAD), height: Math.max(0, h - 2 * PAD), preserveAspectRatio: 'xMidYMid meet' }));
+      }
+      if (w > 92 && h > 60) {
+        const lh = Math.min(26, h * 0.26);
+        a.appendChild(mk('rect', { class: 'tm-label-bg', x: x + 1, y: y + h - 1 - lh, width: Math.max(0, w - 2), height: lh, rx: 0 }));
+        const t = mk('text', { class: 'tm-txt', x: x + w / 2, y: y + h - 1 - lh / 2, 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-size': Math.min(20, lh * 0.62).toFixed(0) });
+        t.textContent = `${sharesCompact.format(it.shares)} sh`;
+        a.appendChild(t);
+      }
+      svg.appendChild(a);
+    }
+  }
+  row.appendChild(svg);
+
+  if (drilled || groupedCount > 0) {
+    const toggle = el('button', {
+      class: 'tm-toggle',
+      type: 'button',
+      textContent: drilled ? 'Show fewer' : `Show all ${items.length} items`,
+    });
+    toggle.addEventListener('click', () => {
+      if (drilled) expandedTreemaps.delete(lotKey);
+      else expandedTreemaps.add(lotKey);
+      renderHoldings();
+    });
+    row.appendChild(toggle);
+  }
   return row;
 }
 
@@ -752,7 +805,7 @@ function renderHoldings() {
           { rowClass: 'bh-lot' },
         ),
       );
-      grid.appendChild(lotTreemapRow(lot));
+      grid.appendChild(lotTreemapRow(lot, `${r.ticker}:${lot.dayMs}`));
       // The thumbnail strip spans all columns but the last (P&L). Drop an empty
       // filler into that trailing cell so grid auto-flow starts the next lot on
       // a fresh row instead of backfilling it (which shifted later lots over).
