@@ -110,6 +110,28 @@ function buildImageGallery(images, alt) {
       onClose: (finalIdx) => carousel.goTo(finalIdx),
     });
   });
+
+  // Keyboard support: the gallery is focusable; arrow keys flip slides,
+  // Enter/Space opens the lightbox at the current slide (mirroring click).
+  if (!single) {
+    wrap.tabIndex = 0;
+    wrap.setAttribute('role', 'group');
+    wrap.setAttribute('aria-label', 'Image gallery — use arrow keys to browse');
+    wrap.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        carousel.step(-1);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        carousel.step(1);
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openImageLightbox(ordered, carousel.getIndex(), alt || '', {
+          onClose: (finalIdx) => carousel.goTo(finalIdx),
+        });
+      }
+    });
+  }
   return wrap;
 }
 

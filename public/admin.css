@@ -1,6 +1,6 @@
 .admin-body {
-  background: var(--bg, #0d1f15);
-  color: var(--text, #e8efe8);
+  background: var(--bg);
+  color: var(--fg);
 }
 
 .admin-main {
@@ -25,8 +25,8 @@
 }
 
 .live-section {
-  background: linear-gradient(135deg, #142b1d 0%, #1a3a26 100%);
-  border-color: #3d7d4e;
+  background: linear-gradient(135deg, var(--bg-elev) 0%, var(--bg-card) 100%);
+  border-color: var(--accent-soft);
   position: relative;
 }
 
@@ -37,7 +37,7 @@
   right: 1rem;
   width: 8px;
   height: 8px;
-  background: #4caf50;
+  background: var(--accent);
   border-radius: 50%;
   animation: live-pulse 2s ease-in-out infinite;
 }
@@ -71,7 +71,7 @@
   font-size: 2rem;
   font-weight: 700;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  color: #a5e8b6;
+  color: var(--accent);
 }
 
 .live-stat .live-label {
@@ -125,26 +125,27 @@
 .admin-btn,
 .token-input {
   padding: 0.45rem 0.75rem;
-  border: 1px solid var(--border, #2d5b3e);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--card-bg, #142b1d);
+  background: var(--bg-card);
   color: inherit;
   font: inherit;
   cursor: pointer;
 }
 
 .admin-btn:hover {
-  background: var(--accent-bg, #1f3f2c);
+  background: var(--accent-soft);
 }
 
 .admin-btn-primary {
-  background: #2d5b3e;
-  color: #fff;
-  border-color: #1a3826;
+  background: var(--accent-soft);
+  color: var(--fg);
+  border-color: var(--accent);
 }
 
 .admin-btn-primary:hover {
-  background: #3d7d4e;
+  background: var(--accent);
+  color: #0c0e14;
 }
 
 .token-input {
@@ -198,8 +199,8 @@
 }
 
 .summary-card {
-  background: var(--card-bg, #142b1d);
-  border: 1px solid var(--border, #2d5b3e);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 1rem;
 }
@@ -217,8 +218,8 @@
   font-size: 0.7rem;
   padding: 0.15rem 0.45rem;
   border-radius: 4px;
-  background: #3d7d4e;
-  color: #fff;
+  background: var(--accent-soft);
+  color: var(--fg);
   margin-left: 0.4rem;
   vertical-align: middle;
 }
@@ -244,8 +245,8 @@
 }
 
 .chart-section {
-  background: var(--card-bg, #142b1d);
-  border: 1px solid var(--border, #2d5b3e);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 1rem;
   margin-bottom: 1.5rem;
@@ -268,7 +269,7 @@
 .hourly-bar {
   flex: 0 0 auto;
   width: 18px;
-  background: #3d7d4e;
+  background: var(--accent-soft);
   position: relative;
   border-radius: 2px 2px 0 0;
   min-height: 2px;
@@ -280,11 +281,11 @@
 }
 
 .hourly-bar:hover {
-  background: #5da06e;
+  background: var(--accent);
 }
 
 .hourly-bar.is-selected {
-  background: #a5e8b6;
+  background: var(--accent);
   outline: 2px solid #fff;
 }
 
@@ -342,9 +343,9 @@
 
 .maintenance-row input[type="text"] {
   padding: 0.3rem 0.5rem;
-  border: 1px solid var(--border, #2d5b3e);
+  border: 1px solid var(--border);
   border-radius: 4px;
-  background: var(--card-bg, #142b1d);
+  background: var(--bg-card);
   color: inherit;
   font: inherit;
   font-size: 0.85rem;
@@ -377,8 +378,8 @@
 }
 
 .modal-content {
-  background: var(--card-bg, #142b1d);
-  border: 1px solid var(--border, #2d5b3e);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 1.5rem;
   max-width: 420px;
@@ -399,7 +400,7 @@
   margin-top: 0.75rem;
   padding: 0.6rem 0.8rem;
   background: rgba(76, 175, 80, 0.15);
-  border: 1px solid #4caf50;
+  border: 1px solid var(--accent);
   border-radius: 6px;
   font-size: 0.85rem;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
@@ -409,7 +410,7 @@
   margin-top: 0.75rem;
   padding: 0.8rem 1rem;
   background: rgba(0, 0, 0, 0.4);
-  border: 1px solid var(--border, #2d5b3e);
+  border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 0.75rem;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
@@ -423,14 +424,14 @@
   margin-top: 0.75rem;
   padding: 0.8rem 1rem;
   background: rgba(0, 0, 0, 0.25);
-  border: 1px solid var(--border, #2d5b3e);
+  border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 0.85rem;
   overflow-x: auto;
 }
 
 .stuck-list table th {
-  border-bottom: 1px solid var(--border, #2d5b3e);
+  border-bottom: 1px solid var(--border);
   opacity: 0.7;
   font-weight: 600;
   font-size: 0.75rem;
@@ -456,7 +457,7 @@
 .data-table td {
   text-align: left;
   padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--border, #2d5b3e);
+  border-bottom: 1px solid var(--border);
 }
 
 .data-table th {
@@ -478,8 +479,8 @@
   font-size: 0.72rem;
   padding: 0.1rem 0.45rem;
   border-radius: 4px;
-  background: #3d7d4e;
-  color: #fff;
+  background: var(--accent-soft);
+  color: var(--fg);
 }
 
 .env-pill.dev {
@@ -496,4 +497,16 @@
   .admin-btn {
     flex: 1 1 auto;
   }
+}
+
+/* The shared .topbar grid template (style.css) is shaped for the
+   dashboard's three columns; the admin header has two children (brand +
+   controls) and was falling into implicit grid tracks on narrow screens.
+   Flex with wrap matches the content this page actually has. */
+.admin-body .topbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
 }

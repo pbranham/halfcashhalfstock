@@ -1853,3 +1853,56 @@ footer .disclaimer {
 .item.highlight {
   animation: highlight-pulse 2s ease-in-out;
 }
+/* --- Accessibility (Phase 5) --- */
+/* Visible keyboard focus on every interactive control, on the theme
+   accent so it reads in both modes. :focus-visible only — mouse/touch
+   activation stays clean. */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Touch targets: the pill controls render compact for pointer users but
+   guarantee a >=40px hit area on coarse-pointer (touch) devices. */
+@media (pointer: coarse) {
+  .seller-btn,
+  .stock-btn,
+  .sort-btn,
+  .view-btn,
+  .ended-mode-btn,
+  .ended-window-btn,
+  .chart-zoom-btn {
+    min-height: 40px;
+  }
+  .gallery-nav {
+    width: 36px;
+    height: 36px;
+  }
+}
+
+/* Sort control: pills on wide screens, a native <select> on phones —
+   five pills consumed two rows of a 375px screen. Both stay wired; CSS
+   picks the visible one. */
+.sort-select {
+  display: none;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+}
+@media (max-width: 600px) {
+  .sort-bar .sort-btn {
+    display: none;
+  }
+  .sort-select {
+    display: inline-block;
+  }
+}

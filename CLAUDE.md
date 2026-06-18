@@ -702,6 +702,28 @@ the snapshot:
 Stale ⚠ is on `.ticker-meta::before` so it surfaces in both market-open
 (only as-of shown) and market-closed (status + as-of shown) cases.
 
+## Design + a11y conventions (Phase 5)
+
+- All three pages share the theme tokens in `style.css :root` — item.css
+  AND admin.css were both rewritten off their orphaned-variable green
+  fallbacks; never reintroduce `--card-bg`/`--text`/`--accent-bg`
+  (they don't exist; check `:root` for the real names). Light mode must
+  work on every page.
+- Global `:focus-visible` outline (accent, 2px) covers buttons, links,
+  inputs, selects, summaries, and tabindexed elements — new interactive
+  elements get it for free; don't suppress it.
+- Coarse-pointer (touch) devices get >=40px hit areas on the pill
+  controls via the `@media (pointer: coarse)` block in style.css — add
+  new pill classes to that list.
+- Sort control is pills on desktop, a native `<select>` under 600px —
+  both drive the same state through `applySort`; keep them in sync if
+  sort modes change (three places: buttons, select options, SORT_MODES).
+- The admin topbar overrides the dashboard's 3-column grid with flex
+  (`.admin-body .topbar`) — the shared grid template assumes children
+  that only the dashboard has.
+- Item-page galleries are keyboard-operable: gallery focusable,
+  ArrowLeft/Right flip, Enter/Space opens the lightbox.
+
 ## Dead code / dead ends
 
 Don't propose these — we already tried them and confirmed they don't work
