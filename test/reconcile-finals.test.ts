@@ -117,3 +117,31 @@ describe('reconcileFinalsForItems', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('trading auth failure streak', () => {
+  it('grows on consecutive Ack=Failure and resets on a healthy response', async () => {
+    const { getTradingAuthFailureStreak, _resetTradingAuthStreakForTests } = await import('../src/reconcile-finals.js');
+    _resetTradingAuthStreakForTests();
+    const { pool } = makePool();
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(xml(FAILURE)));
+    await reconcileFinalsForItems({
+      pool,
+      userToken: 'tok',
+      itemIds: ['a', 'b', 'c'],
+      log: silentLogger(),
+    });
+    expect(getTradingAuthFailureStreak()).toBe(3);
+
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(xml(SUCCESS(10, 2))));
+    await reconcileFinalsForItems({
+      pool,
+      userToken: 'tok',
+      itemIds: ['d'],
+      log: silentLogger(),
+    });
+    expect(getTradingAuthFailureStreak()).toBe(0);
+    _resetTradingAuthStreakForTests();
+  });
+});

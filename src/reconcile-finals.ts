@@ -33,6 +33,21 @@ export interface ReconcileFinalsResult {
 // pass continues. Mirrors the dry-run-then-apply admin action but runs
 // unconditionally as "apply" because the caller is the post-close hook,
 // not the human-triggered audit button.
+// Consecutive GetItem calls answered with Ack=Failure. eBay Trading user
+// tokens expire (~18 months) SILENTLY — the API keeps responding, just
+// with Failure on every call. A long unbroken failure streak across
+// reconcile passes is the practical expiry signal; /api/health surfaces
+// it. Any successful (or merely ineligible-but-acknowledged) response
+// resets the streak.
+let ackFailureStreak = 0;
+const AUTH_SUSPECT_THRESHOLD = 5;
+export function getTradingAuthFailureStreak(): number {
+  return ackFailureStreak;
+}
+export function _resetTradingAuthStreakForTests(): void {
+  ackFailureStreak = 0;
+}
+
 export async function reconcileFinalsForItems(
   opts: ReconcileFinalsOptions,
 ): Promise<ReconcileFinalsResult[]> {
@@ -47,6 +62,17 @@ export async function reconcileFinalsForItems(
       const usd = ss.currencyId === null || ss.currencyId === 'USD';
       const priceOk = Number.isFinite(ss.currentPrice) && ss.currentPrice > 0;
       const eligible = ss.ack !== 'Failure' && closed && usd && priceOk;
+      if (ss.ack === 'Failure') {
+        ackFailureStreak += 1;
+        if (ackFailureStreak === AUTH_SUSPECT_THRESHOLD) {
+          opts.log.warn('trading auth suspect', {
+            streak: ackFailureStreak,
+            hint: 'consecutive Ack=Failure responses — EBAY_USER_TOKEN may be expired (tokens last ~18 months)',
+          });
+        }
+      } else {
+        ackFailureStreak = 0;
+      }
       if (!eligible) {
         results.push({
           itemId,

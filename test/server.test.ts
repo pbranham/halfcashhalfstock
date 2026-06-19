@@ -229,3 +229,52 @@ describe('createApp', () => {
     expect(csp).toContain('frame-ancestors');
   });
 });
+
+describe('/api/health', () => {
+  it('reports ok with not-configured/not-running components on a bare app', async () => {
+    await startApp({
+      config: { sellerIds: ['boilerpaulie'] } as never,
+      log: silentLogger(),
+      fetchListings: async () => [],
+      fetchQuote: async () => { throw new Error('no provider'); },
+    });
+    const res = await fetch(`${baseUrl}/api/health`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe('ok');
+    expect(body.checks.db).toBe('not-configured');
+    expect(body.checks.listingPoll).toBe('not-running');
+    expect(body.checks.tradingAuth).toBe('ok');
+  });
+
+  it('degrades when the caches are serving stale data', async () => {
+    await startApp({
+      config: { sellerIds: ['boilerpaulie'] } as never,
+      log: silentLogger(),
+      fetchListings: async () => [],
+      fetchQuote: async () => { throw new Error('no provider'); },
+      dataDegraded: () => true,
+    });
+    const res = await fetch(`${baseUrl}/api/health`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe('degraded');
+    expect(String(body.checks.liveData)).toContain('degraded');
+  });
+
+  it('errors (503) when the DB ping fails', async () => {
+    const badPool = { query: async () => { throw new Error('conn refused'); } };
+    await startApp({
+      config: { sellerIds: ['boilerpaulie'] } as never,
+      log: silentLogger(),
+      fetchListings: async () => [],
+      fetchQuote: async () => { throw new Error('no provider'); },
+      db: badPool as never,
+    });
+    const res = await fetch(`${baseUrl}/api/health`);
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.status).toBe('error');
+    expect(body.checks.db).toBe('error');
+  });
+});
