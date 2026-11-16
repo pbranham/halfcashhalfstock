@@ -1,11 +1,13 @@
-import { openImageLightbox } from '/lightbox.js';
-import { attachCyclingCarousel } from '/carousel.js';
+import { imageGallery } from '/gallery.js';
+import { el, endedEbayUrl, hiResImg, loadChoice, plural, saveChoice } from '/shared.js';
 
 const POLL_MS = 30_000;
 const QUICK_RETRY_MS = 4_000;
 const STALE_MS = 120_000;
 
 const SUPPORTED_SYMBOLS = ['EBAY', 'GME'];
+// A ticker the server accepts (mirrors TICKER_RE in src/config.ts).
+const TICKER_RE = /^[A-Z][A-Z0-9.\-:]{0,19}$/;
 // "By seller" valuation mode: not a real ticker. The server values each item
 // in its seller's paired stock and returns one live price per stock. It has a
 // pill but never goes in the custom-ticker input.
@@ -26,14 +28,7 @@ const integer = new Intl.NumberFormat('en-US');
 // --- Sort & animation state ---
 // Sort mode — must match data-sort values on .sort-btn elements in index.html.
 const SORT_MODES = ['ending-soonest', 'recent-bid-activity', 'price-low', 'price-high', 'most-bids'];
-function loadSort() {
-  const stored = localStorage.getItem('hchs.sort');
-  return SORT_MODES.includes(stored) ? stored : 'ending-soonest';
-}
-function saveSort(value) {
-  if (SORT_MODES.includes(value)) localStorage.setItem('hchs.sort', value);
-}
-let currentSort = loadSort();
+let currentSort = loadChoice('hchs.sort', SORT_MODES, 'ending-soonest');
 let lastSnapshot = null;
 let prevBidCounts = new Map(); // itemId → bidCount from last successful render
 
@@ -55,14 +50,8 @@ const SELLER_FILTER_DEFAULT_TICKER = {
   mine: 'GME',
   ryan: 'EBAY',
 };
-function loadSellerFilterFromStorage() {
-  const stored = localStorage.getItem('hchs.sellerFilter');
-  return stored && stored in SELLER_PILL_TO_ID ? stored : 'all';
-}
-function saveSellerFilterToStorage(value) {
-  if (value in SELLER_PILL_TO_ID) localStorage.setItem('hchs.sellerFilter', value);
-}
-let currentSellerFilter = loadSellerFilterFromStorage();
+const SELLER_FILTERS = Object.keys(SELLER_PILL_TO_ID);
+let currentSellerFilter = loadChoice('hchs.sellerFilter', SELLER_FILTERS, 'all');
 
 function filterBySeller(items) {
   const wanted = SELLER_PILL_TO_ID[currentSellerFilter];
@@ -78,14 +67,7 @@ function sellerBadgeClass(sellerId) {
 
 // --- Ended-section "Live vs At end" stock-price mode ---
 const ENDED_MODES = ['live', 'at-end'];
-function loadEndedPriceMode() {
-  const stored = localStorage.getItem('hchs.endedPriceMode');
-  return ENDED_MODES.includes(stored) ? stored : 'live';
-}
-function saveEndedPriceMode(value) {
-  if (ENDED_MODES.includes(value)) localStorage.setItem('hchs.endedPriceMode', value);
-}
-let currentEndedPriceMode = loadEndedPriceMode();
+let currentEndedPriceMode = loadChoice('hchs.endedPriceMode', ENDED_MODES, 'live');
 
 // --- "The Other Half" enable toggle ---
 // On = the brokerage body shows (and, later, per-item P&L on ended cards).
@@ -135,27 +117,13 @@ function syncExpandAllButton() {
 // this is the right way to expose the full history.
 const ENDED_WINDOWS = ['recent', 'all'];
 const ENDED_WINDOW_DAYS = { recent: 14, all: 36500 };
-function loadEndedWindow() {
-  const stored = localStorage.getItem('hchs.endedWindow');
-  return ENDED_WINDOWS.includes(stored) ? stored : 'recent';
-}
-function saveEndedWindow(value) {
-  if (ENDED_WINDOWS.includes(value)) localStorage.setItem('hchs.endedWindow', value);
-}
-let currentEndedWindow = loadEndedWindow();
+let currentEndedWindow = loadChoice('hchs.endedWindow', ENDED_WINDOWS, 'recent');
 
 // --- Item view mode (list / small / medium / large grid) ---
 // All modes share the same renderItem DOM; only a class on the items
 // containers changes, so switching is a pure CSS reflow — no re-render.
 const VIEW_MODES = ['list', 'grid-sm', 'grid-md', 'grid-lg'];
-function loadViewMode() {
-  const stored = localStorage.getItem('hchs.viewMode');
-  return VIEW_MODES.includes(stored) ? stored : 'grid-md';
-}
-function saveViewMode(value) {
-  if (VIEW_MODES.includes(value)) localStorage.setItem('hchs.viewMode', value);
-}
-let currentViewMode = loadViewMode();
+let currentViewMode = loadChoice('hchs.viewMode', VIEW_MODES, 'grid-md');
 
 // Apply the current view mode class to both the active and ended item
 // containers. Safe to call repeatedly (e.g. after each render).
@@ -171,13 +139,13 @@ function applyViewMode() {
 // --- Ticker state ---
 function loadTickerFromStorage() {
   const stored = localStorage.getItem('ticker');
-  if (stored && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(stored)) {
+  if (stored && TICKER_RE.test(stored)) {
     return stored;
   }
   return SUPPORTED_SYMBOLS[0];
 }
 function saveTickerToStorage(ticker) {
-  if (/^[A-Z][A-Z0-9.\-:]{0,19}$/.test(ticker)) {
+  if (TICKER_RE.test(ticker)) {
     localStorage.setItem('ticker', ticker);
   }
 }
@@ -217,31 +185,47 @@ function formatLocalTimestamp(isoTime) {
   });
 }
 
+// Compare two optional numbers with missing values (null) sorted last;
+// `desc` puts the larger value first.
+function compareNullsLast(x, y, desc = false) {
+  if (x === null && y === null) return 0;
+  if (x === null) return 1;
+  if (y === null) return -1;
+  return desc ? y - x : x - y;
+}
+
+// The price-low / price-high / most-bids orders, shared by active and ended
+// lists (`priceOf` / `bidsOf` read each list's fields). Null for other modes.
+function sortByPriceOrBids(items, sort, priceOf, bidsOf) {
+  const sorted = [...items];
+  switch (sort) {
+    case 'price-low':
+      return sorted.sort((a, b) => (priceOf(a) ?? Infinity) - (priceOf(b) ?? Infinity));
+    case 'price-high':
+      return sorted.sort((a, b) => (priceOf(b) ?? -Infinity) - (priceOf(a) ?? -Infinity));
+    case 'most-bids':
+      return sorted.sort((a, b) => (bidsOf(b) ?? 0) - (bidsOf(a) ?? 0));
+    default:
+      return null;
+  }
+}
+
 function sortItems(items, sort) {
+  const byPriceOrBids = sortByPriceOrBids(items, sort, (i) => i.priceUsd, (i) => i.bidCount);
+  if (byPriceOrBids) return byPriceOrBids;
   const sorted = [...items];
   switch (sort) {
     case 'ending-soonest':
-      return sorted.sort((a, b) => {
-        if (!a.endsAt && !b.endsAt) return 0;
-        if (!a.endsAt) return 1;
-        if (!b.endsAt) return -1;
-        return new Date(a.endsAt).getTime() - new Date(b.endsAt).getTime();
-      });
-    case 'price-low':
-      return sorted.sort((a, b) => (a.priceUsd ?? Infinity) - (b.priceUsd ?? Infinity));
-    case 'price-high':
-      return sorted.sort((a, b) => (b.priceUsd ?? -Infinity) - (a.priceUsd ?? -Infinity));
-    case 'most-bids':
-      return sorted.sort((a, b) => (b.bidCount ?? 0) - (a.bidCount ?? 0));
+      return sorted.sort((a, b) =>
+        compareNullsLast(
+          a.endsAt ? new Date(a.endsAt).getTime() : null,
+          b.endsAt ? new Date(b.endsAt).getTime() : null,
+        ),
+      );
     case 'recent-bid-activity':
-      return sorted.sort((a, b) => {
-        const aTs = parseTimestamp(a.lastBidTime);
-        const bTs = parseTimestamp(b.lastBidTime);
-        if (aTs === null && bTs === null) return 0;
-        if (aTs === null) return 1;
-        if (bTs === null) return -1;
-        return bTs - aTs;
-      });
+      return sorted.sort((a, b) =>
+        compareNullsLast(parseTimestamp(a.lastBidTime), parseTimestamp(b.lastBidTime), true),
+      );
     default:
       return sorted;
   }
@@ -251,19 +235,10 @@ function sortItems(items, sort) {
 // auctions that have already ended, so ending-soonest and recent-bid-activity
 // both fall back to "most recently ended first" — the closest semantic match.
 function sortEndedItems(items, sort) {
-  const sorted = [...items];
-  switch (sort) {
-    case 'price-low':
-      return sorted.sort((a, b) => (a.finalPriceUsd ?? Infinity) - (b.finalPriceUsd ?? Infinity));
-    case 'price-high':
-      return sorted.sort((a, b) => (b.finalPriceUsd ?? -Infinity) - (a.finalPriceUsd ?? -Infinity));
-    case 'most-bids':
-      return sorted.sort((a, b) => (b.finalBidCount ?? 0) - (a.finalBidCount ?? 0));
-    case 'ending-soonest':
-    case 'recent-bid-activity':
-    default:
-      return sorted.sort((a, b) => (a.endedAt < b.endedAt ? 1 : -1));
-  }
+  return (
+    sortByPriceOrBids(items, sort, (i) => i.finalPriceUsd, (i) => i.finalBidCount) ??
+    [...items].sort((a, b) => (a.endedAt < b.endedAt ? 1 : -1))
+  );
 }
 
 // Sum per-item splits into a cash half + a per-ticker shares breakdown.
@@ -488,10 +463,12 @@ function pnlNode(pnl, pct) {
 }
 
 // A single `.stat` card. `value` is a string or a DOM node.
-function statCard(label, value) {
-  const valueEl = el('div', { class: 'stat-value' });
+// A `.stat` card: label over a value (text or a node). `valueClass` adds a
+// class to the value element.
+function statCard(label, value, valueClass = '') {
+  const valueEl = el('div', { class: `stat-value${valueClass}` });
   if (typeof value === 'string') valueEl.textContent = value;
-  else valueEl.appendChild(value);
+  else valueEl.append(...(Array.isArray(value) ? value : [value]));
   return el('div', { class: 'stat' }, [
     el('div', { class: 'stat-label', textContent: label }),
     valueEl,
@@ -504,14 +481,11 @@ function sharesCard(label, sharesByTicker) {
   const rows = sharesByTicker && sharesByTicker.length
     ? sharesByTicker
     : [{ ticker: currentTickerSymbol, shares: 0 }];
-  const valueEl = el('div', { class: `stat-value${rows.length > 1 ? ' stat-value-multi' : ''}` });
-  for (const { ticker, shares: n } of rows) {
-    valueEl.appendChild(el('div', { class: 'shares-row' }, [sharesValue(n, { ticker })]));
-  }
-  return el('div', { class: 'stat' }, [
-    el('div', { class: 'stat-label', textContent: label }),
-    valueEl,
-  ]);
+  return statCard(
+    label,
+    rows.map(({ ticker, shares: n }) => el('div', { class: 'shares-row' }, [sharesValue(n, { ticker })])),
+    rows.length > 1 ? ' stat-value-multi' : '',
+  );
 }
 
 // "$TICKER" + logo cell for the holdings table's Stock column.
@@ -557,6 +531,19 @@ let lastBrokerageVM = null;
 const collapsedPositions = new Set();
 
 const HOLDINGS_HEAD = ['Stock', 'Shares', 'Avg cost', 'Cost basis', 'Worth today', 'Unrealized P&L'];
+
+// The cells after Stock in a position / lot / total row: shares, average
+// cost, cost basis, worth today and P&L, each labelled with its column
+// header for the stacked mobile layout.
+function holdingsMoneyCells(sharesText, avgCost, r) {
+  return [
+    { value: sharesText, label: HOLDINGS_HEAD[1] },
+    { value: typeof avgCost === 'string' ? avgCost : moneyOrDash(avgCost), label: HOLDINGS_HEAD[2] },
+    { value: moneyOrDash(r.costBasis), label: HOLDINGS_HEAD[3] },
+    { value: moneyOrDash(r.worthNow), label: HOLDINGS_HEAD[4] },
+    { value: pnlCell(r.pnl, r.pnlPct), label: HOLDINGS_HEAD[5] },
+  ];
+}
 
 // Stock cell of a position row: a disclosure button (caret + $TICKER + logo +
 // @seller) that collapses/expands this stock's lots.
@@ -610,14 +597,7 @@ function renderHoldings() {
     const avg = r.shares > 0 ? r.costBasis / r.shares : null;
     grid.appendChild(
       holdingsRow(
-        [
-          { value: positionStockCell(r, collapsed), cls: 'bh-stock' },
-          { value: shares.format(r.shares), label: 'Shares' },
-          { value: moneyOrDash(avg), label: 'Avg cost' },
-          { value: moneyOrDash(r.costBasis), label: 'Cost basis' },
-          { value: moneyOrDash(r.worthNow), label: 'Worth today' },
-          { value: pnlCell(r.pnl, r.pnlPct), label: 'Unrealized P&L' },
-        ],
+        [{ value: positionStockCell(r, collapsed), cls: 'bh-stock' }, ...holdingsMoneyCells(shares.format(r.shares), avg, r)],
         { rowClass: 'bh-pos' },
       ),
     );
@@ -628,11 +608,7 @@ function renderHoldings() {
         holdingsRow(
           [
             { value: dateStr, cls: 'bh-stock bh-lot-date' },
-            { value: sharesCompact.format(lot.shares), label: 'Shares' },
-            { value: moneyOrDash(lot.avgPrice), label: 'Avg cost' },
-            { value: moneyOrDash(lot.costBasis), label: 'Cost basis' },
-            { value: moneyOrDash(lot.worthNow), label: 'Worth today' },
-            { value: pnlCell(lot.pnl, lot.pnlPct), label: 'Unrealized P&L' },
+            ...holdingsMoneyCells(sharesCompact.format(lot.shares), lot.avgPrice, lot),
           ],
           { rowClass: 'bh-lot' },
         ),
@@ -648,14 +624,7 @@ function renderHoldings() {
     grid.appendChild(el('div', { class: 'bh-sep bh-sep-strong' }));
     grid.appendChild(
       holdingsRow(
-        [
-          { value: 'Total', cls: 'bh-stock' },
-          { value: '—', label: 'Shares' },
-          { value: '—', label: 'Avg cost' },
-          { value: moneyOrDash(total.costBasis), label: 'Cost basis' },
-          { value: moneyOrDash(total.worthNow), label: 'Worth today' },
-          { value: pnlCell(total.pnl, total.pnlPct), label: 'Unrealized P&L' },
-        ],
+        [{ value: 'Total', cls: 'bh-stock' }, ...holdingsMoneyCells('—', '—', total)],
         { total: true },
       ),
     );
@@ -759,10 +728,9 @@ function buildPerformanceSeries(positions, history, priceForTicker, nowMs) {
     }
   };
 
-  const points = [];
-  let prevCost = -1;
-  for (const t of grid) {
-    advanceTo(t);
+  // What the lots ending at or before `t` add up to: total cost, and shares +
+  // cost per ticker.
+  const heldAt = (t) => {
     const shares = {};
     const costByTicker = {};
     let cost = 0;
@@ -772,6 +740,14 @@ function buildPerformanceSeries(positions, history, priceForTicker, nowMs) {
       shares[a.ticker] = (shares[a.ticker] ?? 0) + a.shares;
       costByTicker[a.ticker] = (costByTicker[a.ticker] ?? 0) + a.cost;
     }
+    return { shares, costByTicker, cost };
+  };
+
+  const points = [];
+  let prevCost = -1;
+  for (const t of grid) {
+    advanceTo(t);
+    const { shares, costByTicker, cost } = heldAt(t);
     const byTicker = {};
     const closeByTicker = {};
     let value = 0;
@@ -815,17 +791,10 @@ function buildPerformanceSeries(positions, history, priceForTicker, nowMs) {
 
   // Final live point (line/area only; no candle) — matches "worth today".
   const nowBy = {};
-  const nowCostBy = {};
   const nowCloseBy = {};
-  const nowShares = {};
+  const { shares: nowShares, costByTicker: nowCostBy, cost: nowCost } = heldAt(Infinity);
   let nowValue = 0;
-  let nowCost = 0;
   let nowOk = true;
-  for (const a of lots) {
-    nowCost += a.cost;
-    nowShares[a.ticker] = (nowShares[a.ticker] ?? 0) + a.shares;
-    nowCostBy[a.ticker] = (nowCostBy[a.ticker] ?? 0) + a.cost;
-  }
   for (const tk of tickers) {
     const sh = nowShares[tk] ?? 0;
     const lp = priceForTicker(tk);
@@ -1155,7 +1124,7 @@ function renderPendingCallout(el2, filteredActive, priceForTicker) {
   const sharesStr = [...byTicker.entries()].map(([tk, sh]) => `+${sharesCompact.format(sh)} $${tk}`).join(' · ');
   setText(
     el2,
-    `${live.length} open auction${live.length === 1 ? '' : 's'} · ${usd.format(cost)} in bids${sharesStr ? ` → ${sharesStr} if they close now` : ''}`,
+    `${plural(live.length, 'open auction')} · ${usd.format(cost)} in bids${sharesStr ? ` → ${sharesStr} if they close now` : ''}`,
   );
   el2.hidden = false;
 }
@@ -1209,7 +1178,7 @@ function renderBrokerage(snapshot, filteredEnded, filteredActive, priceForTicker
 
   const footnote = document.getElementById('brokerage-footnote');
   if (b.excludedCount > 0) {
-    setText(footnote, `${b.excludedCount} sold item${b.excludedCount === 1 ? '' : 's'} excluded \u2014 no stock price on record for the moment the auction ended.`);
+    setText(footnote, `${plural(b.excludedCount, 'sold item')} excluded \u2014 no stock price on record for the moment the auction ended.`);
     footnote.hidden = false;
   } else {
     footnote.hidden = true;
@@ -1220,23 +1189,6 @@ function renderBrokerage(snapshot, filteredEnded, filteredActive, priceForTicker
 
 function setText(el, text) {
   if (el) el.textContent = text;
-}
-
-function el(tag, props = {}, children = []) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(props)) {
-    if (k === 'class') node.className = v;
-    else if (k === 'href' || k === 'target' || k === 'rel' || k === 'src' || k === 'alt' || k === 'loading' || k === 'title' || k.startsWith('aria-')) {
-      node.setAttribute(k, v);
-    } else {
-      node[k] = v;
-    }
-  }
-  for (const c of children) {
-    if (c == null) continue;
-    node.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
-  }
-  return node;
 }
 
 function timeRemaining(endsAt) {
@@ -1471,73 +1423,6 @@ function sharesUnit(ticker) {
   return el('span', { class: 'unit', textContent: 'shares' });
 }
 
-// Upgrade an eBay image URL to a larger render (see upgradeEbayImageUrl on
-// the server). Applied at render so even listings persisted with a small
-// thumbnail URL (e.g. ended rows fetched before the server-side upgrade
-// landed) display crisply. Non-eBay URLs pass through unchanged.
-function hiResImg(url, size = 1600) {
-  if (!url || !/(^|\.)ebayimg\.com\//.test(url)) return url;
-  return url.replace(/\/s-l\d+(\.\w+)/i, `/s-l${size}$1`);
-}
-
-// Build a cycling image carousel for an item's gallery. Pass
-// `[primary, ...additional]` deduped. The track wrap-cycles in both
-// directions (swipe past either end → other end) and clicking an image
-// opens the lightbox at the same index; when the lightbox closes, the
-// inline gallery jumps to whatever image the user was on in the modal so
-// they stay continuous.
-function imageGallery(images, alt) {
-  const cleaned = images.filter(Boolean).map((u) => hiResImg(u));
-  // Dedupe while preserving order so a listing whose primary equals
-  // additional[0] doesn't flash the same image twice.
-  const seen = new Set();
-  const ordered = [];
-  for (const u of cleaned) {
-    if (seen.has(u)) continue;
-    seen.add(u);
-    ordered.push(u);
-  }
-  const single = ordered.length <= 1;
-  const wrap = el('div', { class: `item-gallery${single ? ' single-image' : ''}` });
-  if (ordered.length === 0) return wrap;
-
-  const track = el('div', { class: 'gallery-track' });
-  wrap.appendChild(track);
-  // Counter goes on every gallery (consistent indicator regardless of how
-  // many images the listing has — eBay caps at 24, which would overflow
-  // any dot strip on a 160px tile).
-  const counter = el('div', { class: 'gallery-counter', 'aria-hidden': 'true' });
-  wrap.appendChild(counter);
-
-  const prev = el('button', { class: 'gallery-nav gallery-prev', type: 'button', 'aria-label': 'Previous image', textContent: '‹' });
-  const next = el('button', { class: 'gallery-nav gallery-next', type: 'button', 'aria-label': 'Next image', textContent: '›' });
-  if (!single) {
-    wrap.appendChild(prev);
-    wrap.appendChild(next);
-  }
-
-  const carousel = attachCyclingCarousel(track, {
-    images: ordered,
-    alt: alt ?? '',
-    counterEl: counter,
-  });
-  prev.addEventListener('click', (e) => { e.stopPropagation(); carousel.step(-1); });
-  next.addEventListener('click', (e) => { e.stopPropagation(); carousel.step(1); });
-
-  // Click any image to open the lightbox at the currently-visible slide;
-  // when the lightbox closes, jump this inline carousel to the index the
-  // user landed on so opening + closing maintains continuity.
-  track.style.cursor = 'zoom-in';
-  track.addEventListener('click', (e) => {
-    if (!(e.target instanceof HTMLImageElement)) return;
-    e.stopPropagation();
-    openImageLightbox(ordered, carousel.getIndex(), alt ?? '', {
-      onClose: (finalIdx) => carousel.goTo(finalIdx),
-    });
-  });
-  return wrap;
-}
-
 // The half-cash / half-stock split box shared by active and ended cards.
 //
 // Each half is a flex-wrap line holding a label + an atomic (nowrap) value.
@@ -1575,63 +1460,62 @@ function sharesValue(n, { compact = false, ticker = currentTickerSymbol } = {}) 
   ]);
 }
 
-function ebayItemUrl(itemId) {
-  if (!itemId) return 'https://www.ebay.com/';
-  const parts = String(itemId).split('|');
-  const legacyNumber = parts.length >= 2 && parts[1] ? parts[1] : itemId;
-  return `https://www.ebay.com/itm/${encodeURIComponent(legacyNumber)}`;
+// "N bid(s)", or null when the count is unknown.
+function bidsText(n) {
+  if (n === null || n === undefined) return null;
+  return plural(n, 'bid');
 }
 
-// For ended auctions, append eBay's no-redirect parameter (nordt=true) so the
-// original ended listing is shown instead of redirecting to "similar items".
-// eBay only redirects ended listings that are linked to a catalog/product page
-// (e.g. mass-market goods); nordt=true suppresses that. orig_cvip=true is kept
-// as a harmless legacy hint.
-function endedEbayUrl(itemWebUrl, itemId) {
-  const base = itemWebUrl || ebayItemUrl(itemId);
-  const sep = base.includes('?') ? '&' : '?';
-  return `${base}${sep}nordt=true&orig_cvip=true`;
-}
-
-function renderItem(item, symbol) {
-  const card = el('article', { class: 'item' });
+// The listing card shared by active and ended tiles: gallery, linked title,
+// tag + seller badge, a price line (large price + history icon) with its
+// stats stacked beside it, and the half/half split when there is one.
+function listingCard(item, { cardClass, href, tag, priceText, stats, split }) {
+  const card = el('article', { class: cardClass });
   card.appendChild(imageGallery([item.imageUrl, ...(item.additionalImages ?? [])], item.title));
   const body = el('div', { class: 'item-body' });
   body.appendChild(
     el('h2', { class: 'item-title' }, [
-      el('a', { href: item.itemWebUrl, target: '_blank', rel: 'noopener noreferrer', textContent: item.title }),
+      el('a', { href, target: '_blank', rel: 'noopener noreferrer', textContent: item.title }),
     ]),
   );
   const meta = el('div', { class: 'item-meta' });
-  meta.appendChild(saleTag(item.isAuction));
+  meta.appendChild(tag);
   if (item.sellerId) {
     meta.appendChild(el('span', { class: sellerBadgeClass(item.sellerId), textContent: `@${item.sellerId}` }));
   }
   body.appendChild(meta);
 
-  // Price line: the large price on the left, with bid count + time remaining
-  // stacked beside it (two lines of normal text matching the taller price
-  // font), and the history icon pinned to the far right. Consolidating these
-  // here reclaims the line the meta row used to spend on bids/time.
+  // Price line: the large price on the left, with the stats (bid count +
+  // time left / ended date) stacked beside it as atomic chunks, and the
+  // history icon pinned to the far right.
   const bidRow = el('div', { class: 'item-bid-row' });
   const priceLine = el('div', { class: 'item-bid-price' }, [
-    el('div', { class: 'item-bid', textContent: item.priceUsd != null ? usd.format(item.priceUsd) : '—' }),
+    el('div', { class: 'item-bid', textContent: priceText }),
     historyLink(item.itemId),
   ]);
   bidRow.appendChild(priceLine);
-  const stats = el('div', { class: 'item-bid-stats' });
-  if (item.bidCount !== null && item.bidCount !== undefined) {
-    stats.appendChild(el('span', { class: 'item-bid-stat', textContent: `${item.bidCount} bid${item.bidCount === 1 ? '' : 's'}` }));
+  const statsEl = el('div', { class: 'item-bid-stats' });
+  for (const text of stats) {
+    if (text) statsEl.appendChild(el('span', { class: 'item-bid-stat', textContent: text }));
   }
-  const remaining = timeRemaining(item.endsAt);
-  if (remaining) stats.appendChild(el('span', { class: 'item-bid-stat', textContent: remaining }));
-  if (stats.children.length) bidRow.appendChild(stats);
+  if (statsEl.children.length) bidRow.appendChild(statsEl);
   body.appendChild(bidRow);
-  if (item.split) {
-    body.appendChild(splitBox(item.split.cashUsd, item.split.shares, item.valuationTicker));
+  if (split) {
+    body.appendChild(splitBox(split.cashUsd, split.shares, item.valuationTicker));
   }
   card.appendChild(body);
   return card;
+}
+
+function renderItem(item) {
+  return listingCard(item, {
+    cardClass: 'item',
+    href: item.itemWebUrl,
+    tag: saleTag(item.isAuction),
+    priceText: item.priceUsd != null ? usd.format(item.priceUsd) : '—',
+    stats: [bidsText(item.bidCount), timeRemaining(item.endsAt)],
+    split: item.split,
+  });
 }
 
 function renderEndedSection(snapshot, endedItems, totals) {
@@ -1671,12 +1555,7 @@ function renderEndedSection(snapshot, endedItems, totals) {
     // the at-end aggregate is a subset.
     if (atEnd && totals.pricedAtEndCount < totals.listingsCount) {
       const missing = totals.listingsCount - totals.pricedAtEndCount;
-      totalsRoot.appendChild(
-        el('div', { class: 'stat' }, [
-          el('div', { class: 'stat-label', textContent: 'Missing end-time price' }),
-          el('div', { class: 'stat-value', textContent: integer.format(missing) }),
-        ]),
-      );
+      totalsRoot.appendChild(statCard('Missing end-time price', integer.format(missing)));
     }
   }
 
@@ -1688,51 +1567,19 @@ function renderEndedSection(snapshot, endedItems, totals) {
 }
 
 function renderEndedItem(item) {
-  const card = el('article', { class: 'item ended-item' });
-  card.appendChild(imageGallery([item.imageUrl, ...(item.additionalImages ?? [])], item.title));
-  const body = el('div', { class: 'item-body' });
-  body.appendChild(
-    el('h2', { class: 'item-title' }, [
-      el('a', { href: endedEbayUrl(item.itemWebUrl, item.itemId), target: '_blank', rel: 'noopener noreferrer', textContent: item.title }),
-    ]),
-  );
-  const meta = el('div', { class: 'item-meta' });
-  meta.appendChild(el('span', { class: 'tag tag-ended', textContent: 'Ended' }));
-  if (item.sellerId) {
-    meta.appendChild(el('span', { class: sellerBadgeClass(item.sellerId), textContent: `@${item.sellerId}` }));
-  }
-  body.appendChild(meta);
-
   const atEnd = currentEndedPriceMode === 'at-end';
-  const displaySplit = atEnd ? item.endTimeSplit : item.split;
-
-  // Price line: final price + history icon on row 1, bid count + ended date
-  // as atomic chunks on row 2, mirroring the active card.
-  const bidRow = el('div', { class: 'item-bid-row' });
-  const priceLine = el('div', { class: 'item-bid-price' }, [
-    el('div', { class: 'item-bid', textContent: usd.format(item.finalPriceUsd) }),
-    historyLink(item.itemId),
-  ]);
-  bidRow.appendChild(priceLine);
-  const stats = el('div', { class: 'item-bid-stats' });
-  if (item.finalBidCount !== null && item.finalBidCount !== undefined) {
-    stats.appendChild(el('span', { class: 'item-bid-stat', textContent: `${item.finalBidCount} bid${item.finalBidCount === 1 ? '' : 's'}` }));
-  }
   const endedDate = item.endedAt ? new Date(item.endedAt) : null;
-  if (endedDate) {
-    stats.appendChild(el('span', {
-      class: 'item-bid-stat',
-      textContent: `Ended ${endedDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`,
-    }));
-  }
-  if (stats.children.length) bidRow.appendChild(stats);
-  body.appendChild(bidRow);
-
-  if (displaySplit) {
-    body.appendChild(splitBox(displaySplit.cashUsd, displaySplit.shares, item.valuationTicker));
-  }
-  card.appendChild(body);
-  return card;
+  return listingCard(item, {
+    cardClass: 'item ended-item',
+    href: endedEbayUrl(item.itemWebUrl, item.itemId),
+    tag: el('span', { class: 'tag tag-ended', textContent: 'Ended' }),
+    priceText: usd.format(item.finalPriceUsd),
+    stats: [
+      bidsText(item.finalBidCount),
+      endedDate ? `Ended ${endedDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : null,
+    ],
+    split: atEnd ? item.endTimeSplit : item.split,
+  });
 }
 
 function renderItems(snapshot, items, bidDiff) {
@@ -1757,7 +1604,7 @@ function renderItems(snapshot, items, bidDiff) {
   const newCards = [];
 
   for (const item of sorted) {
-    const card = renderItem(item, symbol);
+    const card = renderItem(item);
     card.dataset.itemId = item.itemId;
 
     // Bid-change flash: only when the count actually went up
@@ -2028,21 +1875,35 @@ function stop() {
   }
 }
 
+// Pill groups (`.seller-btn`, `.stock-btn`, `.view-btn`, ...): mark the pill
+// whose data-<key> equals `value` active and the rest inactive.
+function syncPills(selector, key, value) {
+  document.querySelectorAll(selector).forEach((b) => b.classList.toggle('is-active', b.dataset[key] === value));
+}
+
+// Wire a pill group: reflect `current()` on first paint; a click on a
+// different pill marks it active and calls `onPick(value)`.
+function wirePills(selector, key, current, onPick) {
+  syncPills(selector, key, current());
+  document.querySelectorAll(selector).forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const value = btn.dataset[key];
+      if (value === current()) return;
+      syncPills(selector, key, value);
+      onPick(value);
+    });
+  });
+}
+
 // Stock toggle wiring — sync the active pill to the persisted activeSymbol
 // on first paint (the HTML hard-codes EBAY as active so the load/refresh
 // would otherwise mismatch when GME or a custom ticker is persisted).
-document.querySelectorAll('.stock-btn').forEach((btn) => {
-  btn.classList.toggle('is-active', btn.dataset.symbol === activeSymbol);
-  btn.addEventListener('click', () => {
-    const newSymbol = btn.dataset.symbol;
-    if (newSymbol === activeSymbol) return;
-    activeSymbol = newSymbol;
-    document.querySelectorAll('.stock-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
-    const input = document.getElementById('ticker-input');
-    if (input) input.value = '';
-    updateIntroSymbol(activeSymbol);
-    refresh();
-  });
+wirePills('.stock-btn', 'symbol', () => activeSymbol, (symbol) => {
+  activeSymbol = symbol;
+  const input = document.getElementById('ticker-input');
+  if (input) input.value = '';
+  updateIntroSymbol(activeSymbol);
+  refresh();
 });
 
 // Custom ticker input wiring
@@ -2062,9 +1923,9 @@ if (tickerInput) {
   tickerInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       const newSymbol = tickerInput.value.trim().toUpperCase();
-      if (newSymbol && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(newSymbol) && newSymbol !== activeSymbol) {
+      if (newSymbol && TICKER_RE.test(newSymbol) && newSymbol !== activeSymbol) {
         activeSymbol = newSymbol;
-        document.querySelectorAll('.stock-btn').forEach((b) => b.classList.toggle('is-active', false));
+        syncPills('.stock-btn', 'symbol', activeSymbol); // a custom ticker matches no pill
         tickerInput.classList.add('is-validating');
         updateIntroSymbol(activeSymbol);
         refresh().finally(() => tickerInput.classList.remove('is-validating'));
@@ -2086,7 +1947,7 @@ if (tickerInput) {
 function applySort(mode) {
   if (!SORT_MODES.includes(mode) || mode === currentSort) return;
   currentSort = mode;
-  saveSort(currentSort);
+  saveChoice('hchs.sort', SORT_MODES, currentSort);
   syncSortControls();
   if (lastSnapshot) renderFilteredView(lastSnapshot, new Map()); // re-sort active + ended; no bid flash
 }
@@ -2105,15 +1966,10 @@ syncSortControls();
 // View-mode button wiring. Reflects the persisted choice on initial paint
 // and applies it to the containers. Switching modes is a pure CSS class
 // swap — no re-render needed since every mode reuses the same card DOM.
-document.querySelectorAll('.view-btn').forEach((btn) => {
-  btn.classList.toggle('is-active', btn.dataset.view === currentViewMode);
-  btn.addEventListener('click', () => {
-    if (btn.dataset.view === currentViewMode) return;
-    currentViewMode = btn.dataset.view;
-    saveViewMode(currentViewMode);
-    document.querySelectorAll('.view-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
-    applyViewMode();
-  });
+wirePills('.view-btn', 'view', () => currentViewMode, (mode) => {
+  currentViewMode = mode;
+  saveChoice('hchs.viewMode', VIEW_MODES, currentViewMode);
+  applyViewMode();
 });
 applyViewMode();
 
@@ -2127,53 +1983,36 @@ if (introAbout) {
 }
 
 // Seller filter wiring
-document.querySelectorAll('.seller-btn').forEach((btn) => {
-  // Reflect the persisted choice on initial paint.
-  btn.classList.toggle('is-active', btn.dataset.sellerFilter === currentSellerFilter);
-  btn.addEventListener('click', () => {
-    if (btn.dataset.sellerFilter === currentSellerFilter) return;
-    currentSellerFilter = btn.dataset.sellerFilter;
-    saveSellerFilterToStorage(currentSellerFilter);
-    document.querySelectorAll('.seller-btn').forEach((b) =>
-      b.classList.toggle('is-active', b === btn),
-    );
+wirePills('.seller-btn', 'sellerFilter', () => currentSellerFilter, (filter) => {
+  currentSellerFilter = filter;
+  saveChoice('hchs.sellerFilter', SELLER_FILTERS, currentSellerFilter);
 
-    // Thematic ticker swap: Mine→$GME, Ryan→$EBAY, All→$EBAY. Re-fetch the
-    // snapshot for the new symbol if it changed; otherwise just re-filter
-    // the cached snapshot in place.
-    const preferredTicker = SELLER_FILTER_DEFAULT_TICKER[currentSellerFilter];
-    if (preferredTicker && preferredTicker !== activeSymbol) {
-      activeSymbol = preferredTicker;
-      saveTickerToStorage(activeSymbol);
-      document.querySelectorAll('.stock-btn').forEach((b) =>
-        b.classList.toggle('is-active', b.dataset.symbol === activeSymbol),
-      );
-      const tickerInput = document.getElementById('ticker-input');
-      if (tickerInput) tickerInput.value = '';
-      updateIntroSymbol(activeSymbol);
-      // Re-render the filtered view immediately with the cached snapshot so
-      // the filter change feels instant, then refresh against the new
-      // ticker in the background.
-      if (lastSnapshot) renderFilteredView(lastSnapshot, new Map());
-      refresh();
-    } else if (lastSnapshot) {
-      renderFilteredView(lastSnapshot, new Map()); // re-filter; no bid flash
-    }
-  });
+  // Thematic ticker swap: Mine→$GME, Ryan→$EBAY, All→$EBAY. Re-fetch the
+  // snapshot for the new symbol if it changed; otherwise just re-filter
+  // the cached snapshot in place.
+  const preferredTicker = SELLER_FILTER_DEFAULT_TICKER[currentSellerFilter];
+  if (preferredTicker && preferredTicker !== activeSymbol) {
+    activeSymbol = preferredTicker;
+    saveTickerToStorage(activeSymbol);
+    syncPills('.stock-btn', 'symbol', activeSymbol);
+    const tickerInput = document.getElementById('ticker-input');
+    if (tickerInput) tickerInput.value = '';
+    updateIntroSymbol(activeSymbol);
+    // Re-render the filtered view immediately with the cached snapshot so
+    // the filter change feels instant, then refresh against the new
+    // ticker in the background.
+    if (lastSnapshot) renderFilteredView(lastSnapshot, new Map());
+    refresh();
+  } else if (lastSnapshot) {
+    renderFilteredView(lastSnapshot, new Map()); // re-filter; no bid flash
+  }
 });
 
 // Ended-section "Live vs At end" stock price toggle
-document.querySelectorAll('.ended-mode-btn').forEach((btn) => {
-  btn.classList.toggle('is-active', btn.dataset.endedMode === currentEndedPriceMode);
-  btn.addEventListener('click', () => {
-    if (btn.dataset.endedMode === currentEndedPriceMode) return;
-    currentEndedPriceMode = btn.dataset.endedMode;
-    saveEndedPriceMode(currentEndedPriceMode);
-    document.querySelectorAll('.ended-mode-btn').forEach((b) =>
-      b.classList.toggle('is-active', b === btn),
-    );
-    if (lastSnapshot) renderFilteredView(lastSnapshot, new Map()); // re-render ended section
-  });
+wirePills('.ended-mode-btn', 'endedMode', () => currentEndedPriceMode, (mode) => {
+  currentEndedPriceMode = mode;
+  saveChoice('hchs.endedPriceMode', ENDED_MODES, currentEndedPriceMode);
+  if (lastSnapshot) renderFilteredView(lastSnapshot, new Map()); // re-render ended section
 });
 
 // Reflect the "Recently ended" vs "Ended (all time)" heading + help text
@@ -2197,18 +2036,11 @@ updateEndedHeading();
 // server controls which ended rows are returned — passing endedDays on
 // the query string. The cache key includes endedDays so each window
 // gets its own cached snapshot.
-document.querySelectorAll('.ended-window-btn').forEach((btn) => {
-  btn.classList.toggle('is-active', btn.dataset.endedWindow === currentEndedWindow);
-  btn.addEventListener('click', () => {
-    if (btn.dataset.endedWindow === currentEndedWindow) return;
-    currentEndedWindow = btn.dataset.endedWindow;
-    saveEndedWindow(currentEndedWindow);
-    document.querySelectorAll('.ended-window-btn').forEach((b) =>
-      b.classList.toggle('is-active', b === btn),
-    );
-    updateEndedHeading();
-    refresh();
-  });
+wirePills('.ended-window-btn', 'endedWindow', () => currentEndedWindow, (win) => {
+  currentEndedWindow = win;
+  saveChoice('hchs.endedWindow', ENDED_WINDOWS, currentEndedWindow);
+  updateEndedHeading();
+  refresh();
 });
 
 // Ended section collapse toggle

@@ -1,5 +1,5 @@
-import { openImageLightbox } from '/lightbox.js';
-import { attachCyclingCarousel } from '/carousel.js';
+import { imageGallery } from '/gallery.js';
+import { ADMIN_TOKEN_KEY, ebayItemUrl, endedEbayUrl, escapeHtml, hiResImg, postAdminAction } from '/shared.js';
 
 const params = new URLSearchParams(window.location.search);
 const itemId = params.get('id') || '';
@@ -37,113 +37,6 @@ function fmtTime(iso) {
   return new Date(iso).toLocaleString();
 }
 
-function ebayItemUrl(itemId) {
-  if (!itemId) return 'https://www.ebay.com/';
-  const parts = String(itemId).split('|');
-  const legacyNumber = parts.length >= 2 && parts[1] ? parts[1] : itemId;
-  return `https://www.ebay.com/itm/${encodeURIComponent(legacyNumber)}`;
-}
-
-// Append eBay's no-redirect parameter so ended catalog-linked listings show
-// the original page instead of redirecting to "similar items".
-function endedEbayUrl(itemWebUrl, itemId) {
-  const base = itemWebUrl || ebayItemUrl(itemId);
-  const sep = base.includes('?') ? '&' : '?';
-  return `${base}${sep}nordt=true&orig_cvip=true`;
-}
-
-function hiResImg(url, size = 1600) {
-  if (!url || !/(^|\.)ebayimg\.com\//.test(url)) return url;
-  return url.replace(/\/s-l\d+(\.\w+)/i, `/s-l${size}$1`);
-}
-
-// Mirrors imageGallery() in app.js — uses the same attachCyclingCarousel
-// helper for clone-pad wrap-around and counter, built with DOM methods so
-// it slots next to the innerHTML-rendered header text.
-function buildImageGallery(images, alt) {
-  const cleaned = (images || []).filter(Boolean).map((u) => hiResImg(u));
-  const seen = new Set();
-  const ordered = [];
-  for (const u of cleaned) {
-    if (seen.has(u)) continue;
-    seen.add(u);
-    ordered.push(u);
-  }
-  const single = ordered.length <= 1;
-  const wrap = document.createElement('div');
-  wrap.className = `item-gallery${single ? ' single-image' : ''}`;
-  if (ordered.length === 0) return wrap;
-
-  const track = document.createElement('div');
-  track.className = 'gallery-track';
-  wrap.appendChild(track);
-  const counter = document.createElement('div');
-  counter.className = 'gallery-counter';
-  counter.setAttribute('aria-hidden', 'true');
-  wrap.appendChild(counter);
-
-  const mkBtn = (cls, label, text) => {
-    const b = document.createElement('button');
-    b.className = `gallery-nav ${cls}`;
-    b.type = 'button';
-    b.setAttribute('aria-label', label);
-    b.textContent = text;
-    return b;
-  };
-  const prev = mkBtn('gallery-prev', 'Previous image', '‹');
-  const next = mkBtn('gallery-next', 'Next image', '›');
-  if (!single) wrap.append(prev, next);
-
-  const carousel = attachCyclingCarousel(track, {
-    images: ordered,
-    alt: alt || '',
-    counterEl: counter,
-  });
-  prev.addEventListener('click', (e) => { e.stopPropagation(); carousel.step(-1); });
-  next.addEventListener('click', (e) => { e.stopPropagation(); carousel.step(1); });
-
-  track.style.cursor = 'zoom-in';
-  track.addEventListener('click', (e) => {
-    if (!(e.target instanceof HTMLImageElement)) return;
-    e.stopPropagation();
-    openImageLightbox(ordered, carousel.getIndex(), alt || '', {
-      onClose: (finalIdx) => carousel.goTo(finalIdx),
-    });
-  });
-
-  // Keyboard support: the gallery is focusable; arrow keys flip slides,
-  // Enter/Space opens the lightbox at the current slide (mirroring click).
-  if (!single) {
-    wrap.tabIndex = 0;
-    wrap.setAttribute('role', 'group');
-    wrap.setAttribute('aria-label', 'Image gallery — use arrow keys to browse');
-    wrap.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        carousel.step(-1);
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        carousel.step(1);
-      } else if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        openImageLightbox(ordered, carousel.getIndex(), alt || '', {
-          onClose: (finalIdx) => carousel.goTo(finalIdx),
-        });
-      }
-    });
-  }
-  return wrap;
-}
-
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
 function showError(message) {
   errorBanner.textContent = message;
   errorBanner.hidden = false;
@@ -165,9 +58,10 @@ function renderHeader(listing) {
       <p class="item-meta"><a href="${escapeHtml(ebayUrl)}" target="_blank" rel="noopener noreferrer">View on eBay ↗</a></p>
     </div>
   `;
-  const gallery = buildImageGallery(
+  const gallery = imageGallery(
     [listing.imageUrl, ...(listing.additionalImages || [])],
     listing.title,
+    { keyboard: true },
   );
   headerEl.insertBefore(gallery, headerEl.firstChild);
   headerEl.hidden = false;
@@ -206,14 +100,26 @@ function renderDescription(descriptionHtml) {
   section.hidden = false;
 }
 
+// The highest bid amount among `bids` (0 when there are none).
+function highestBidUsd(bids) {
+  return bids.reduce((max, b) => (b.bidAmountUsd > max ? b.bidAmountUsd : max), 0);
+}
+
+// One stat card: label over value, with optional extra markup inside it.
+function statCardHtml(label, value, extra = '') {
+  return `
+    <div class="stat-card">
+      <div class="stat-label">${label}</div>
+      <div class="stat-value">${value}</div>${extra}
+    </div>`;
+}
+
 function renderCurrentState(listing, bids) {
   const ended = Boolean(listing.endedAt);
   const activeBids = bids.filter((b) => !b.removedAt).length;
   const removedBids = bids.filter((b) => b.removedAt).length;
-  const highestActive = bids
-    .filter((b) => !b.removedAt)
-    .reduce((max, b) => (b.bidAmountUsd > max ? b.bidAmountUsd : max), 0);
-  const highestEver = bids.reduce((max, b) => (b.bidAmountUsd > max ? b.bidAmountUsd : max), 0);
+  const highestActive = highestBidUsd(bids.filter((b) => !b.removedAt));
+  const highestEver = highestBidUsd(bids);
 
   // Ended auctions get "Final result" — calling reconciled, immutable
   // numbers "current state" reads wrong once the hammer is down.
@@ -238,12 +144,7 @@ function renderCurrentState(listing, bids) {
     : '';
   // Removed-bids card only earns its grid cell when there's something
   // to report.
-  const removedCard = removedBids > 0
-    ? `<div class="stat-card">
-         <div class="stat-label">Removed bids</div>
-         <div class="stat-value">${fmtCount(removedBids)}</div>
-       </div>`
-    : '';
+  const removedCard = removedBids > 0 ? statCardHtml('Removed bids', fmtCount(removedBids)) : '';
 
   // For an ended auction the final price, highest active bid, and highest
   // ever seen are almost always the same number — three cards repeating
@@ -253,36 +154,18 @@ function renderCurrentState(listing, bids) {
   // can be either, so don't claim one.
   let highCards = '';
   if (!ended) {
-    highCards = `
-    <div class="stat-card">
-      <div class="stat-label">Highest active bid</div>
-      <div class="stat-value">${fmtUsd(highestActive)}</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Highest ever seen</div>
-      <div class="stat-value">${fmtUsd(highestEver)}</div>
-    </div>`;
+    highCards =
+      statCardHtml('Highest active bid', fmtUsd(highestActive)) +
+      statCardHtml('Highest ever seen', fmtUsd(highestEver));
   } else if (highestEver > listing.currentPriceUsd + 0.005) {
-    highCards = `
-    <div class="stat-card">
-      <div class="stat-label">Highest bid tracked</div>
-      <div class="stat-value">${fmtUsd(highestEver)}</div>
-    </div>`;
+    highCards = statCardHtml('Highest bid tracked', fmtUsd(highestEver));
   }
 
-  currentState.innerHTML = `
-    <div class="stat-card">
-      <div class="stat-label">${ended ? 'Final price' : 'Current price'}</div>
-      <div class="stat-value">${fmtUsd(listing.currentPriceUsd)}</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Bids</div>
-      <div class="stat-value">${fmtCount(ebayCount)}</div>
-      ${bidsSubline}
-    </div>
-    ${removedCard}
-    ${highCards}
-  `;
+  currentState.innerHTML =
+    statCardHtml(ended ? 'Final price' : 'Current price', fmtUsd(listing.currentPriceUsd)) +
+    statCardHtml('Bids', fmtCount(ebayCount), bidsSubline) +
+    removedCard +
+    highCards;
   currentSection.hidden = false;
 }
 
@@ -1003,6 +886,18 @@ function drawChart() {
   const markerPrice = svg.querySelector('.chart-marker-price');
   const hitArea = svg.querySelector('.chart-hit');
 
+  // Move the guide line + price marker to point `p` and show its readout.
+  const selectPoint = (p) => {
+    const px = xFor(p.t);
+    guide.setAttribute('x1', px);
+    guide.setAttribute('x2', px);
+    guide.setAttribute('opacity', '0.6');
+    markerPrice.setAttribute('cx', px);
+    markerPrice.setAttribute('cy', yPriceFor(p.price));
+    markerPrice.setAttribute('opacity', '1');
+    chartHelp.textContent = `${fmtTime(new Date(p.t).toISOString())} — ${fmtUsd(p.price)} · ${fmtCount(p.count)} bids`;
+  };
+
   const updateFromX = (clientX) => {
     const rect = svg.getBoundingClientRect();
     const ratio = (clientX - rect.left) / rect.width;
@@ -1016,15 +911,7 @@ function drawChart() {
         closestIdx = i;
       }
     }
-    const p = points[closestIdx];
-    const px = xFor(p.t);
-    guide.setAttribute('x1', px);
-    guide.setAttribute('x2', px);
-    guide.setAttribute('opacity', '0.6');
-    markerPrice.setAttribute('cx', px);
-    markerPrice.setAttribute('cy', yPriceFor(p.price));
-    markerPrice.setAttribute('opacity', '1');
-    chartHelp.textContent = `${fmtTime(new Date(p.t).toISOString())} — ${fmtUsd(p.price)} · ${fmtCount(p.count)} bids`;
+    selectPoint(points[closestIdx]);
   };
 
   const resetSelection = () => {
@@ -1079,16 +966,7 @@ function drawChart() {
     dot.style.cursor = 'pointer';
     dot.addEventListener('click', (e) => {
       e.stopPropagation();
-      const idx = Number(dot.dataset.idx);
-      const p = points[idx];
-      const px = xFor(p.t);
-      guide.setAttribute('x1', px);
-      guide.setAttribute('x2', px);
-      guide.setAttribute('opacity', '0.6');
-      markerPrice.setAttribute('cx', px);
-      markerPrice.setAttribute('cy', yPriceFor(p.price));
-      markerPrice.setAttribute('opacity', '1');
-      chartHelp.textContent = `${fmtTime(new Date(p.t).toISOString())} — ${fmtUsd(p.price)} · ${fmtCount(p.count)} bids`;
+      selectPoint(points[Number(dot.dataset.idx)]);
     });
   });
 
@@ -1209,7 +1087,6 @@ function renderSnapshots(snapshots) {
   snapshotsSection.hidden = false;
 }
 
-const ADMIN_TOKEN_KEY = 'hchs.admin.token';
 const adminSection = document.getElementById('admin-section');
 const inspectBtn = document.getElementById('inspect-btn');
 const adminOutput = document.getElementById('admin-output');
@@ -1228,11 +1105,7 @@ async function adminRequest(action, extraBody = {}) {
   adminOutput.hidden = false;
   adminOutput.textContent = `Running ${action}...`;
   try {
-    const response = await fetch('/api/admin/cleanup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ action, itemId, ...extraBody }),
-    });
+    const response = await postAdminAction(token, { action, itemId, ...extraBody });
     const data = await response.json();
     adminOutput.textContent = JSON.stringify(data, null, 2);
     return data;

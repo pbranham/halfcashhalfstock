@@ -39,7 +39,8 @@ https://halfcashhalfstock-dev.onrender.com (deploys from
   on startup by `src/db/migrate.ts`; latest is `017_feedback`.
 - Vanilla static frontend in `public/` — no bundler, no CDNs. Browser-native
   ESM modules (`<script type="module">`) for `app.js`/`item.js`; those import
-  `carousel.js` + `lightbox.js`.
+  `gallery.js` (→ `carousel.js` + `lightbox.js`) and `shared.js`; `admin.js` imports
+  `shared.js` too. A helper two pages need goes in `shared.js`, never a copy.
 - Vitest for tests (currently **195**). ESLint + Prettier for lint/format
   (Prettier `printWidth: 100`). Note: the repo is NOT fully prettier-clean, so
   do NOT run `prettier --write` across whole files — it reflows hundreds of
@@ -119,6 +120,9 @@ public/
   admin.html  admin.js       admin dashboard + maintenance actions
   carousel.js                attachCyclingCarousel: shared clone-pad cycling track
   lightbox.js                openImageLightbox: shared fullscreen modal
+  gallery.js                 imageGallery: the one tile/item-page gallery (keyboard option)
+  shared.js                  helpers every page imports: el, escapeHtml, loadChoice/saveChoice,
+                             hiResImg, ebayItemUrl/endedEbayUrl, plural, postAdminAction, ADMIN_TOKEN_KEY
   *.css       theme-init.js
 test/
   one *.test.ts per src/ module; vitest, no jsdom
@@ -180,7 +184,8 @@ hits when the snapshot cache misses.
 - **Input validation**: `ITEM_ID_RE` / `TICKER_RE` / `ENVIRONMENT_RE` are
   exported from `config.ts`; any new admin action that takes an itemId uses
   `validItemId(res, raw, field)` in `server.ts` (400 on a bad one).
-- **Public JS is vanilla ESM + CSP-strict**: no inline scripts, no eval, no
+- **Public JS is vanilla ESM + CSP-strict** (not covered by ESLint — load the
+  pages in a browser to check a change): no inline scripts, no eval, no
   CDNs. New behavior goes in an existing `public/*.js` file or a new module
   imported via `<script type="module">`. `frame-src 'self'` is the one CSP
   exception we needed — for the description iframe.

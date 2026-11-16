@@ -1,4 +1,4 @@
-const STORAGE_KEY = 'hchs.admin.token';
+import { ADMIN_TOKEN_KEY, endedEbayUrl, escapeHtml, plural, postAdminAction } from '/shared.js';
 const REFRESH_INTERVAL_MS = 30_000;
 const LIVE_REFRESH_INTERVAL_MS = 5_000;
 
@@ -54,15 +54,15 @@ let dashboardRefreshTimer = null;
 let liveRefreshTimer = null;
 
 function getToken() {
-  return localStorage.getItem(STORAGE_KEY) || '';
+  return localStorage.getItem(ADMIN_TOKEN_KEY) || '';
 }
 
 function saveToken(token) {
-  localStorage.setItem(STORAGE_KEY, token);
+  localStorage.setItem(ADMIN_TOKEN_KEY, token);
 }
 
 function clearToken() {
-  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(ADMIN_TOKEN_KEY);
 }
 
 function showAuthScreen(message) {
@@ -123,17 +123,72 @@ function fmtDuration(seconds) {
   return `${Math.floor(seconds / 3600)}h ${Math.round((seconds % 3600) / 60)}m`;
 }
 
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
 function isDevEnv(env) {
   return env !== 'production' && env !== 'prod';
+}
+
+// An environment chip's class: `base`, plus `dev` for non-production envs.
+function envClass(base, env) {
+  return isDevEnv(env) ? `${base} dev` : base;
+}
+
+// The muted one-line placeholder shown when a table has nothing to list.
+function emptyNote(text, opacity = '0.6') {
+  return `<p style="opacity: ${opacity};">${text}</p>`;
+}
+
+// Total each group of stats rows: `keyOf(row)` names the group, `init(row)`
+// starts its accumulator, `add(acc, row)` folds a row in. Returns the
+// accumulators in first-seen order.
+function groupRows(rows, keyOf, init, add) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = keyOf(row);
+    if (!groups.has(key)) groups.set(key, init(row));
+    add(groups.get(key), row);
+  }
+  return Array.from(groups.values());
+}
+
+// Requests summed per (`field` value, environment): [{value, environment,
+// requests}] in first-seen order.
+function requestTotals(rows, field) {
+  return groupRows(
+    rows,
+    (row) => `${row[field]}|${row.environment}`,
+    (row) => ({ value: row[field], environment: row.environment, requests: 0 }),
+    (acc, row) => { acc.requests += Number(row.request_count); },
+  );
+}
+
+// An environment chip cell.
+function envCell(env) {
+  return `<span class="${envClass('env-pill', env)}">${escapeHtml(env)}</span>`;
+}
+
+// One stats table: `heads` are [label, numeric] pairs, `cells(row)` returns
+// that row's cell HTML in the same order. No rows → the `empty` note.
+function statsTable(container, rows, heads, cells, empty = 'No data.') {
+  if (!rows || rows.length === 0) {
+    container.innerHTML = emptyNote(empty);
+    return;
+  }
+  const cls = (numeric) => (numeric ? ' class="numeric"' : '');
+  const head = heads.map(([label, numeric]) => `<th${cls(numeric)}>${label}</th>`).join('');
+  const body = rows
+    .map((row) => `<tr>${cells(row).map((c, i) => `<td${cls(heads[i][1])}>${c}</td>`).join('')}</tr>`)
+    .join('');
+  container.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+// Request totals per (`field`, environment), busiest first.
+function renderRequestCounts(container, data, field, heading) {
+  statsTable(
+    container,
+    requestTotals(data.hourly, field).sort((x, y) => y.requests - x.requests),
+    [[heading, false], ['Env', false], ['Requests', true]],
+    (row) => [escapeHtml(String(row.value)), envCell(row.environment), fmt(row.requests)],
+  );
 }
 
 function renderLive(data) {
@@ -191,7 +246,7 @@ function renderSummary(data) {
   for (const row of data.summary) {
     const card = document.createElement('div');
     card.className = 'summary-card';
-    const tagClass = isDevEnv(row.environment) ? 'env-tag dev' : 'env-tag';
+    const tagClass = envClass('env-tag', row.environment);
     const total = (row.bot_count || 0) + (row.mobile_count || 0) + (row.desktop_count || 0) + (row.other_count || 0);
     const pct = (n) => (total > 0 ? Math.round((n / total) * 100) : 0);
     card.innerHTML = `
@@ -207,26 +262,24 @@ function renderSummary(data) {
 }
 
 function renderSessions(data) {
-  if (!data.sessions || data.sessions.length === 0) {
-    sessionsTable.innerHTML = '<p style="opacity: 0.6;">No session data yet.</p>';
-    return;
-  }
-  let html = '<table><thead><tr><th>Env</th><th class="numeric">Sessions</th><th class="numeric">Avg duration</th><th class="numeric">Avg requests</th><th class="numeric">Bounce rate</th></tr></thead><tbody>';
-  for (const row of data.sessions) {
-    const pillClass = isDevEnv(row.environment) ? 'env-pill dev' : 'env-pill';
-    const bounceRate = row.total_sessions > 0
-      ? Math.round((row.bounce_count / row.total_sessions) * 100)
-      : 0;
-    html += `<tr>
-      <td><span class="${pillClass}">${escapeHtml(row.environment)}</span></td>
-      <td class="numeric">${fmt(row.total_sessions)}</td>
-      <td class="numeric">${fmtDuration(Number(row.avg_duration_seconds))}</td>
-      <td class="numeric">${fmt(row.avg_requests_per_session)}</td>
-      <td class="numeric">${bounceRate}%</td>
-    </tr>`;
-  }
-  html += '</tbody></table>';
-  sessionsTable.innerHTML = html;
+  statsTable(
+    sessionsTable,
+    data.sessions,
+    [['Env', false], ['Sessions', true], ['Avg duration', true], ['Avg requests', true], ['Bounce rate', true]],
+    (row) => {
+      const bounceRate = row.total_sessions > 0
+        ? Math.round((row.bounce_count / row.total_sessions) * 100)
+        : 0;
+      return [
+        envCell(row.environment),
+        fmt(row.total_sessions),
+        fmtDuration(Number(row.avg_duration_seconds)),
+        fmt(row.avg_requests_per_session),
+        `${bounceRate}%`,
+      ];
+    },
+    'No session data yet.',
+  );
 }
 
 function renderHourlyChart(data) {
@@ -238,34 +291,21 @@ function renderHourlyChart(data) {
   hourlyTitle.textContent = intervalLabel;
   hourlyChart.innerHTML = '';
   if (!data.hourly || data.hourly.length === 0) {
-    hourlyChart.innerHTML = '<p style="opacity: 0.6;">No requests in this window.</p>';
+    hourlyChart.innerHTML = emptyNote('No requests in this window.');
     hourlyDetail.textContent = '';
     return;
   }
 
-  const buckets = new Map();
-  for (const row of data.hourly) {
-    const key = `${row.hour}|${row.environment}`;
-    if (!buckets.has(key)) {
-      buckets.set(key, {
-        hour: row.hour,
-        environment: row.environment,
-        count: 0,
-      });
-    }
-    buckets.get(key).count += Number(row.request_count);
-  }
-
-  const sorted = Array.from(buckets.values()).sort((a, b) =>
-    a.hour < b.hour ? -1 : a.hour > b.hour ? 1 : 0,
-  );
+  const sorted = requestTotals(data.hourly, 'hour')
+    .map(({ value, environment, requests }) => ({ hour: value, environment, count: requests }))
+    .sort((a, b) => (a.hour < b.hour ? -1 : a.hour > b.hour ? 1 : 0));
   const maxCount = Math.max(...sorted.map((b) => b.count), 1);
 
   let foundSelected = false;
   for (const bucket of sorted) {
     const bar = document.createElement('button');
     bar.type = 'button';
-    bar.className = isDevEnv(bucket.environment) ? 'hourly-bar dev' : 'hourly-bar';
+    bar.className = envClass('hourly-bar', bucket.environment);
     const heightPct = Math.max(2, (bucket.count / maxCount) * 100);
     bar.style.height = `${heightPct}%`;
     const date = new Date(bucket.hour);
@@ -302,90 +342,32 @@ function selectBar(bar, label) {
 }
 
 function renderEndpointTable(data) {
-  const counts = new Map();
-  for (const row of data.hourly) {
-    const key = `${row.endpoint}|${row.environment}`;
-    if (!counts.has(key)) {
-      counts.set(key, {
-        endpoint: row.endpoint,
-        environment: row.environment,
-        requests: 0,
-      });
-    }
-    counts.get(key).requests += Number(row.request_count);
-  }
-  const sorted = Array.from(counts.values()).sort((a, b) => b.requests - a.requests);
-  if (sorted.length === 0) {
-    endpointTable.innerHTML = '<p style="opacity: 0.6;">No data.</p>';
-    return;
-  }
-  let html = '<table><thead><tr><th>Endpoint</th><th>Env</th><th class="numeric">Requests</th></tr></thead><tbody>';
-  for (const row of sorted) {
-    const pillClass = isDevEnv(row.environment) ? 'env-pill dev' : 'env-pill';
-    html += `<tr><td>${escapeHtml(row.endpoint)}</td><td><span class="${pillClass}">${escapeHtml(row.environment)}</span></td><td class="numeric">${fmt(row.requests)}</td></tr>`;
-  }
-  html += '</tbody></table>';
-  endpointTable.innerHTML = html;
+  renderRequestCounts(endpointTable, data, 'endpoint', 'Endpoint');
 }
 
 function renderStatusTable(data) {
-  const counts = new Map();
-  for (const row of data.hourly) {
-    const key = `${row.status_code}|${row.environment}`;
-    if (!counts.has(key)) {
-      counts.set(key, { status: row.status_code, environment: row.environment, requests: 0 });
-    }
-    counts.get(key).requests += Number(row.request_count);
-  }
-  const sorted = Array.from(counts.values()).sort((a, b) => b.requests - a.requests);
-  if (sorted.length === 0) {
-    statusTable.innerHTML = '<p style="opacity: 0.6;">No data.</p>';
-    return;
-  }
-  let html = '<table><thead><tr><th>Status</th><th>Env</th><th class="numeric">Requests</th></tr></thead><tbody>';
-  for (const row of sorted) {
-    const pillClass = isDevEnv(row.environment) ? 'env-pill dev' : 'env-pill';
-    html += `<tr><td>${escapeHtml(String(row.status))}</td><td><span class="${pillClass}">${escapeHtml(row.environment)}</span></td><td class="numeric">${fmt(row.requests)}</td></tr>`;
-  }
-  html += '</tbody></table>';
-  statusTable.innerHTML = html;
+  renderRequestCounts(statusTable, data, 'status_code', 'Status');
 }
 
 function renderUaTable(data) {
-  const counts = new Map();
-  for (const row of data.hourly) {
-    const key = row.environment;
-    if (!counts.has(key)) {
-      counts.set(key, {
-        environment: row.environment,
-        bot: 0, mobile: 0, desktop: 0, other: 0, total: 0,
-      });
-    }
-    const entry = counts.get(key);
-    entry.bot += Number(row.bot_count) || 0;
-    entry.mobile += Number(row.mobile_count) || 0;
-    entry.desktop += Number(row.desktop_count) || 0;
-    entry.other += Number(row.other_count) || 0;
-    entry.total += Number(row.request_count) || 0;
-  }
-  const sorted = Array.from(counts.values()).sort((a, b) => b.total - a.total);
-  if (sorted.length === 0) {
-    uaTable.innerHTML = '<p style="opacity: 0.6;">No data.</p>';
-    return;
-  }
-  let html = '<table><thead><tr><th>Env</th><th class="numeric">Desktop</th><th class="numeric">Mobile</th><th class="numeric">Bot</th><th class="numeric">Other</th></tr></thead><tbody>';
-  for (const row of sorted) {
-    const pillClass = isDevEnv(row.environment) ? 'env-pill dev' : 'env-pill';
-    html += `<tr>
-      <td><span class="${pillClass}">${escapeHtml(row.environment)}</span></td>
-      <td class="numeric">${fmt(row.desktop)}</td>
-      <td class="numeric">${fmt(row.mobile)}</td>
-      <td class="numeric">${fmt(row.bot)}</td>
-      <td class="numeric">${fmt(row.other)}</td>
-    </tr>`;
-  }
-  html += '</tbody></table>';
-  uaTable.innerHTML = html;
+  const sorted = groupRows(
+    data.hourly,
+    (row) => row.environment,
+    (row) => ({ environment: row.environment, bot: 0, mobile: 0, desktop: 0, other: 0, total: 0 }),
+    (entry, row) => {
+      entry.bot += Number(row.bot_count) || 0;
+      entry.mobile += Number(row.mobile_count) || 0;
+      entry.desktop += Number(row.desktop_count) || 0;
+      entry.other += Number(row.other_count) || 0;
+      entry.total += Number(row.request_count) || 0;
+    },
+  ).sort((a, b) => b.total - a.total);
+  statsTable(
+    uaTable,
+    sorted,
+    [['Env', false], ['Desktop', true], ['Mobile', true], ['Bot', true], ['Other', true]],
+    (row) => [envCell(row.environment), fmt(row.desktop), fmt(row.mobile), fmt(row.bot), fmt(row.other)],
+  );
 }
 
 function populateEnvFilter(data) {
@@ -403,15 +385,14 @@ function populateEnvFilter(data) {
 function renderMaintenance(data) {
   maintenanceControls.innerHTML = '';
   if (!data.environments || data.environments.length === 0) {
-    maintenanceControls.innerHTML = '<p style="opacity: 0.6;">No environments to manage.</p>';
+    maintenanceControls.innerHTML = emptyNote('No environments to manage.');
     return;
   }
   for (const env of data.environments) {
     const row = document.createElement('div');
     row.className = 'maintenance-row';
-    const pillClass = isDevEnv(env) ? 'env-pill dev' : 'env-pill';
     row.innerHTML = `
-      <span class="${pillClass}">${escapeHtml(env)}</span>
+      ${envCell(env)}
       <input type="text" placeholder="rename to..." class="rename-input" data-from="${escapeHtml(env)}" />
       <div class="row-actions">
         <button type="button" class="admin-btn rename-btn" data-from="${escapeHtml(env)}">Rename</button>
@@ -475,14 +456,7 @@ async function doCleanup(payload) {
   const token = getToken();
   if (!token) return;
   try {
-    const response = await fetch('/api/admin/cleanup', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(payload),
-    });
+    const response = await postAdminAction(token, payload);
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
       alert(`Cleanup failed (${response.status}): ${detail || 'unknown error'}`);
@@ -591,11 +565,7 @@ async function recoveryFetch(action, extraBody = {}) {
   if (!token) return;
   recoveryResult.hidden = true;
   try {
-    const response = await fetch('/api/admin/cleanup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ action, ...extraBody }),
-    });
+    const response = await postAdminAction(token, { action, ...extraBody });
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
       recoveryResult.textContent = `Error (${response.status}): ${detail || 'unknown'}`;
@@ -604,11 +574,11 @@ async function recoveryFetch(action, extraBody = {}) {
     }
     const data = await response.json();
     if (action === 'count_removed_bids') {
-      recoveryResult.textContent = `${data.count} bid${data.count === 1 ? '' : 's'} currently marked removed.`;
+      recoveryResult.textContent = `${plural(data.count, 'bid')} currently marked removed.`;
     } else if (action === 'restore_all_bids') {
-      recoveryResult.textContent = `Restored ${data.restored} bid${data.restored === 1 ? '' : 's'} (cleared removed_at).`;
+      recoveryResult.textContent = `Restored ${plural(data.restored, 'bid')} (cleared removed_at).`;
     } else if (action === 'restore_listings') {
-      recoveryResult.textContent = `Restored ${data.restored} listing${data.restored === 1 ? '' : 's'} (cleared ended_at).`;
+      recoveryResult.textContent = `Restored ${plural(data.restored, 'listing')} (cleared ended_at).`;
     } else if (action === 'backfill_ohlc_history') {
       const lines = (data.results ?? []).map((r) => {
         if (r.error) return `${r.ticker}: error — ${r.error}`;
@@ -617,7 +587,7 @@ async function recoveryFetch(action, extraBody = {}) {
       recoveryResult.textContent = `Historical OHLC backfill (${data.range}):\n${lines.join('\n')}`;
     } else if (action === 'backfill_import_stamps') {
       const lines = (data.items ?? []).map((r) => `${r.sellerId}  ${r.itemId}  (last bid seen ${new Date(r.latestBidAt).toLocaleDateString()})`);
-      const header = `Stamp paste-imported items (${data.mode}) — ${data.count} item${data.count === 1 ? '' : 's'}:`;
+      const header = `Stamp paste-imported items (${data.mode}) — ${plural(data.count, 'item')}:`;
       recoveryResult.textContent = `${header}\n${lines.join('\n') || '(none — nothing to stamp)'}`;
     } else if (action === 'sweep_feedback') {
       const perSeller = (data.results ?? []).map((r) => {
@@ -684,6 +654,18 @@ if (reconcileStatusApplyBtn) {
     confirmAction('Write eBay\'s final price + bid count onto every ended listing where it differs from the DB? Run a Dry run first to preview.', () => recoveryFetch('reconcile_selling_status', { apply: true }));
   });
 }
+// Run one admin action whose answer lands in `out`: show `busyText` there,
+// POST, and return the parsed JSON (null without a token). Throws on a
+// network error — callers show it in `out`.
+async function adminActionInto(out, busyText, body) {
+  const token = getToken();
+  if (!token) return null;
+  out.hidden = false;
+  out.textContent = busyText;
+  const response = await postAdminAction(token, body);
+  return response.json();
+}
+
 if (inspectBtn) {
   inspectBtn.addEventListener('click', async () => {
     const itemId = (inspectItemInput.value || '').trim();
@@ -691,17 +673,9 @@ if (inspectBtn) {
       alert('Enter an item ID like v1|112233|0');
       return;
     }
-    const token = getToken();
-    if (!token) return;
-    inspectOutput.hidden = false;
-    inspectOutput.textContent = 'Fetching...';
     try {
-      const response = await fetch('/api/admin/cleanup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'inspect_bid_history', itemId }),
-      });
-      const data = await response.json();
+      const data = await adminActionInto(inspectOutput, 'Fetching...', { action: 'inspect_bid_history', itemId });
+      if (!data) return;
       inspectOutput.textContent = JSON.stringify(data, null, 2);
     } catch (err) {
       inspectOutput.textContent = `Error: ${err.message}`;
@@ -710,22 +684,14 @@ if (inspectBtn) {
 }
 if (findStuckBtn) {
   findStuckBtn.addEventListener('click', async () => {
-    const token = getToken();
-    if (!token) return;
-    stuckList.hidden = false;
-    stuckList.textContent = 'Searching…';
     try {
-      const response = await fetch('/api/admin/cleanup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'list_stuck_listings' }),
-      });
-      const data = await response.json();
+      const data = await adminActionInto(stuckList, 'Searching…', { action: 'list_stuck_listings' });
+      if (!data) return;
       if (!data.items || data.items.length === 0) {
-        stuckList.innerHTML = '<p style="opacity: 0.7;">No stuck listings.</p>';
+        stuckList.innerHTML = emptyNote('No stuck listings.', '0.7');
         return;
       }
-      let html = `<p style="margin: 0 0 0.5rem;">${data.count} stuck listing${data.count === 1 ? '' : 's'} (not in active poll, not marked ended).</p>`;
+      let html = `<p style="margin: 0 0 0.5rem;">${plural(data.count, 'stuck listing')} (not in active poll, not marked ended).</p>`;
       html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">';
       html += '<thead><tr><th style="text-align: left; padding: 0.3rem;">Title</th><th style="text-align: left; padding: 0.3rem;">Item ID</th><th style="text-align: left; padding: 0.3rem;">Last seen</th><th></th></tr></thead><tbody>';
       for (const row of data.items) {
@@ -746,11 +712,7 @@ if (findStuckBtn) {
           btn.disabled = true;
           btn.textContent = '…';
           try {
-            const response = await fetch('/api/admin/cleanup', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${t}` },
-              body: JSON.stringify({ action: 'force_mark_ended', itemId }),
-            });
+            const response = await postAdminAction(t, { action: 'force_mark_ended', itemId });
             const result = await response.json();
             btn.textContent = result.marked ? 'Marked' : 'No change';
           } catch (err) {
@@ -781,11 +743,7 @@ async function importViewbidsHtml(itemId, html, btn, statusCell) {
   btn.disabled = true;
   btn.textContent = 'Importing…';
   try {
-    const response = await fetch('/api/admin/cleanup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ action: 'import_viewbids_html', itemId, html }),
-    });
+    const response = await postAdminAction(token, { action: 'import_viewbids_html', itemId, html });
     const data = await response.json();
     if (data.status === 'imported') {
       statusCell.innerHTML = statusBadge('imported');
@@ -807,35 +765,21 @@ function viewbidsUrl(numericId) {
   return `https://www.ebay.com/bfl/viewbids/${id}?item=${id}&rt=nc`;
 }
 
-function ebayItemPageUrl(numericId) {
-  // nordt=true prevents eBay's "ended → similar items" redirect for
-  // catalog-linked listings (e.g. video games).
-  return `https://www.ebay.com/itm/${encodeURIComponent(numericId)}?nordt=true&orig_cvip=true`;
-}
-
 if (reconcileBidsBtn) {
   reconcileBidsBtn.addEventListener('click', async () => {
-    const token = getToken();
-    if (!token) return;
-    reconcileResult.hidden = false;
-    reconcileResult.textContent = 'Loading ended items…';
     reconcileBidsBtn.disabled = true;
     try {
-      const response = await fetch('/api/admin/cleanup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'list_ended_for_reconcile' }),
-      });
-      const data = await response.json();
+      const data = await adminActionInto(reconcileResult, 'Loading ended items…', { action: 'list_ended_for_reconcile' });
+      if (!data) return;
       if (!data.items || data.items.length === 0) {
-        reconcileResult.innerHTML = '<p style="opacity: 0.7;">No ended listings to reconcile.</p>';
+        reconcileResult.innerHTML = emptyNote('No ended listings to reconcile.', '0.7');
         return;
       }
-      let html = `<p style="margin: 0 0 0.5rem;">${data.count} ended item${data.count === 1 ? '' : 's'}. eBay blocks server-side fetches from this IP, so paste each page's HTML manually. Click the title for the item page, the current-state column for the bid-history page, or "Copy view-source URL" to copy the source URL (Chrome blocks direct view-source links). On the bid-history page, Cmd+Option+U (Mac) opens the source. Copy the source HTML, paste into the textarea, and click Import.</p>`;
+      let html = `<p style="margin: 0 0 0.5rem;">${plural(data.count, 'ended item')}. eBay blocks server-side fetches from this IP, so paste each page's HTML manually. Click the title for the item page, the current-state column for the bid-history page, or "Copy view-source URL" to copy the source URL (Chrome blocks direct view-source links). On the bid-history page, Cmd+Option+U (Mac) opens the source. Copy the source HTML, paste into the textarea, and click Import.</p>`;
       html += '<table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">';
       html += '<thead><tr><th style="text-align: left; padding: 0.3rem;">Item page</th><th style="text-align: left; padding: 0.3rem;">Bid history</th><th style="text-align: left; padding: 0.3rem;">Source</th></tr></thead><tbody>';
       for (const row of data.items) {
-        const itemUrl = ebayItemPageUrl(row.numericId);
+        const itemUrl = endedEbayUrl(null, row.numericId);
         const bidUrl = viewbidsUrl(row.numericId);
         const viewSrcUrl = `view-source:${bidUrl}`;
         html += `<tr>
