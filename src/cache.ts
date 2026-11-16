@@ -110,7 +110,7 @@ export class DbBackedCache<T> {
       // even if it's past its TTL — slightly-stale data beats an error page,
       // and this masks cold-start races where the fresh row just expired.
       // Only propagate the error when there's no cached value at all.
-      const stale = await this.checkDbStale(key);
+      const stale = await this.checkDb(key, true);
       if (stale !== undefined) {
         this.#degraded = true;
         return stale;
@@ -119,25 +119,13 @@ export class DbBackedCache<T> {
     }
   }
 
-  private async checkDb(key: string): Promise<T | undefined> {
+  // The cached value for `key`: unexpired only, or — with `includeExpired`,
+  // the last-resort fallback when the live fetch fails — the most recent
+  // value regardless of expiry. Undefined when missing or the DB errors.
+  private async checkDb(key: string, includeExpired = false): Promise<T | undefined> {
     try {
       const result = await this.#pool.query(
-        'SELECT payload FROM cache_entries WHERE cache_key = $1 AND expires_at > NOW()',
-        [key],
-      );
-      if (result.rows.length === 0) return undefined;
-      return result.rows[0].payload as T;
-    } catch {
-      return undefined;
-    }
-  }
-
-  // Most recent cached value regardless of expiry — used only as a
-  // last-resort fallback when the live fetch fails.
-  private async checkDbStale(key: string): Promise<T | undefined> {
-    try {
-      const result = await this.#pool.query(
-        'SELECT payload FROM cache_entries WHERE cache_key = $1',
+        `SELECT payload FROM cache_entries WHERE cache_key = $1${includeExpired ? '' : ' AND expires_at > NOW()'}`,
         [key],
       );
       if (result.rows.length === 0) return undefined;
