@@ -20,7 +20,6 @@ import { createPool } from './db/pool.js';
 import { runMigrations } from './db/migrate.js';
 import {
   backfillBidsImportedStamps,
-  bulkInsertOhlcData,
   forceMarkEnded,
   getClosingPriceAt,
   persistSnapshot,
@@ -45,7 +44,7 @@ import { createItemDetailsEnricher } from './item-details-enricher.js';
 import { reconcileFinalsForItems, getTradingAuthFailureStreak, finalsEligibility } from './reconcile-finals.js';
 import { startBackgroundListingPoll, getListingPollHeartbeat } from './listing-poll.js';
 import { startFeedbackSweep, sweepFeedbackOnce, getFeedbackSweepHeartbeat } from './feedback-sweep.js';
-import { startDailyOhlcRefresh } from './ohlc-refresh.js';
+import { refreshDailyOhlcOnce, startDailyOhlcRefresh } from './ohlc-refresh.js';
 import { fetchBidHistory } from './ebay/bid-history.js';
 import { normalizeTradingItemId } from './ebay/trading.js';
 import { parseViewbids, ViewbidsParseError } from './ebay/viewbids.js';
@@ -1278,24 +1277,13 @@ export function createApp(deps: Deps): express.Express {
         const range = typeof body?.range === 'string' && /^\d{1,3}(d|mo|y)$/.test(body.range)
           ? body.range
           : '90d';
-        const yahoo = new YahooProvider();
-        const perTicker: Array<{ ticker: string; candles: number; inserted: number; error?: string }> = [];
-        for (const ticker of tickers) {
-          try {
-            const candles = await yahoo.getHistoricalCandles(ticker, '1d', range);
-            const inserted = candles.length === 0
-              ? 0
-              : await bulkInsertOhlcData(deps.db, ticker, candles, 'yahoo', '1d');
-            perTicker.push({ ticker, candles: candles.length, inserted });
-          } catch (err) {
-            perTicker.push({
-              ticker,
-              candles: 0,
-              inserted: 0,
-              error: errorMessage(err),
-            });
-          }
-        }
+        const perTicker = await refreshDailyOhlcOnce({
+          pool: deps.db,
+          yahoo: new YahooProvider(),
+          tickers,
+          range,
+          log: deps.log,
+        });
         res.status(200).json({ action: 'backfill_ohlc_history', range, results: perTicker });
         return;
       }
