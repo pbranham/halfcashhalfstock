@@ -13,6 +13,9 @@ import {
   resolveEbayTradingUserToken,
   resolveSellerTicker,
   type Config,
+  ENVIRONMENT_RE,
+  ITEM_ID_RE,
+  TICKER_RE,
 } from './config.js';
 import { createLogger, errorMessage, type Logger } from './log.js';
 import { TtlCache, DbBackedCache } from './cache.js';
@@ -235,6 +238,17 @@ function buildDeps(
   };
 }
 
+// An item id from a query/body field, trimmed and checked against
+// ITEM_ID_RE. On a bad one, answers 400 naming `field` and returns null.
+function validItemId(res: Response, raw: unknown, field: string): string | null {
+  const itemId = typeof raw === 'string' ? raw.trim() : '';
+  if (!itemId || !ITEM_ID_RE.test(itemId)) {
+    res.status(400).json({ error: 'bad_request', detail: `missing or invalid ${field}` });
+    return null;
+  }
+  return itemId;
+}
+
 export function createApp(deps: Deps): express.Express {
   const app = express();
   app.disable('x-powered-by');
@@ -372,7 +386,7 @@ export function createApp(deps: Deps): express.Express {
   app.get('/api/snapshot', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const rawSymbol = typeof req.query.symbol === 'string' ? req.query.symbol.trim().toUpperCase() : '';
-      const symbol = rawSymbol && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(rawSymbol) ? rawSymbol : deps.config.STOCK_SYMBOL;
+      const symbol = rawSymbol && TICKER_RE.test(rawSymbol) ? rawSymbol : deps.config.STOCK_SYMBOL;
       // "By seller" mode: value each item in its seller's paired stock instead
       // of one ticker for everyone. MIXED isn't a real symbol, so it bypasses
       // ticker validation; the snapshot fetches every seller-paired ticker.
@@ -532,7 +546,7 @@ export function createApp(deps: Deps): express.Express {
         return;
       }
       const rawSymbol = typeof req.query.symbol === 'string' ? req.query.symbol.trim().toUpperCase() : '';
-      if (!/^[A-Z][A-Z0-9.\-:]{0,19}$/.test(rawSymbol)) {
+      if (!TICKER_RE.test(rawSymbol)) {
         res.status(400).json({ error: 'bad_request', detail: 'invalid symbol' });
         return;
       }
@@ -597,7 +611,7 @@ export function createApp(deps: Deps): express.Express {
           raw
             .split(',')
             .map((s) => s.trim().toUpperCase())
-            .filter((s) => /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(s)),
+            .filter((s) => TICKER_RE.test(s)),
         ),
       ).slice(0, 5);
       const rawDays = typeof req.query.days === 'string' ? Number.parseInt(req.query.days, 10) : 180;
@@ -628,11 +642,8 @@ export function createApp(deps: Deps): express.Express {
       res.status(503).json({ error: 'item_unavailable', detail: 'database not configured' });
       return;
     }
-    const itemId = typeof req.query.id === 'string' ? req.query.id.trim() : '';
-    if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
-      res.status(400).json({ error: 'bad_request', detail: 'missing or invalid id' });
-      return;
-    }
+    const itemId = validItemId(res, req.query.id, 'id');
+    if (!itemId) return;
     try {
       const [listing, bids, snapshots, feedback] = await Promise.all([
         readListingDetail(deps.db, itemId),
@@ -664,11 +675,8 @@ export function createApp(deps: Deps): express.Express {
       res.status(503).json({ error: 'history_unavailable', detail: 'database not configured' });
       return;
     }
-    const itemId = typeof req.query.itemId === 'string' ? req.query.itemId.trim() : '';
-    if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
-      res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
-      return;
-    }
+    const itemId = validItemId(res, req.query.itemId, 'itemId');
+    if (!itemId) return;
     try {
       const bids = await readBidsForItem(deps.db, itemId);
       const maskedBids = bids.map((b) => ({ ...b, bidder: maskBidder(b.bidder) }));
@@ -685,7 +693,7 @@ export function createApp(deps: Deps): express.Express {
     }
     const ticker = typeof req.query.ticker === 'string' ? req.query.ticker.trim().toUpperCase() : '';
     const daysStr = typeof req.query.days === 'string' ? req.query.days.trim() : '7';
-    if (!ticker || !/^[A-Z][A-Z0-9.\-:]{0,19}$/.test(ticker)) {
+    if (!ticker || !TICKER_RE.test(ticker)) {
       res.status(400).json({ error: 'bad_request', detail: 'missing or invalid ticker' });
       return;
     }
@@ -766,7 +774,7 @@ export function createApp(deps: Deps): express.Express {
       const params: unknown[] = [since, interval];
       const sessionParams: unknown[] = [since, sessionInterval];
       let envClause = '';
-      if (envFilter && /^[a-zA-Z0-9_-]{1,32}$/.test(envFilter)) {
+      if (envFilter && ENVIRONMENT_RE.test(envFilter)) {
         envClause = ' AND environment = $3';
         params.push(envFilter);
         sessionParams.push(envFilter);
@@ -783,7 +791,7 @@ export function createApp(deps: Deps): express.Express {
         `,
         params,
       );
-      const ipEnvClause = envFilter && /^[a-zA-Z0-9_-]{1,32}$/.test(envFilter)
+      const ipEnvClause = envFilter && ENVIRONMENT_RE.test(envFilter)
         ? ' AND environment = $2'
         : '';
       const ipParams: unknown[] = [since];
@@ -899,7 +907,7 @@ export function createApp(deps: Deps): express.Express {
 
       if (action === 'delete_environment') {
         const env = body?.environment?.trim() ?? '';
-        if (!env || !/^[a-zA-Z0-9_-]{1,32}$/.test(env)) {
+        if (!env || !ENVIRONMENT_RE.test(env)) {
           res.status(400).json({ error: 'bad_request', detail: 'invalid environment' });
           return;
         }
@@ -921,7 +929,7 @@ export function createApp(deps: Deps): express.Express {
       if (action === 'rename_environment') {
         const from = body?.from?.trim() ?? '';
         const to = body?.to?.trim() ?? '';
-        if (!from || !/^[a-zA-Z0-9_-]{1,32}$/.test(from) || !to || !/^[a-zA-Z0-9_-]{1,32}$/.test(to)) {
+        if (!from || !ENVIRONMENT_RE.test(from) || !to || !ENVIRONMENT_RE.test(to)) {
           res.status(400).json({ error: 'bad_request', detail: 'invalid from/to environment' });
           return;
         }
@@ -1013,22 +1021,16 @@ export function createApp(deps: Deps): express.Express {
       }
 
       if (action === 'force_mark_ended') {
-        const itemId = (body?.itemId ?? '').trim();
-        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
-          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
-          return;
-        }
+        const itemId = validItemId(res, body?.itemId, 'itemId');
+        if (!itemId) return;
         const marked = await forceMarkEnded(deps.db, itemId);
         res.status(200).json({ action: 'force_mark_ended', itemId, marked });
         return;
       }
 
       if (action === 'inspect_bid_history') {
-        const itemId = (body?.itemId ?? '').trim();
-        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
-          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
-          return;
-        }
+        const itemId = validItemId(res, body?.itemId, 'itemId');
+        if (!itemId) return;
         const userToken = resolveEbayTradingUserToken(deps.config);
         if (!deps.config.EBAY_DEV_ID || !userToken) {
           res.status(503).json({
@@ -1192,7 +1194,7 @@ export function createApp(deps: Deps): express.Express {
         }
         const apply = body?.apply === true;
         const singleItemId = typeof body?.itemId === 'string' ? body.itemId.trim() : '';
-        if (singleItemId && !/^[A-Za-z0-9|.-]{1,64}$/.test(singleItemId)) {
+        if (singleItemId && !ITEM_ID_RE.test(singleItemId)) {
           res.status(400).json({ error: 'bad_request', detail: 'invalid itemId' });
           return;
         }
@@ -1268,7 +1270,7 @@ export function createApp(deps: Deps): express.Express {
         // auctions at the EBAY close on the day they ended.
         const tickersIn = Array.isArray(body?.tickers) ? body.tickers : ['EBAY', 'GME'];
         const tickers = tickersIn
-          .filter((t): t is string => typeof t === 'string' && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(t))
+          .filter((t): t is string => typeof t === 'string' && TICKER_RE.test(t))
           .slice(0, 10);
         if (tickers.length === 0) {
           res.status(400).json({ error: 'bad_request', detail: 'no valid tickers' });
@@ -1289,11 +1291,8 @@ export function createApp(deps: Deps): express.Express {
       }
 
       if (action === 'import_viewbids_html') {
-        const itemId = (body?.itemId ?? '').trim();
-        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
-          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
-          return;
-        }
+        const itemId = validItemId(res, body?.itemId, 'itemId');
+        if (!itemId) return;
         const html = body?.html ?? '';
         if (typeof html !== 'string' || html.trim().length === 0 || html.length > 3_000_000) {
           res.status(400).json({ error: 'bad_request', detail: 'missing or oversized html' });

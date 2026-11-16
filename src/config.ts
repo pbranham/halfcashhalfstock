@@ -4,7 +4,12 @@ import { z } from 'zod';
 export const DEFAULT_EBAY_USER_TOKEN_FILE = '.cache/ebay-auth-token.json';
 
 const SELLER_ID_RE = /^[A-Za-z0-9_.-]{1,64}$/;
-const TICKER_RE = /^[A-Z][A-Z0-9.\-:]{0,19}$/;
+// The shapes every input is validated against (one home, every route reads it).
+export const TICKER_RE = /^[A-Z][A-Z0-9.\-:]{0,19}$/;
+// eBay item IDs, including the Browse `v1|<numeric>|0` form.
+export const ITEM_ID_RE = /^[A-Za-z0-9|.-]{1,64}$/;
+// request_stats environment tags ("prod", "dev", ...).
+export const ENVIRONMENT_RE = /^[a-zA-Z0-9_-]{1,32}$/;
 const DEFAULT_SELLER_IDS = ['boilerpaulie', 'ryan_5050'] as const;
 // Seller → stock pairing for the "By seller" valuation mode. Ryan's auctions
 // fund an eBay bid → valued in $EBAY; mine fund a GameStop position → $GME.

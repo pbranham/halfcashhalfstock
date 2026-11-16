@@ -176,8 +176,9 @@ hits when the snapshot cache misses.
 - **Global JSON limit is 10kb**, but the cleanup route has a route-scoped
   4mb parser so pasted eBay pages fit. The global parser explicitly skips
   `/api/admin/cleanup` to avoid clashing.
-- **Item ID validation regex**: `/^[A-Za-z0-9|.-]{1,64}$/` — reuse this for
-  any new admin action that takes an itemId.
+- **Input validation**: `ITEM_ID_RE` / `TICKER_RE` / `ENVIRONMENT_RE` are
+  exported from `config.ts`; any new admin action that takes an itemId uses
+  `validItemId(res, raw, field)` in `server.ts` (400 on a bad one).
 - **Public JS is vanilla ESM + CSP-strict**: no inline scripts, no eval, no
   CDNs. New behavior goes in an existing `public/*.js` file or a new module
   imported via `<script type="module">`. `frame-src 'self'` is the one CSP
