@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import type { Logger } from './log.js';
+import { errorMessage, type Logger } from './log.js';
 import { getFeedbackPage, type FeedbackEntry } from './ebay/trading.js';
 import { readNumericToCanonicalIdMap, upsertFeedback, type FeedbackRow } from './db/persist.js';
 
@@ -65,7 +65,7 @@ export async function sweepFeedbackOnce(opts: {
         page += 1;
       }
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = errorMessage(err);
       opts.log.warn('feedback sweep fetch failed', { seller, error });
     }
 
@@ -74,7 +74,7 @@ export async function sweepFeedbackOnce(opts: {
       try {
         inserted = await upsertFeedback(opts.pool, mappedRows);
       } catch (err) {
-        error = err instanceof Error ? err.message : String(err);
+        error = errorMessage(err);
         opts.log.warn('feedback sweep persist failed', { seller, error });
       }
     }
@@ -141,7 +141,7 @@ export function startFeedbackSweep(opts: {
         log.info('feedback sweep', { results });
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       log.warn('feedback sweep cycle failed', { error: message });
     } finally {
       lastSweepAt = Date.now();

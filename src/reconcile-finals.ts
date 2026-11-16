@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import type { Logger } from './log.js';
+import { errorMessage, type Logger } from './log.js';
 import { getItemSellingStatus } from './ebay/trading.js';
 import { updateEndedListingFinals } from './db/persist.js';
 
@@ -104,7 +104,7 @@ export async function reconcileFinalsForItems(
         outcome: wrote ? 'updated' : 'no-op',
       });
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = errorMessage(err);
       opts.log.warn('reconcile finals failed', { itemId, error: reason });
       results.push({
         itemId,

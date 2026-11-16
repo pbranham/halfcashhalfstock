@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import type { Logger } from './log.js';
+import { errorMessage, type Logger } from './log.js';
 import { fetchItemDetails } from './ebay/item-details.js';
 import type { EbayClient } from './ebay/client.js';
 import { readListingsMissingDetails, upsertItemDetails } from './db/persist.js';
@@ -77,7 +77,7 @@ export function createItemDetailsEnricher(opts: ItemDetailsEnricherOptions) {
                 descriptionHtml: details.descriptionHtml,
               });
             } catch (err) {
-              const message = err instanceof Error ? err.message : String(err);
+              const message = errorMessage(err);
               opts.log.warn('item details fetch failed', { itemId, error: message });
               // Skip persisting — the next pass will retry. (We don't stamp
               // a "tried" timestamp here, on purpose; failures shouldn't
@@ -89,7 +89,7 @@ export function createItemDetailsEnricher(opts: ItemDetailsEnricherOptions) {
         const workers = Array.from({ length: Math.min(concurrency, targets.length) }, worker);
         await Promise.all(workers);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         opts.log.warn('item details enrichment pass failed', { error: message });
       } finally {
         inflight = null;

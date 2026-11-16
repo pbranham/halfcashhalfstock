@@ -14,7 +14,7 @@ import {
   resolveSellerTicker,
   type Config,
 } from './config.js';
-import { createLogger, type Logger } from './log.js';
+import { createLogger, errorMessage, type Logger } from './log.js';
 import { TtlCache, DbBackedCache } from './cache.js';
 import { createPool } from './db/pool.js';
 import { runMigrations } from './db/migrate.js';
@@ -138,7 +138,7 @@ async function enrichWithBidHistory(deps: Deps, listings: Listing[]): Promise<Li
         }
       })
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         deps.log.error('db persistence failed', { error: message });
       });
   }
@@ -1074,7 +1074,7 @@ export function createApp(deps: Deps): express.Express {
             },
           });
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = errorMessage(err);
           res.status(200).json({
             action: 'inspect_bid_history',
             itemId,
@@ -1249,7 +1249,7 @@ export function createApp(deps: Deps): express.Express {
             results.push({
               itemId: e.itemId,
               title: e.title,
-              error: err instanceof Error ? err.message : String(err),
+              error: errorMessage(err),
             });
           }
         }
@@ -1295,7 +1295,7 @@ export function createApp(deps: Deps): express.Express {
               ticker,
               candles: 0,
               inserted: 0,
-              error: err instanceof Error ? err.message : String(err),
+              error: errorMessage(err),
             });
           }
         }
@@ -1341,7 +1341,7 @@ export function createApp(deps: Deps): express.Express {
             knownZeroBids: parsed.knownZeroBids ?? false,
           });
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = errorMessage(err);
           res.status(200).json({
             action: 'import_viewbids_html',
             itemId,
@@ -1403,7 +1403,7 @@ async function main(): Promise<void> {
       await runMigrations(db, log);
       log.info('database ready');
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       log.error('database initialization failed; continuing without persistence', {
         error: message,
       });
@@ -1431,7 +1431,7 @@ async function main(): Promise<void> {
     requestStats = new RequestStatsCollector(db, environment);
     requestStats.start();
     requestStats.purgeOldStats().catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       log.warn('request stats purge failed', { error: message });
     });
   }
@@ -1522,7 +1522,7 @@ async function main(): Promise<void> {
 const isEntrypoint = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isEntrypoint) {
   main().catch((err: unknown) => {
-    process.stderr.write(`fatal: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(`fatal: ${errorMessage(err)}\n`);
     process.exit(1);
   });
 }

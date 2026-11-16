@@ -1,4 +1,4 @@
-import type { Logger } from './log.js';
+import { errorMessage, type Logger } from './log.js';
 import type { Listing } from './ebay/seller.js';
 
 export interface BackgroundListingPollOptions {
@@ -48,7 +48,7 @@ export function startBackgroundListingPoll(
       const listings = await opts.fetchListings();
       await opts.process(listings);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       log.warn('background poll cycle failed', { error: message });
     } finally {
       lastTickAt = Date.now();

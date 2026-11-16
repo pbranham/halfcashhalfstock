@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import type { Logger } from './log.js';
+import { errorMessage, type Logger } from './log.js';
 import type { YahooProvider } from './prices/yahoo.js';
 import type { PriceProvider, PriceQuote } from './prices/types.js';
 import { storeOhlcData, bulkInsertOhlcData, purgeOldOhlcData } from './db/persist.js';
@@ -122,7 +122,7 @@ export class TickerQueue {
       const purged = await purgeOldOhlcData(this.#db);
       if (purged > 0) this.#log.info('purged old ohlc data', { count: purged });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       this.#log.warn('purge failed', { error: message });
     }
 
@@ -241,7 +241,7 @@ export class TickerQueue {
       for (const t of this.#alwaysActive) this.#knownTickers.add(t);
       for (const row of res.rows) this.#knownTickers.add(row.ticker);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       this.#log.error('failed to refresh known tickers', { error: message });
     }
   }
@@ -305,7 +305,7 @@ export class TickerQueue {
         if (wrote) stored += 1;
         else skipped += 1;
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         this.#log.debug('passive store failed', { ticker, error: message });
       }
     }
@@ -348,7 +348,7 @@ export class TickerQueue {
       this.#log.info('backfilled ticker', { ticker, candles: candles.length, inserted });
       return 'ok';
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       this.#log.warn('ticker backfill failed', { ticker, error: message });
       return 'fail';
     }

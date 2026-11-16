@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import type { Logger } from './log.js';
+import { errorMessage, type Logger } from './log.js';
 import { YahooProvider } from './prices/yahoo.js';
 import { bulkInsertOhlcData } from './db/persist.js';
 
@@ -39,7 +39,7 @@ export async function refreshDailyOhlcOnce(opts: {
         ticker,
         candles: 0,
         inserted: 0,
-        error: err instanceof Error ? err.message : String(err),
+        error: errorMessage(err),
       });
     }
   }
@@ -75,7 +75,7 @@ export function startDailyOhlcRefresh(opts: {
         log.info('daily ohlc refresh', { results });
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       log.warn('daily ohlc refresh cycle failed', { error: message });
     } finally {
       inflight = false;

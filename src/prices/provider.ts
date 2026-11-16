@@ -1,4 +1,4 @@
-import type { Logger } from '../log.js';
+import { errorMessage, type Logger } from '../log.js';
 import { PriceProviderError, type PriceProvider, type PriceQuote } from './types.js';
 
 export interface ChainedProviderOptions {
@@ -25,7 +25,7 @@ export class ChainedPriceProvider implements PriceProvider {
       try {
         return await provider.getQuote(symbol);
       } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
+        const reason = errorMessage(err);
         failures.push(`${provider.name}: ${reason}`);
         this.#logger?.warn('price provider failed, trying next', {
           provider: provider.name,

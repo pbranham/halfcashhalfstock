@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { errorMessage } from './log.js';
 
 interface CacheEntry<T> {
   value: T;
@@ -89,7 +90,7 @@ export class DbBackedCache<T> {
       const value = await this.#memory.get(key, ttlMs, loader);
       this.#degraded = false;
       await this.storeDb(key, value, ttlMs).catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         // If the storage failure is *still* "invalid input syntax for type
         // json" after the null-byte strip in storeDb, log a 500-char sample
         // so we can see exactly what character PG is rejecting. Otherwise

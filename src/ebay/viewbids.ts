@@ -1,4 +1,5 @@
 import type { BidRecord } from './trading.js';
+import { errorMessage } from '../log.js';
 
 // One-time reconciliation of ENDED auction bid history from eBay's public
 // bid-history page (https://www.ebay.com/bfl/viewbids/<id>). eBay's APIs do not
@@ -443,7 +444,7 @@ export async function fetchViewbidsHtml(numericId: string): Promise<ViewbidsFetc
     }
     return { status: 'ok', html };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return { status: 'error', message };
   } finally {
     clearTimeout(timeout);

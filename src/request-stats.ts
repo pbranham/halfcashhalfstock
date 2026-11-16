@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
+import { errorMessage } from './log.js';
 
 type UaClass = 'bot' | 'mobile' | 'desktop' | 'other';
 
@@ -163,7 +164,7 @@ export class RequestStatsCollector {
     if (!this.db) return;
     this.flushInterval = setInterval(() => {
       this.flush().catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         console.error('request stats flush failed', { error: message });
       });
     }, 60_000);
@@ -176,7 +177,7 @@ export class RequestStatsCollector {
 
     this.dailyRollupInterval = setInterval(() => {
       this.rollupAndPurge().catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         console.error('rollup failed', { error: message });
       });
     }, 60 * 60 * 1000);
