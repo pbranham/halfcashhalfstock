@@ -36,25 +36,22 @@ const parser = new XMLParser({
   parseAttributeValue: false,
 });
 
-export async function getItemBidHistory(
-  itemId: string,
-  _devId: string,
-  userToken: string,
-): Promise<ItemBidHistory> {
-  const tradingItemId = normalizeTradingItemId(itemId);
+// One Trading API call: wraps `bodyXml` in the <CallNameRequest> envelope
+// with the user token, POSTs it, and returns the parsed XML. Throws on a
+// non-2xx answer.
+async function tradingCall(callName: string, userToken: string, bodyXml: string): Promise<unknown> {
   const requestBody = `<?xml version="1.0" encoding="UTF-8"?>
-<GetAllBiddersRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+<${callName}Request xmlns="urn:ebay:apis:eBLBaseComponents">
   <RequesterCredentials>
     <eBayAuthToken>${escapeXml(userToken)}</eBayAuthToken>
   </RequesterCredentials>
-  <ItemID>${escapeXml(tradingItemId)}</ItemID>
-  <CallMode>ViewAll</CallMode>
-</GetAllBiddersRequest>`;
+  ${bodyXml}
+</${callName}Request>`;
 
   const res = await fetch('https://api.ebay.com/ws/api.dll', {
     method: 'POST',
     headers: {
-      'X-EBAY-API-CALL-NAME': 'GetAllBidders',
+      'X-EBAY-API-CALL-NAME': callName,
       'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
       'X-EBAY-API-SITEID': '0',
       'Content-Type': 'text/xml',
@@ -65,16 +62,30 @@ export async function getItemBidHistory(
   if (!res.ok) {
     throw new Error(`eBay Trading API error: ${res.status} ${res.statusText}`);
   }
+  return parser.parse(await res.text());
+}
 
-  const xml = await res.text();
-  const parsed = parser.parse(xml) as ParsedResponse;
+// The XML parser yields one node for a single child, an array for several;
+// callers always want the array.
+function asArray<T>(node: T | T[] | null | undefined): T[] {
+  if (Array.isArray(node)) return node;
+  return node ? [node] : [];
+}
 
-  const offerList = parsed?.GetAllBiddersResponse?.BidArray?.Offer ?? [];
-  const offersArray: OfferNode[] = Array.isArray(offerList)
-    ? offerList
-    : offerList
-      ? [offerList as OfferNode]
-      : [];
+export async function getItemBidHistory(
+  itemId: string,
+  _devId: string,
+  userToken: string,
+): Promise<ItemBidHistory> {
+  const tradingItemId = normalizeTradingItemId(itemId);
+  const parsed = (await tradingCall(
+    'GetAllBidders',
+    userToken,
+    `<ItemID>${escapeXml(tradingItemId)}</ItemID>
+  <CallMode>ViewAll</CallMode>`,
+  )) as ParsedResponse;
+
+  const offersArray = asArray<OfferNode>(parsed?.GetAllBiddersResponse?.BidArray?.Offer);
 
   const bids: BidRecord[] = offersArray
     .filter((o): o is OfferNode & { TimeBid: string } => Boolean(o.TimeBid))
@@ -158,31 +169,11 @@ export async function getItemSellingStatus(
   userToken: string,
 ): Promise<ItemSellingStatus> {
   const tradingItemId = normalizeTradingItemId(itemId);
-  const requestBody = `<?xml version="1.0" encoding="UTF-8"?>
-<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-  <RequesterCredentials>
-    <eBayAuthToken>${escapeXml(userToken)}</eBayAuthToken>
-  </RequesterCredentials>
-  <ItemID>${escapeXml(tradingItemId)}</ItemID>
-</GetItemRequest>`;
-
-  const res = await fetch('https://api.ebay.com/ws/api.dll', {
-    method: 'POST',
-    headers: {
-      'X-EBAY-API-CALL-NAME': 'GetItem',
-      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
-      'X-EBAY-API-SITEID': '0',
-      'Content-Type': 'text/xml',
-    },
-    body: requestBody,
-  });
-
-  if (!res.ok) {
-    throw new Error(`eBay Trading API error: ${res.status} ${res.statusText}`);
-  }
-
-  const xml = await res.text();
-  const parsed = parser.parse(xml) as ParsedItemResponse;
+  const parsed = (await tradingCall(
+    'GetItem',
+    userToken,
+    `<ItemID>${escapeXml(tradingItemId)}</ItemID>`,
+  )) as ParsedItemResponse;
   const resp = parsed?.GetItemResponse;
   const ss = resp?.Item?.SellingStatus;
 
@@ -302,45 +293,21 @@ export async function getFeedbackPage(
   options: { userId?: string; page?: number } = {},
 ): Promise<FeedbackPage> {
   const page = options.page ?? 1;
-  const userIdXml = options.userId ? `\n  <UserID>${escapeXml(options.userId)}</UserID>` : '';
-  const requestBody = `<?xml version="1.0" encoding="UTF-8"?>
-<GetFeedbackRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-  <RequesterCredentials>
-    <eBayAuthToken>${escapeXml(userToken)}</eBayAuthToken>
-  </RequesterCredentials>${userIdXml}
-  <DetailLevel>ReturnAll</DetailLevel>
+  const userIdXml = options.userId ? `<UserID>${escapeXml(options.userId)}</UserID>
+  ` : '';
+  const parsed = (await tradingCall(
+    'GetFeedback',
+    userToken,
+    `${userIdXml}<DetailLevel>ReturnAll</DetailLevel>
   <FeedbackType>FeedbackReceivedAsSeller</FeedbackType>
   <Pagination>
     <EntriesPerPage>200</EntriesPerPage>
     <PageNumber>${page}</PageNumber>
-  </Pagination>
-</GetFeedbackRequest>`;
-
-  const res = await fetch('https://api.ebay.com/ws/api.dll', {
-    method: 'POST',
-    headers: {
-      'X-EBAY-API-CALL-NAME': 'GetFeedback',
-      'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
-      'X-EBAY-API-SITEID': '0',
-      'Content-Type': 'text/xml',
-    },
-    body: requestBody,
-  });
-
-  if (!res.ok) {
-    throw new Error(`eBay Trading API error: ${res.status} ${res.statusText}`);
-  }
-
-  const xml = await res.text();
-  const parsed = parser.parse(xml) as ParsedFeedbackResponse;
+  </Pagination>`,
+  )) as ParsedFeedbackResponse;
   const resp = parsed?.GetFeedbackResponse;
 
-  const detailList = resp?.FeedbackDetailArray?.FeedbackDetail ?? [];
-  const details: FeedbackDetailNode[] = Array.isArray(detailList)
-    ? detailList
-    : detailList
-      ? [detailList]
-      : [];
+  const details = asArray<FeedbackDetailNode>(resp?.FeedbackDetailArray?.FeedbackDetail);
 
   const entries: FeedbackEntry[] = details
     .filter((d): d is FeedbackDetailNode & { ItemID: string | number; CommentingUser: string } =>
