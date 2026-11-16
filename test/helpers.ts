@@ -1,5 +1,5 @@
 // Fixtures every test file shares — one home each instead of a copy per file.
-import { vi } from 'vitest';
+import { expect, vi } from 'vitest';
 import { EbayAppTokenProvider } from '../src/ebay/auth.js';
 import { EbayClient } from '../src/ebay/client.js';
 import { createLogger, type Logger } from '../src/log.js';
@@ -42,4 +42,22 @@ export function buildClient(fetchImpl: ReturnType<typeof vi.fn>): EbayClient {
     marketplaceId: 'EBAY_US',
     fetchImpl: fetchImpl as unknown as typeof fetch,
   });
+}
+
+// The "By seller" fixture both the composeSnapshot and /api/snapshot tests
+// use: v1|1 is Ryan's (valued in $EBAY @ 50), v1|2 mine ($GME @ 25), each a
+// $100 bid. Asserts mixed mode, both stock quotes, and each item's ticker +
+// half/half split: (100/2)/50 = 1 share and (100/2)/25 = 2 shares.
+export function expectSellerValuation(snapshot: {
+  valuationMode: string;
+  stocks: { symbol: string }[];
+  items: { itemId: string; valuationTicker: string; split: unknown }[];
+}): void {
+  expect(snapshot.valuationMode).toBe('mixed');
+  expect(snapshot.stocks.map((q) => q.symbol)).toEqual(['EBAY', 'GME']);
+  const byId = Object.fromEntries(snapshot.items.map((i) => [i.itemId, i]));
+  expect(byId['v1|1']?.valuationTicker).toBe('EBAY');
+  expect(byId['v1|1']?.split).toEqual({ cashUsd: 50, stockUsd: 50, shares: 1 });
+  expect(byId['v1|2']?.valuationTicker).toBe('GME');
+  expect(byId['v1|2']?.split).toEqual({ cashUsd: 50, stockUsd: 50, shares: 2 });
 }

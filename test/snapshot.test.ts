@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { expectSellerValuation } from './helpers.js';
 import { composeSnapshot } from '../src/snapshot.js';
 import type { Listing } from '../src/ebay/seller.js';
 import type { PriceQuote } from '../src/prices/types.js';
@@ -372,14 +373,7 @@ describe('composeSnapshot — By seller (mixed) valuation', () => {
       new Map(),
       valuation,
     );
-    expect(snapshot.valuationMode).toBe('mixed');
-    expect(snapshot.stocks.map((q) => q.symbol)).toEqual(['EBAY', 'GME']);
-    // Ryan's item → $EBAY @ 50: shares = (100/2)/50 = 1.
-    expect(snapshot.items[0]?.valuationTicker).toBe('EBAY');
-    expect(snapshot.items[0]?.split).toEqual({ cashUsd: 50, stockUsd: 50, shares: 1 });
-    // My item → $GME @ 25: shares = (100/2)/25 = 2.
-    expect(snapshot.items[1]?.valuationTicker).toBe('GME');
-    expect(snapshot.items[1]?.split).toEqual({ cashUsd: 50, stockUsd: 50, shares: 2 });
+    expectSellerValuation(snapshot);
   });
 
   it('values an ended item live + at-end in its seller stock', () => {
