@@ -238,6 +238,23 @@ function buildDeps(
   };
 }
 
+// The three request-stats tables the admin maintenance actions prune together.
+const STATS_TABLES = ['request_stats', 'session_stats', 'seen_ips'] as const;
+
+// DELETE the rows matching `where` from every stats table; returns the
+// per-table deleted counts.
+async function deleteFromStatsTables(
+  db: Pool,
+  where: string,
+  params: unknown[],
+): Promise<Record<(typeof STATS_TABLES)[number], number>> {
+  const deleted = {} as Record<(typeof STATS_TABLES)[number], number>;
+  for (const table of STATS_TABLES) {
+    deleted[table] = (await db.query(`DELETE FROM ${table} WHERE ${where}`, params)).rowCount ?? 0;
+  }
+  return deleted;
+}
+
 // Routes that read Postgres answer 503 `{error: code}` when no database is
 // configured; on true, `deps.db` is narrowed to a Pool.
 function hasDb(deps: Deps, res: Response, code: string): deps is Deps & { db: Pool } {
@@ -895,17 +912,10 @@ export function createApp(deps: Deps): express.Express {
           res.status(400).json({ error: 'bad_request', detail: 'invalid environment' });
           return;
         }
-        const reqDel = await deps.db.query('DELETE FROM request_stats WHERE environment = $1', [env]);
-        const sessDel = await deps.db.query('DELETE FROM session_stats WHERE environment = $1', [env]);
-        const ipDel = await deps.db.query('DELETE FROM seen_ips WHERE environment = $1', [env]);
         res.status(200).json({
           action: 'delete_environment',
           environment: env,
-          deleted: {
-            request_stats: reqDel.rowCount ?? 0,
-            session_stats: sessDel.rowCount ?? 0,
-            seen_ips: ipDel.rowCount ?? 0,
-          },
+          deleted: await deleteFromStatsTables(deps.db, 'environment = $1', [env]),
         });
         return;
       }
@@ -929,7 +939,6 @@ export function createApp(deps: Deps): express.Express {
            )`,
           [from, to],
         );
-        await deps.db.query('DELETE FROM request_stats WHERE environment = $1', [from]);
         const sessUpd = await deps.db.query(
           `UPDATE session_stats SET environment = $2 WHERE environment = $1
            AND NOT EXISTS (
@@ -940,7 +949,6 @@ export function createApp(deps: Deps): express.Express {
            )`,
           [from, to],
         );
-        await deps.db.query('DELETE FROM session_stats WHERE environment = $1', [from]);
         const ipUpd = await deps.db.query(
           `UPDATE seen_ips SET environment = $2 WHERE environment = $1
            AND NOT EXISTS (
@@ -951,7 +959,8 @@ export function createApp(deps: Deps): express.Express {
            )`,
           [from, to],
         );
-        await deps.db.query('DELETE FROM seen_ips WHERE environment = $1', [from]);
+        // Rows the target already had for the same key stay; the leftovers go.
+        await deleteFromStatsTables(deps.db, 'environment = $1', [from]);
         res.status(200).json({
           action: 'rename_environment',
           from,
@@ -1076,17 +1085,10 @@ export function createApp(deps: Deps): express.Express {
           res.status(400).json({ error: 'bad_request', detail: 'invalid date' });
           return;
         }
-        const reqDel = await deps.db.query('DELETE FROM request_stats WHERE hour < $1', [before]);
-        const sessDel = await deps.db.query('DELETE FROM session_stats WHERE hour < $1', [before]);
-        const ipDel = await deps.db.query('DELETE FROM seen_ips WHERE hour < $1', [before]);
         res.status(200).json({
           action: 'delete_before',
           before: before.toISOString(),
-          deleted: {
-            request_stats: reqDel.rowCount ?? 0,
-            session_stats: sessDel.rowCount ?? 0,
-            seen_ips: ipDel.rowCount ?? 0,
-          },
+          deleted: await deleteFromStatsTables(deps.db, 'hour < $1', [before]),
         });
         return;
       }
