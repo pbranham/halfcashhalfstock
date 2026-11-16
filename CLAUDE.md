@@ -738,9 +738,17 @@ Stale ⚠ is on `.ticker-meta::before` so it surfaces in both market-open
 - Global `:focus-visible` outline (accent, 2px) covers buttons, links,
   inputs, selects, summaries, and tabindexed elements — new interactive
   elements get it for free; don't suppress it.
-- Coarse-pointer (touch) devices get >=40px hit areas on the pill
-  controls via the `@media (pointer: coarse)` block in style.css — add
-  new pill classes to that list.
+- Pill groups share ONE look: the grouped `.stock-btn, .sort-btn, …`
+  base / `:hover` / `.is-active` rules (and one `.stock-bar, …` row rule)
+  in style.css — a new pill class joins those selector lists. Coarse-pointer
+  (touch) devices get >=40px hit areas via the `@media (pointer: coarse)`
+  block — add new pill classes to that list too.
+- Theme tokens: `:root` holds the dark palette; light lives in the
+  OS-preference block (`:root:not([data-theme='dark'])`) and the manual
+  `[data-theme='light']` override (CSS can't OR a media query with an
+  attribute, so that palette is stated for both). The item + admin page
+  shell (`.item-page/.admin-body`, `.item-main/.admin-main`) and their
+  monospace result boxes are shared rules in style.css.
 - Sort control is pills on desktop, a native `<select>` under 600px —
   both drive the same state through `applySort`; keep them in sync if
   sort modes change (three places: buttons, select options, SORT_MODES).
