@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 import { errorMessage } from './log.js';
-import { DAY_MS, HOUR_MS, MINUTE_MS } from './time.js';
+import { DAY_MS, HOUR_MS, MINUTE_MS, msAgo } from './time.js';
 
 type UaClass = 'bot' | 'mobile' | 'desktop' | 'other';
 
@@ -39,6 +39,15 @@ const SESSION_TIMEOUT_MS = 30 * MINUTE_MS;
 const FIVE_MIN_RETENTION_MS = 48 * HOUR_MS;
 const HOURLY_RETENTION_MS = 14 * DAY_MS;
 const DAILY_RETENTION_MS = 90 * DAY_MS;
+
+// Rows of each granularity older than these are rolled up / purged.
+function retentionCutoffs(): { fiveMinCutoff: Date; hourlyCutoff: Date; dailyCutoff: Date } {
+  return {
+    fiveMinCutoff: msAgo(FIVE_MIN_RETENTION_MS),
+    hourlyCutoff: msAgo(HOURLY_RETENTION_MS),
+    dailyCutoff: msAgo(DAILY_RETENTION_MS),
+  };
+}
 const LIVE_WINDOW_MS = 5 * MINUTE_MS;
 const FIVE_MIN_BUCKET_MS = 5 * MINUTE_MS;
 
@@ -369,8 +378,7 @@ export class RequestStatsCollector {
 
   async rollupAndPurge(): Promise<void> {
     if (!this.db) return;
-    const fiveMinCutoff = new Date(Date.now() - FIVE_MIN_RETENTION_MS);
-    const hourlyCutoff = new Date(Date.now() - HOURLY_RETENTION_MS);
+    const { fiveMinCutoff, hourlyCutoff } = retentionCutoffs();
 
     await this.db.query(
       `
@@ -470,9 +478,7 @@ export class RequestStatsCollector {
 
   async purgeOldStats(): Promise<void> {
     if (!this.db) return;
-    const fiveMinCutoff = new Date(Date.now() - FIVE_MIN_RETENTION_MS);
-    const hourlyCutoff = new Date(Date.now() - HOURLY_RETENTION_MS);
-    const dailyCutoff = new Date(Date.now() - DAILY_RETENTION_MS);
+    const { fiveMinCutoff, hourlyCutoff, dailyCutoff } = retentionCutoffs();
 
     await this.db.query(
       `DELETE FROM request_stats WHERE interval = '5min' AND hour < $1`,

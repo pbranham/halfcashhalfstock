@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
 import type { Listing } from '../ebay/seller.js';
 import { highestBidAmount, normalizeTradingItemId, type BidRecord } from '../ebay/trading.js';
-import { daysAgo, isoOrNull } from '../time.js';
+import { daysAgo, isoOrNull, msAgo } from '../time.js';
 
 // A pool or a checked-out client inside a transaction — both can run queries.
 type Queryable = Pick<Pool | PoolClient, 'query'>;
@@ -683,7 +683,7 @@ export async function readListingsMissingDetails(
   staleAfterMs: number,
 ): Promise<string[]> {
   if (candidateItemIds.length === 0) return [];
-  const cutoff = new Date(Date.now() - staleAfterMs);
+  const cutoff = msAgo(staleAfterMs);
   const res = await pool.query<{ item_id: string }>(
     `SELECT item_id FROM listings
      WHERE item_id = ANY($1::text[])

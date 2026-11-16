@@ -59,7 +59,7 @@ import { composeSnapshot, type Snapshot } from './snapshot.js';
 import { maskBids, maskFeedback } from './anon.js';
 import { TickerQueue } from './ticker-queue.js';
 import { RequestStatsCollector } from './request-stats.js';
-import { DAY_MS, HOUR_MS, daysAgo, isoOrNull } from './time.js';
+import { DAY_MS, daysAgo, HOUR_MS, isoOrNull, msAgo } from './time.js';
 
 const LISTINGS_TTL_MS = 30_000;
 const PRICE_TTL_MS = 30_000;
@@ -775,7 +775,7 @@ export function createApp(deps: Deps): express.Express {
       }
       const sessionInterval = interval === '5min' ? 'hour' : interval;
 
-      const since = new Date(Date.now() - hours * HOUR_MS);
+      const since = msAgo(hours * HOUR_MS);
       const params: unknown[] = [since, interval];
       const sessionParams: unknown[] = [since, sessionInterval];
       let envClause = '';
