@@ -343,22 +343,16 @@ export function createApp(deps: Deps): express.Express {
     // Background loops: 'not-running' is the normal state everywhere
     // except prod. 'stalled' (ran before, then went silent well past its
     // cadence) is the failure worth flagging.
-    const pollHb = getListingPollHeartbeat();
-    if (pollHb === null) {
-      checks.listingPoll = 'not-running';
-    } else {
-      const ageS = Math.round((Date.now() - pollHb) / 1000);
-      checks.listingPoll = ageS > 150 ? `stalled (last tick ${ageS}s ago)` : 'ok';
-      if (ageS > 150) degrade();
-    }
-    const sweepHb = getFeedbackSweepHeartbeat();
-    if (sweepHb === null) {
-      checks.feedbackSweep = 'not-running';
-    } else {
-      const ageS = Math.round((Date.now() - sweepHb) / 1000);
-      checks.feedbackSweep = ageS > 2 * 3600 + 300 ? `stalled (last tick ${ageS}s ago)` : 'ok';
-      if (ageS > 2 * 3600 + 300) degrade();
-    }
+    // A loop is stalled once its last tick is older than maxAgeS.
+    const loopCheck = (heartbeat: number | null, maxAgeS: number): string => {
+      if (heartbeat === null) return 'not-running';
+      const ageS = Math.round((Date.now() - heartbeat) / 1000);
+      if (ageS <= maxAgeS) return 'ok';
+      degrade();
+      return `stalled (last tick ${ageS}s ago)`;
+    };
+    checks.listingPoll = loopCheck(getListingPollHeartbeat(), 150);
+    checks.feedbackSweep = loopCheck(getFeedbackSweepHeartbeat(), 2 * 3600 + 300);
 
     const authStreak = getTradingAuthFailureStreak();
     if (authStreak >= 5) {
