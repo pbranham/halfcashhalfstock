@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 import { errorMessage } from './log.js';
+import { DAY_MS, HOUR_MS, MINUTE_MS } from './time.js';
 
 type UaClass = 'bot' | 'mobile' | 'desktop' | 'other';
 
@@ -34,12 +35,12 @@ interface SessionAggregate {
   totalRequests: number;
 }
 
-const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
-const FIVE_MIN_RETENTION_MS = 48 * 60 * 60 * 1000;
-const HOURLY_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
-const DAILY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
-const LIVE_WINDOW_MS = 5 * 60 * 1000;
-const FIVE_MIN_BUCKET_MS = 5 * 60 * 1000;
+const SESSION_TIMEOUT_MS = 30 * MINUTE_MS;
+const FIVE_MIN_RETENTION_MS = 48 * HOUR_MS;
+const HOURLY_RETENTION_MS = 14 * DAY_MS;
+const DAILY_RETENTION_MS = 90 * DAY_MS;
+const LIVE_WINDOW_MS = 5 * MINUTE_MS;
+const FIVE_MIN_BUCKET_MS = 5 * MINUTE_MS;
 
 const BOT_REGEX = /bot|crawler|spider|scrap|wget|curl|python-requests|fetch|httpie|axios|node-fetch|googlebot|bingbot|yandex|slurp|duckduckbot|baiduspider|facebookexternalhit|preview|monitor|uptime/i;
 const MOBILE_REGEX = /mobile|android|iphone|ipad|ipod|blackberry|webos|opera mini/i;
@@ -180,7 +181,7 @@ export class RequestStatsCollector {
         const message = errorMessage(err);
         console.error('rollup failed', { error: message });
       });
-    }, 60 * 60 * 1000);
+    }, HOUR_MS);
     this.dailyRollupInterval.unref();
   }
 

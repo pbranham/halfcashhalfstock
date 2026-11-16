@@ -3,6 +3,7 @@ import { errorMessage, type Logger } from './log.js';
 import { fetchItemDetails } from './ebay/item-details.js';
 import type { EbayClient } from './ebay/client.js';
 import { readListingsMissingDetails, upsertItemDetails } from './db/persist.js';
+import { DAY_MS } from './time.js';
 
 // The enricher only needs itemId + primary image URL (the latter for the
 // per-item details fetch's dedupe). Both active Listings and EndedListingRows
@@ -32,7 +33,7 @@ export interface ItemDetailsEnricherOptions {
 let inflight: Promise<void> | null = null;
 
 export function createItemDetailsEnricher(opts: ItemDetailsEnricherOptions) {
-  const staleAfterMs = opts.staleAfterMs ?? 7 * 24 * 60 * 60 * 1000;
+  const staleAfterMs = opts.staleAfterMs ?? 7 * DAY_MS;
   const concurrency = Math.max(1, opts.concurrency ?? 4);
 
   // Best-effort, fire-and-forget. Given some target listings (active or

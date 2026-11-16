@@ -3,6 +3,7 @@ import { errorMessage, type Logger } from './log.js';
 import { logPassIfNotable, startBackgroundLoop } from './background-loop.js';
 import { YahooProvider } from './prices/yahoo.js';
 import { bulkInsertOhlcData } from './db/persist.js';
+import { DAY_MS } from './time.js';
 
 export interface OhlcRefreshResult {
   ticker: string;
@@ -65,7 +66,7 @@ export function startDailyOhlcRefresh(opts: {
   return startBackgroundLoop({
     name: 'daily ohlc refresh',
     log,
-    intervalMs: opts.intervalMs ?? 24 * 60 * 60 * 1000,
+    intervalMs: opts.intervalMs ?? DAY_MS,
     startFields: { tickers: opts.tickers },
     tick: async () => {
       const results = await refreshDailyOhlcOnce({ pool: opts.pool, yahoo, tickers: opts.tickers, log });

@@ -59,6 +59,7 @@ import { composeSnapshot, type Snapshot } from './snapshot.js';
 import { maskBids, maskFeedback } from './anon.js';
 import { TickerQueue } from './ticker-queue.js';
 import { RequestStatsCollector } from './request-stats.js';
+import { DAY_MS, HOUR_MS, daysAgo, isoOrNull } from './time.js';
 
 const LISTINGS_TTL_MS = 30_000;
 const PRICE_TTL_MS = 30_000;
@@ -391,7 +392,7 @@ export function createApp(deps: Deps): express.Express {
   // Daily OHLC history for the performance chart. Changes at most once per
   // trading day, so a coarse TTL is plenty; keyed by `${tickers}:${days}`.
   const ohlcHistoryCache = new TtlCache<Awaited<ReturnType<typeof readDailyOhlc>>>();
-  const OHLC_HISTORY_TTL_MS = 60 * 60 * 1000;
+  const OHLC_HISTORY_TTL_MS = HOUR_MS;
 
   // Cache for end-time stock closes: the OHLC close for a fixed (item,
   // ticker) pair never changes — the past doesn't change — so look it up
@@ -552,7 +553,7 @@ export function createApp(deps: Deps): express.Express {
     contentType: string;
     fetchedAt: number;
   }
-  const TICKER_LOGO_TTL_MS = 24 * 60 * 60 * 1000;
+  const TICKER_LOGO_TTL_MS = DAY_MS;
   const TICKER_LOGO_BROWSER_MAX_AGE_S = 24 * 60 * 60;
   const tickerLogoCache = new Map<string, TickerLogoCacheEntry>();
   const tickerLogoInflight = new Map<string, Promise<TickerLogoCacheEntry>>();
@@ -641,7 +642,7 @@ export function createApp(deps: Deps): express.Express {
         return;
       }
       const db = deps.db;
-      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const since = daysAgo(days);
       const ohlc = await ohlcHistoryCache.get(
         `ohlc-history:${tickers.join(',')}:${days}`,
         OHLC_HISTORY_TTL_MS,
@@ -710,7 +711,7 @@ export function createApp(deps: Deps): express.Express {
     const days = Math.max(1, Math.min(30, Number.parseInt(daysStr, 10) || 7));
     try {
       const now = new Date();
-      const startTime = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+      const startTime = daysAgo(days, now);
       const { readOhlcData } = await import('./db/persist.js');
       const candles = await readOhlcData(deps.db, ticker, startTime, now);
       res
@@ -774,7 +775,7 @@ export function createApp(deps: Deps): express.Express {
       }
       const sessionInterval = interval === '5min' ? 'hour' : interval;
 
-      const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+      const since = new Date(Date.now() - hours * HOUR_MS);
       const params: unknown[] = [since, interval];
       const sessionParams: unknown[] = [since, sessionInterval];
       let envClause = '';
@@ -1063,7 +1064,7 @@ export function createApp(deps: Deps): express.Express {
             db: {
               currentPriceUsd: dbRow ? Number(dbRow.current_price_usd) : null,
               currentBidCount: dbRow?.current_bid_count ?? null,
-              endedAt: dbRow?.ended_at ? dbRow.ended_at.toISOString() : null,
+              endedAt: isoOrNull(dbRow?.ended_at),
               totalBidRows: Number(dbBids.rows[0]?.count ?? '0'),
             },
           });

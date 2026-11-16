@@ -1,4 +1,5 @@
 import type { Listing } from './ebay/seller.js';
+import { MINUTE_MS } from './time.js';
 
 export interface AdaptiveSellerFetchOptions {
   sellerIds: readonly string[];
@@ -24,7 +25,7 @@ export interface AdaptiveSellerFetchOptions {
 export function createAdaptiveSellerFetch(
   opts: AdaptiveSellerFetchOptions,
 ): () => Promise<Listing[]> {
-  const idleTtlMs = opts.idleTtlMs ?? 30 * 60 * 1000;
+  const idleTtlMs = opts.idleTtlMs ?? 30 * MINUTE_MS;
   const now = opts.now ?? (() => Date.now());
   // sellerId -> timestamp until which the seller is treated as asleep.
   const idleUntil = new Map<string, number>();

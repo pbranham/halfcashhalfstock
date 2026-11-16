@@ -3,6 +3,7 @@ import { errorMessage, type Logger } from './log.js';
 import { createHeartbeat, logPassIfNotable, startBackgroundLoop } from './background-loop.js';
 import { getFeedbackPage, type FeedbackEntry } from './ebay/trading.js';
 import { readNumericToCanonicalIdMap, upsertFeedback, type FeedbackRow } from './db/persist.js';
+import { HOUR_MS } from './time.js';
 
 // Pages per seller per sweep. 200 entries/page; both sellers have well under
 // 400 feedback events in any 90-day window, so 5 pages is a generous ceiling
@@ -122,7 +123,7 @@ export function startFeedbackSweep(opts: {
   return startBackgroundLoop({
     name: 'feedback sweep',
     log,
-    intervalMs: opts.intervalMs ?? 60 * 60 * 1000,
+    intervalMs: opts.intervalMs ?? HOUR_MS,
     heartbeat,
     startFields: { sellers: opts.sellerIds },
     tick: async () => {

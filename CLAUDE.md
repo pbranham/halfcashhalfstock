@@ -85,7 +85,8 @@ src/
   server.ts                  HTTP, routes, request-stats wiring, graceful shutdown
   config.ts                  zod env schema; resolveEbayTradingUserToken / has*Credentials helpers
   cache.ts                   TtlCache + DbBackedCache (single-flight, stale-fallback, U+0000 strip)
-  log.ts                     Logger
+  log.ts                     Logger + errorMessage(err)
+  time.ts                    MINUTE_MS / HOUR_MS / DAY_MS, daysAgo, isoOrNull
   snapshot.ts                composeSnapshot — listings + price + math + totals + galleries
   ticker-queue.ts            stock OHLC scheduler with request-windowed scoping
   request-stats.ts           privacy-respecting metrics + UA classifier + sessions
