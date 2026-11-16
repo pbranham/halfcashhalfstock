@@ -56,7 +56,7 @@ import { YahooProvider } from './prices/yahoo.js';
 import { ChainedPriceProvider } from './prices/provider.js';
 import type { PriceProvider, PriceQuote } from './prices/types.js';
 import { composeSnapshot, type Snapshot } from './snapshot.js';
-import { maskBidder } from './anon.js';
+import { maskBids, maskFeedback } from './anon.js';
 import { TickerQueue } from './ticker-queue.js';
 import { RequestStatsCollector } from './request-stats.js';
 
@@ -664,8 +664,8 @@ export function createApp(deps: Deps): express.Express {
       // Trading API returns full IDs; eBay's own public bid-history page
       // shows them masked, so the public dashboard does the same. Feedback
       // commenters get the same treatment.
-      const maskedBids = bids.map((b) => ({ ...b, bidder: maskBidder(b.bidder) }));
-      const maskedFeedback = feedback.map((f) => ({ ...f, commentingUser: maskBidder(f.commentingUser) }));
+      const maskedBids = maskBids(bids);
+      const maskedFeedback = maskFeedback(feedback);
       res
         .status(200)
         .set('Cache-Control', 'public, max-age=15')
@@ -681,7 +681,7 @@ export function createApp(deps: Deps): express.Express {
     if (!itemId) return;
     try {
       const bids = await readBidsForItem(deps.db, itemId);
-      const maskedBids = bids.map((b) => ({ ...b, bidder: maskBidder(b.bidder) }));
+      const maskedBids = maskBids(bids);
       res.status(200).set('Cache-Control', 'public, max-age=15').json({ itemId, bids: maskedBids });
     } catch (err) {
       next(err);
@@ -1160,7 +1160,7 @@ export function createApp(deps: Deps): express.Express {
           mode: apply ? 'applied' : 'dry-run',
           results,
           // Commenters masked even in admin output — consistent boundary.
-          sample: sample.map((f) => ({ ...f, commentingUser: maskBidder(f.commentingUser) })),
+          sample: maskFeedback(sample),
         });
         return;
       }

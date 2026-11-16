@@ -16,3 +16,13 @@ export function maskBidder(bidder: string | null | undefined): string {
   if (bidder.length <= 2) return bidder;
   return `${bidder[0]}***${bidder[bidder.length - 1]}`;
 }
+
+// Bid rows and feedback rows with their usernames masked — what every API
+// response that carries them sends.
+export function maskBids<T extends { bidder: string | null }>(bids: readonly T[]): T[] {
+  return bids.map((b) => ({ ...b, bidder: maskBidder(b.bidder) }));
+}
+
+export function maskFeedback<T extends { commentingUser: string | null }>(rows: readonly T[]): T[] {
+  return rows.map((f) => ({ ...f, commentingUser: maskBidder(f.commentingUser) }));
+}
