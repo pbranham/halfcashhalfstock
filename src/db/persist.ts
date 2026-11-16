@@ -508,32 +508,27 @@ export interface EndedListingRow {
   currency: string;
 }
 
-export async function readEndedListings(
-  pool: Pool,
-  sinceDays: number = 14,
-): Promise<EndedListingRow[]> {
-  const since = daysAgo(sinceDays);
-  const res = await pool.query<{
-    item_id: string;
-    seller_id: string;
-    title: string;
-    image_url: string | null;
-    item_web_url: string | null;
-    is_auction: boolean;
-    ends_at: Date | null;
-    ended_at: Date;
-    current_price_usd: string;
-    current_bid_count: number;
-    currency: string;
-  }>(
-    `SELECT item_id, seller_id, title, image_url, item_web_url, is_auction,
-            ends_at, ended_at, current_price_usd, current_bid_count, currency
-     FROM listings
-     WHERE ended_at IS NOT NULL AND ended_at >= $1
-     ORDER BY ended_at DESC`,
-    [since],
-  );
-  return res.rows.map((row) => ({
+// The listing columns both the ended list and the item page read, and their
+// one mapping to the API shape.
+const LISTING_CORE_COLUMNS = `item_id, seller_id, title, image_url, item_web_url, is_auction,
+            ends_at, ended_at, current_price_usd, current_bid_count, currency`;
+
+interface ListingCoreDbRow {
+  item_id: string;
+  seller_id: string;
+  title: string;
+  image_url: string | null;
+  item_web_url: string | null;
+  is_auction: boolean;
+  ends_at: Date | null;
+  ended_at: Date | null;
+  current_price_usd: string;
+  current_bid_count: number;
+  currency: string;
+}
+
+function listingCore(row: ListingCoreDbRow) {
+  return {
     itemId: row.item_id,
     sellerId: row.seller_id,
     title: row.title,
@@ -541,11 +536,29 @@ export async function readEndedListings(
     itemWebUrl: row.item_web_url,
     isAuction: row.is_auction,
     endsAt: isoOrNull(row.ends_at),
-    endedAt: row.ended_at.toISOString(),
-    finalPriceUsd: Number(row.current_price_usd),
-    finalBidCount: row.current_bid_count,
+    endedAt: isoOrNull(row.ended_at),
+    priceUsd: Number(row.current_price_usd),
+    bidCount: row.current_bid_count,
     currency: row.currency,
-  }));
+  };
+}
+
+export async function readEndedListings(
+  pool: Pool,
+  sinceDays: number = 14,
+): Promise<EndedListingRow[]> {
+  const since = daysAgo(sinceDays);
+  const res = await pool.query<ListingCoreDbRow & { ended_at: Date }>(
+    `SELECT ${LISTING_CORE_COLUMNS}
+     FROM listings
+     WHERE ended_at IS NOT NULL AND ended_at >= $1
+     ORDER BY ended_at DESC`,
+    [since],
+  );
+  return res.rows.map((row) => {
+    const { priceUsd, bidCount, ...core } = listingCore(row);
+    return { ...core, endedAt: row.ended_at.toISOString(), finalPriceUsd: priceUsd, finalBidCount: bidCount };
+  });
 }
 
 export interface BidRow {
@@ -609,27 +622,17 @@ export async function readListingDetail(
   pool: Pool,
   itemId: string,
 ): Promise<ListingDetail | null> {
-  const res = await pool.query<{
-    item_id: string;
-    seller_id: string;
-    title: string;
-    image_url: string | null;
-    item_web_url: string | null;
-    is_auction: boolean;
-    ends_at: Date | null;
-    ended_at: Date | null;
-    current_price_usd: string;
-    current_bid_count: number;
-    currency: string;
-    first_seen_at: Date;
-    last_seen_at: Date;
-    additional_images: string[] | null;
-    description_html: string | null;
-    details_fetched_at: Date | null;
-    bids_imported_at: Date | null;
-  }>(
-    `SELECT item_id, seller_id, title, image_url, item_web_url, is_auction, ends_at, ended_at,
-            current_price_usd, current_bid_count, currency, first_seen_at, last_seen_at,
+  const res = await pool.query<
+    ListingCoreDbRow & {
+      first_seen_at: Date;
+      last_seen_at: Date;
+      additional_images: string[] | null;
+      description_html: string | null;
+      details_fetched_at: Date | null;
+      bids_imported_at: Date | null;
+    }
+  >(
+    `SELECT ${LISTING_CORE_COLUMNS}, first_seen_at, last_seen_at,
             additional_images, description_html, details_fetched_at, bids_imported_at
      FROM listings
      WHERE item_id = $1`,
@@ -637,18 +640,11 @@ export async function readListingDetail(
   );
   const row = res.rows[0];
   if (!row) return null;
+  const { priceUsd, bidCount, ...core } = listingCore(row);
   return {
-    itemId: row.item_id,
-    sellerId: row.seller_id,
-    title: row.title,
-    imageUrl: row.image_url,
-    itemWebUrl: row.item_web_url,
-    isAuction: row.is_auction,
-    endedAt: isoOrNull(row.ended_at),
-    endsAt: isoOrNull(row.ends_at),
-    currentPriceUsd: Number(row.current_price_usd),
-    currentBidCount: row.current_bid_count,
-    currency: row.currency,
+    ...core,
+    currentPriceUsd: priceUsd,
+    currentBidCount: bidCount,
     firstSeenAt: row.first_seen_at.toISOString(),
     lastSeenAt: row.last_seen_at.toISOString(),
     additionalImages: Array.isArray(row.additional_images) ? row.additional_images : [],
