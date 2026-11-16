@@ -139,21 +139,37 @@ export function composeSnapshot(
   const priceFor = (sellerId: string): number =>
     valuation ? valuation.quoteForTicker(valuation.tickerForSeller(sellerId)).price : stock.price;
 
+  // The listing fields every card view carries, active or ended, plus its
+  // gallery and the ticker it's valued in.
+  const viewBase = <
+    T extends { itemId: string; sellerId: string } & Record<
+      'title' | 'imageUrl' | 'itemWebUrl' | 'isAuction' | 'endsAt' | 'currency',
+      unknown
+    >,
+  >(
+    x: T,
+  ): Pick<T, 'itemId' | 'sellerId' | 'title' | 'imageUrl' | 'itemWebUrl' | 'isAuction' | 'endsAt' | 'currency'> & {
+    additionalImages: string[];
+    valuationTicker: string;
+  } => ({
+    itemId: x.itemId,
+    sellerId: x.sellerId,
+    title: x.title,
+    imageUrl: x.imageUrl,
+    itemWebUrl: x.itemWebUrl,
+    isAuction: x.isAuction,
+    endsAt: x.endsAt,
+    currency: x.currency,
+    additionalImages: additionalImagesByItemId.get(x.itemId) ?? [],
+    valuationTicker: tickerFor(x.sellerId),
+  });
+
   const items: ListingView[] = listings.map((l) => ({
-    itemId: l.itemId,
-    sellerId: l.sellerId,
-    title: l.title,
-    imageUrl: l.imageUrl,
-    itemWebUrl: l.itemWebUrl,
-    currency: l.currency,
+    ...viewBase(l),
     priceUsd: isSplittablePrice(l.priceUsd) ? l.priceUsd : null,
     bidCount: l.bidCount,
-    endsAt: l.endsAt,
-    isAuction: l.isAuction,
     split: isSplittablePrice(l.priceUsd) ? splitHalfCashHalfStock(l.priceUsd, priceFor(l.sellerId)) : null,
-    valuationTicker: tickerFor(l.sellerId),
     lastBidTime: l.lastBidTime ?? null,
-    additionalImages: additionalImagesByItemId.get(l.itemId) ?? [],
   }));
 
   // Items with at least one real bid AND a USD price contribute to the
@@ -190,25 +206,16 @@ export function composeSnapshot(
     const endTimeClose =
       rawClose !== null && Number.isFinite(rawClose) && rawClose > 0 ? rawClose : null;
     return {
-      itemId: e.itemId,
-      sellerId: e.sellerId,
-      title: e.title,
-      imageUrl: e.imageUrl,
-      itemWebUrl: e.itemWebUrl,
-      isAuction: e.isAuction,
-      endsAt: e.endsAt,
+      ...viewBase(e),
       endedAt: e.endedAt,
       finalPriceUsd: e.finalPriceUsd,
       finalBidCount: e.finalBidCount,
-      currency: e.currency,
-      additionalImages: additionalImagesByItemId.get(e.itemId) ?? [],
       split: isUsd && isSplittablePrice(e.finalPriceUsd) ? splitHalfCashHalfStock(e.finalPriceUsd, priceFor(e.sellerId)) : null,
       endTimePriceUsd: endTimeClose,
       endTimeSplit:
         isUsd && isSplittablePrice(e.finalPriceUsd) && endTimeClose !== null
           ? splitHalfCashHalfStock(e.finalPriceUsd, endTimeClose)
           : null,
-      valuationTicker: tickerFor(e.sellerId),
     };
   });
   // Same no-bid exclusion for ended items: an auction that ended at the
