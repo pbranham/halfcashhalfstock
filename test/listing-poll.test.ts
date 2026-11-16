@@ -1,11 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { silentLogger } from './helpers.js';
 import { startBackgroundListingPoll } from '../src/listing-poll.js';
-import { createLogger } from '../src/log.js';
 import type { Listing } from '../src/ebay/seller.js';
-
-function silentLogger() {
-  return createLogger({ level: 'error', sink: () => {} });
-}
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());

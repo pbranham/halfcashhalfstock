@@ -1,12 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
+import { silentLogger } from './helpers.js';
 import type { Pool } from 'pg';
 import { refreshDailyOhlcOnce } from '../src/ohlc-refresh.js';
-import { createLogger } from '../src/log.js';
 import type { YahooProvider } from '../src/prices/yahoo.js';
-
-function silentLogger() {
-  return createLogger({ level: 'error', sink: () => {} });
-}
 
 function candle(periodStart: Date, close: number) {
   return { periodStart, open: close, high: close, low: close, close };

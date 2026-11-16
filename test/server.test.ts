@@ -1,8 +1,8 @@
 import type http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { silentLogger } from './helpers.js';
 import { createApp } from '../src/server.js';
-import { createLogger } from '../src/log.js';
 import { loadConfig } from '../src/config.js';
 import type { Listing } from '../src/ebay/seller.js';
 import type { PriceQuote } from '../src/prices/types.js';
@@ -28,10 +28,6 @@ const LISTING: Listing = {
   buyingOptions: ['AUCTION'],
   isAuction: true,
 };
-
-function silentLogger() {
-  return createLogger({ level: 'error', sink: () => {} });
-}
 
 let server: http.Server;
 let baseUrl: string;

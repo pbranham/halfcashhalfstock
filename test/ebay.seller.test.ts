@@ -1,27 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { EbayAppTokenProvider } from '../src/ebay/auth.js';
-import { EbayClient } from '../src/ebay/client.js';
+import { buildClient, fetchWithToken, jsonResponse } from './helpers.js';
 import { listSellerActiveItems, upgradeEbayImageUrl } from '../src/ebay/seller.js';
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  });
-}
-
-function buildClient(fetchImpl: ReturnType<typeof vi.fn>): EbayClient {
-  const tokenProvider = new EbayAppTokenProvider({
-    appId: 'a',
-    certId: 'b',
-    fetchImpl: fetchImpl as unknown as typeof fetch,
-  });
-  return new EbayClient({
-    tokenProvider,
-    marketplaceId: 'EBAY_US',
-    fetchImpl: fetchImpl as unknown as typeof fetch,
-  });
-}
 
 describe('upgradeEbayImageUrl', () => {
   it('bumps the s-l size token on eBay CDN URLs', () => {
@@ -44,10 +23,7 @@ describe('upgradeEbayImageUrl', () => {
   });
 
   it('normalizes the seller listing image to high-res', async () => {
-    const fetchImpl = vi.fn();
-    fetchImpl.mockResolvedValueOnce(
-      jsonResponse({ access_token: 't', expires_in: 7200, token_type: 'Application' }),
-    );
+    const fetchImpl = fetchWithToken();
     fetchImpl.mockResolvedValueOnce(
       jsonResponse({
         itemSummaries: [
@@ -76,10 +52,7 @@ describe('listSellerActiveItems', () => {
   });
 
   it('issues a search request with category_ids=0 and AUCTION+FIXED_PRICE buyingOptions', async () => {
-    const fetchImpl = vi.fn();
-    fetchImpl.mockResolvedValueOnce(
-      jsonResponse({ access_token: 't', expires_in: 7200, token_type: 'Application' }),
-    );
+    const fetchImpl = fetchWithToken();
     fetchImpl.mockResolvedValueOnce(jsonResponse({ itemSummaries: [] }));
 
     const client = buildClient(fetchImpl);
@@ -94,10 +67,7 @@ describe('listSellerActiveItems', () => {
   });
 
   it('normalizes auction and buy-it-now items', async () => {
-    const fetchImpl = vi.fn();
-    fetchImpl.mockResolvedValueOnce(
-      jsonResponse({ access_token: 't', expires_in: 7200, token_type: 'Application' }),
-    );
+    const fetchImpl = fetchWithToken();
     fetchImpl.mockResolvedValueOnce(
       jsonResponse({
         itemSummaries: [
@@ -149,10 +119,7 @@ describe('listSellerActiveItems', () => {
   });
 
   it('paginates when a full page is returned', async () => {
-    const fetchImpl = vi.fn();
-    fetchImpl.mockResolvedValueOnce(
-      jsonResponse({ access_token: 't', expires_in: 7200, token_type: 'Application' }),
-    );
+    const fetchImpl = fetchWithToken();
     const fullPage = {
       itemSummaries: Array.from({ length: 200 }, (_, i) => ({
         itemId: `v1|${i}`,
