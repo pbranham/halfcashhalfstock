@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 import { errorMessage } from './log.js';
+import { sumBy } from './math.js';
 import { DAY_MS, HOUR_MS, MINUTE_MS, msAgo } from './time.js';
 
 type UaClass = 'bot' | 'mobile' | 'desktop' | 'other';
@@ -364,7 +365,7 @@ export class RequestStatsCollector {
 
     const maxSample = Math.max(...samples);
     const minSample = Math.min(...samples);
-    const avgSample = samples.reduce((a, b) => a + b, 0) / samples.length;
+    const avgSample = sumBy(samples, (n) => n) / samples.length;
 
     for (const record of records) {
       const key = `${record.endpoint}:${record.statusCode}`;

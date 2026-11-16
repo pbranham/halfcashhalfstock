@@ -1,4 +1,5 @@
 import { errorMessage, type Logger } from './log.js';
+import { sumBy } from './math.js';
 
 // When a loop last completed a tick (ms epoch), or null if it never ran in
 // this process. /api/health reads these to spot a stalled loop.
@@ -72,6 +73,5 @@ export function logPassIfNotable(
   msg: string,
   results: ReadonlyArray<{ inserted: number; error?: string | null }>,
 ): void {
-  const inserted = results.reduce((sum, r) => sum + r.inserted, 0);
-  if (inserted > 0 || results.some((r) => r.error)) log.info(msg, { results });
+  if (sumBy(results, (r) => r.inserted) > 0 || results.some((r) => r.error)) log.info(msg, { results });
 }

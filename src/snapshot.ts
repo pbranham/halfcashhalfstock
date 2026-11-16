@@ -1,4 +1,4 @@
-import { splitHalfCashHalfStock, sumSplits, type HalfSplit } from './math.js';
+import { splitHalfCashHalfStock, sumBy, sumSplits, type HalfSplit } from './math.js';
 import type { Listing } from './ebay/seller.js';
 import type { PriceQuote } from './prices/types.js';
 import type { EndedListingRow } from './db/persist.js';
@@ -238,14 +238,14 @@ export function composeSnapshot(
     totals: {
       listingsCount: items.length,
       pricedCount: priced.length,
-      bidsCount: items.reduce((sum, i) => sum + (i.bidCount ?? 0), 0),
-      bidUsd: priced.reduce((sum, i) => sum + i.priceUsd, 0),
+      bidsCount: sumBy(items, (i) => i.bidCount ?? 0),
+      bidUsd: sumBy(priced, (i) => i.priceUsd),
       split: sumSplits(priced.map((i) => i.split)),
     },
     endedTotals: {
       listingsCount: endedItems.length,
-      bidsCount: endedItems.reduce((sum, i) => sum + i.finalBidCount, 0),
-      bidUsd: endedPriced.reduce((sum, i) => sum + i.finalPriceUsd, 0),
+      bidsCount: sumBy(endedItems, (i) => i.finalBidCount),
+      bidUsd: sumBy(endedPriced, (i) => i.finalPriceUsd),
       split: sumSplits(endedPriced.map((i) => i.split)),
       splitAtEnd: sumSplits(endedPricedAtEnd.map((i) => i.endTimeSplit)),
       pricedAtEndCount: endedPricedAtEnd.length,
