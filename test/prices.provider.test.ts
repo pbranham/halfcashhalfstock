@@ -14,16 +14,21 @@ const QUOTE: PriceQuote = {
   source: 'finnhub',
 };
 
+// Chaining [a, b] yields QUOTE after asking `a` once and `b` `bCalls` times.
+async function expectChainQuote(a: PriceProvider, b: PriceProvider, bCalls: number): Promise<void> {
+  const chained = new ChainedPriceProvider([a, b]);
+  expect(await chained.getQuote('EBAY')).toEqual(QUOTE);
+  expect(a.getQuote).toHaveBeenCalledTimes(1);
+  expect(b.getQuote).toHaveBeenCalledTimes(bCalls);
+}
+
 describe('ChainedPriceProvider', () => {
   it('returns the first successful quote', async () => {
     const a = stubProvider('a', async () => QUOTE);
     const b = stubProvider('b', async () => {
       throw new Error('should not be called');
     });
-    const chained = new ChainedPriceProvider([a, b]);
-    expect(await chained.getQuote('EBAY')).toEqual(QUOTE);
-    expect(a.getQuote).toHaveBeenCalledTimes(1);
-    expect(b.getQuote).not.toHaveBeenCalled();
+    await expectChainQuote(a, b, 0);
   });
 
   it('falls through to the next provider when the first fails', async () => {
@@ -31,10 +36,7 @@ describe('ChainedPriceProvider', () => {
       throw new PriceProviderError('a', 'boom');
     });
     const b = stubProvider('b', async () => QUOTE);
-    const chained = new ChainedPriceProvider([a, b]);
-    expect(await chained.getQuote('EBAY')).toEqual(QUOTE);
-    expect(a.getQuote).toHaveBeenCalledTimes(1);
-    expect(b.getQuote).toHaveBeenCalledTimes(1);
+    await expectChainQuote(a, b, 1);
   });
 
   it('throws aggregated error when all providers fail', async () => {

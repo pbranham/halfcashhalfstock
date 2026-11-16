@@ -61,3 +61,23 @@ export function expectSellerValuation(snapshot: {
   expect(byId['v1|2']?.valuationTicker).toBe('GME');
   expect(byId['v1|2']?.split).toEqual({ cashUsd: 50, stockUsd: 50, shares: 2 });
 }
+
+// Make every global fetch answer 200 with `body` (an XML/text payload);
+// returns the spy.
+export function respondWith(body: string) {
+  return vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(body, { status: 200 }));
+}
+
+// What the first fetch through `spy` sent: its body text and Trading call name.
+export function sentRequest(spy: ReturnType<typeof respondWith>): { body: string; callName: string | undefined } {
+  const init = spy.mock.calls[0]?.[1] as RequestInit | undefined;
+  return {
+    body: String(init?.body),
+    callName: (init?.headers as Record<string, string> | undefined)?.['X-EBAY-API-CALL-NAME'],
+  };
+}
+
+// The SQL text of every call a mocked pool/client `query` received.
+export function sqlOf(query: { mock: { calls: unknown[][] } }): string[] {
+  return query.mock.calls.map(([sql]) => sql as string);
+}
