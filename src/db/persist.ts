@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 import type { Listing } from '../ebay/seller.js';
-import { normalizeTradingItemId, type BidRecord } from '../ebay/trading.js';
+import { highestBidAmount, normalizeTradingItemId, type BidRecord } from '../ebay/trading.js';
 import { daysAgo, isoOrNull } from '../time.js';
 
 // A pool or a checked-out client inside a transaction — both can run queries.
@@ -232,7 +232,7 @@ export async function reconcileItemBids(
   }
   const validRetracted = retracted.filter((b) => b.removedAt && isStorableBid(b));
   const finalPriceUsd = valid.length > 0
-    ? valid.reduce((max, b) => (b.bidAmount > max ? b.bidAmount : max), 0)
+    ? highestBidAmount(valid)
     : (options.zeroBidsPriceUsd ?? 0);
   const bidCount = valid.length;
 
