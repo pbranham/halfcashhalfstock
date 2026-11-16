@@ -17,24 +17,27 @@ const DEFAULT_SELLER_IDS = ['boilerpaulie', 'ryan_5050'] as const;
 // Sellers absent from the map fall back to STOCK_SYMBOL.
 const DEFAULT_SELLER_TICKERS = 'boilerpaulie:GME,ryan_5050:EBAY';
 
+// A set env var must hold something once trimmed.
+const nonEmpty = () => z.string().trim().min(1);
+
 const Schema = z.object({
-  EBAY_APP_ID: z.string().trim().min(1).optional(),
-  EBAY_CERT_ID: z.string().trim().min(1).optional(),
-  EBAY_DEV_ID: z.string().trim().min(1).optional(),
-  EBAY_USER_TOKEN: z.string().trim().min(1).optional(),
-  EBAY_USER_TOKEN_FILE: z.string().trim().min(1).optional(),
+  EBAY_APP_ID: nonEmpty().optional(),
+  EBAY_CERT_ID: nonEmpty().optional(),
+  EBAY_DEV_ID: nonEmpty().optional(),
+  EBAY_USER_TOKEN: nonEmpty().optional(),
+  EBAY_USER_TOKEN_FILE: nonEmpty().optional(),
   // Comma-separated list of seller usernames to poll. Falls back to the
   // legacy single-value `EBAY_SELLER_ID` env var when unset, then to
   // DEFAULT_SELLER_IDS. Materialised as `sellerIds: string[]` on the
   // resolved Config.
-  EBAY_SELLER_IDS: z.string().trim().min(1).optional(),
+  EBAY_SELLER_IDS: nonEmpty().optional(),
   // Seller → ticker pairing for the "By seller" mixed-valuation mode (see
   // DEFAULT_SELLER_TICKERS). Materialised as `sellerTickers: Record<...>`.
-  EBAY_SELLER_TICKERS: z.string().trim().min(1).optional(),
-  EBAY_MARKETPLACE_ID: z.string().trim().min(1).default('EBAY_US'),
-  FINNHUB_API_KEY: z.string().trim().min(1).optional(),
-  STOCK_SYMBOL: z.string().trim().min(1).default('EBAY'),
-  DATABASE_URL: z.string().trim().min(1).optional(),
+  EBAY_SELLER_TICKERS: nonEmpty().optional(),
+  EBAY_MARKETPLACE_ID: nonEmpty().default('EBAY_US'),
+  FINNHUB_API_KEY: nonEmpty().optional(),
+  STOCK_SYMBOL: nonEmpty().default('EBAY'),
+  DATABASE_URL: nonEmpty().optional(),
   PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -42,13 +45,13 @@ const Schema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
-  APP_ENVIRONMENT: z.string().trim().min(1).optional(),
+  APP_ENVIRONMENT: nonEmpty().optional(),
   ADMIN_TOKEN: z.string().trim().min(8).optional(),
   // logo.dev publishable API key used to render the ticker logo as the
   // shares "unit" on the dashboard. Falls back to spelled-out "shares"
   // when unset. Publishable (client-visible) per logo.dev's docs, so
   // serving it on /api/snapshot is fine.
-  LOGO_DEV_TOKEN: z.string().trim().min(1).optional(),
+  LOGO_DEV_TOKEN: nonEmpty().optional(),
 });
 
 export type Config = z.infer<typeof Schema> & {
