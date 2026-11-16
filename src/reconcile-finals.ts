@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 import { errorMessage, type Logger } from './log.js';
-import { getItemSellingStatus } from './ebay/trading.js';
+import { getItemSellingStatus, type ItemSellingStatus } from './ebay/trading.js';
 import { updateEndedListingFinals } from './db/persist.js';
 
 export interface ReconcileFinalsOptions {
@@ -25,6 +25,24 @@ export interface ReconcileFinalsResult {
   // = the API call or DB write threw.
   outcome: 'updated' | 'no-op' | 'skip' | 'error';
   reason?: string;
+}
+
+// Whether a GetItem answer may be written as an ended listing's finals:
+// acknowledged, Completed/Ended, USD, and a finite price > 0. `reason` says
+// why not when it isn't eligible.
+export function finalsEligibility(ss: ItemSellingStatus): { eligible: boolean; reason: string } {
+  const closed = ss.listingStatus === 'Completed' || ss.listingStatus === 'Ended';
+  const usd = ss.currencyId === null || ss.currencyId === 'USD';
+  const priceOk = Number.isFinite(ss.currentPrice) && ss.currentPrice > 0;
+  const eligible = ss.ack !== 'Failure' && closed && usd && priceOk;
+  const reason = ss.ack === 'Failure'
+    ? `ack=Failure: ${ss.errorMessage ?? 'unknown'}`
+    : !closed
+      ? `listingStatus=${ss.listingStatus ?? 'null'}`
+      : !usd
+        ? `currency=${ss.currencyId ?? 'null'}`
+        : `price=${ss.currentPrice}`;
+  return { eligible, reason: eligible ? '' : reason };
 }
 
 // Pull the authoritative final price + bid count from GetItem for each
@@ -58,10 +76,7 @@ export async function reconcileFinalsForItems(
   for (const itemId of targets) {
     try {
       const ss = await getItemSellingStatus(itemId, opts.userToken);
-      const closed = ss.listingStatus === 'Completed' || ss.listingStatus === 'Ended';
-      const usd = ss.currencyId === null || ss.currencyId === 'USD';
-      const priceOk = Number.isFinite(ss.currentPrice) && ss.currentPrice > 0;
-      const eligible = ss.ack !== 'Failure' && closed && usd && priceOk;
+      const { eligible, reason } = finalsEligibility(ss);
       if (ss.ack === 'Failure') {
         ackFailureStreak += 1;
         if (ackFailureStreak === AUTH_SUSPECT_THRESHOLD) {
@@ -80,13 +95,7 @@ export async function reconcileFinalsForItems(
           apiBidCount: ss.bidCount,
           listingStatus: ss.listingStatus,
           outcome: 'skip',
-          reason: ss.ack === 'Failure'
-            ? `ack=Failure: ${ss.errorMessage ?? 'unknown'}`
-            : !closed
-              ? `listingStatus=${ss.listingStatus ?? 'null'}`
-              : !usd
-                ? `currency=${ss.currencyId ?? 'null'}`
-                : `price=${ss.currentPrice}`,
+          reason,
         });
         continue;
       }

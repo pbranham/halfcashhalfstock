@@ -42,7 +42,7 @@ import { EbayClient } from './ebay/client.js';
 import { listSellerActiveItems, type Listing } from './ebay/seller.js';
 import { createAdaptiveSellerFetch } from './seller-poll.js';
 import { createItemDetailsEnricher } from './item-details-enricher.js';
-import { reconcileFinalsForItems, getTradingAuthFailureStreak } from './reconcile-finals.js';
+import { reconcileFinalsForItems, getTradingAuthFailureStreak, finalsEligibility } from './reconcile-finals.js';
 import { startBackgroundListingPoll, getListingPollHeartbeat } from './listing-poll.js';
 import { startFeedbackSweep, sweepFeedbackOnce, getFeedbackSweepHeartbeat } from './feedback-sweep.js';
 import { startDailyOhlcRefresh } from './ohlc-refresh.js';
@@ -1212,10 +1212,7 @@ export function createApp(deps: Deps): express.Express {
         for (const e of capped) {
           try {
             const ss = await getItemSellingStatus(e.itemId, userToken);
-            const closed = ss.listingStatus === 'Completed' || ss.listingStatus === 'Ended';
-            const usd = ss.currencyId === null || ss.currencyId === 'USD';
-            const priceOk = Number.isFinite(ss.currentPrice) && ss.currentPrice > 0;
-            const eligible = ss.ack !== 'Failure' && closed && usd && priceOk;
+            const { eligible } = finalsEligibility(ss);
             const priceChanged = Math.abs(ss.currentPrice - e.finalPriceUsd) > 0.005;
             const bidChanged = ss.bidCount !== e.finalBidCount;
             const willUpdate = eligible && (priceChanged || bidChanged);
