@@ -180,6 +180,14 @@ function tokenize(text: string): Token[] {
   return tokens.sort((x, y) => x.index - y.index);
 }
 
+// True the first time this (bidder, time, amount) bid is seen; records it.
+function isNewBid(seen: Set<string>, bidder: string, bidTime: string, amount: number): boolean {
+  const key = `${bidder}|${bidTime}|${amount}`;
+  if (seen.has(key)) return false;
+  seen.add(key);
+  return true;
+}
+
 // Bidder-delimited rows: each bidder token starts a row that collects the
 // first amount and up to `dates` dates after it. Rows missing the amount or
 // any of the dates are dropped. Order-agnostic within a row.
@@ -283,9 +291,7 @@ export function parseViewbids(html: string): ViewbidsParseResult {
       dateParseFailures += 1;
       continue;
     }
-    const key = `${row.bidder}|${bidTime}|${row.amount}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (!isNewBid(seen, row.bidder, bidTime, row.amount)) continue;
     bids.push({ bidder: row.bidder, bidTime, bidAmount: row.amount });
   }
 
@@ -363,9 +369,7 @@ export function parseRetractedSection(retractionText: string): RetractedBid[] {
       bidTime = removedAt;
       removedAt = tmp;
     }
-    const key = `${row.bidder}|${bidTime}|${row.amount}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (!isNewBid(seen, row.bidder, bidTime, row.amount)) continue;
     out.push({ bidder: row.bidder, bidTime, bidAmount: row.amount, removedAt });
   }
   return out;
