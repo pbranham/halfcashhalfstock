@@ -89,3 +89,13 @@ export function postAdminAction(token, body) {
     body: JSON.stringify(body),
   });
 }
+
+// Durations in milliseconds.
+export const MINUTE_MS = 60_000;
+export const HOUR_MS = 60 * MINUTE_MS;
+export const DAY_MS = 24 * HOUR_MS;
+
+// A date as the short "May 14" form (viewer's locale).
+export function shortDate(when) {
+  return new Date(when).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}

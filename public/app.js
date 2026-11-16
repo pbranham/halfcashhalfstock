@@ -1,5 +1,16 @@
 import { imageGallery } from '/gallery.js';
-import { el, endedEbayUrl, hiResImg, loadChoice, plural, saveChoice } from '/shared.js';
+import {
+  DAY_MS,
+  el,
+  endedEbayUrl,
+  hiResImg,
+  HOUR_MS,
+  loadChoice,
+  MINUTE_MS,
+  plural,
+  saveChoice,
+  shortDate,
+} from '/shared.js';
 
 const POLL_MS = 30_000;
 const QUICK_RETRY_MS = 4_000;
@@ -603,7 +614,7 @@ function renderHoldings() {
     );
     if (collapsed) continue;
     for (const lot of r.lots) {
-      const dateStr = new Date(lot.dayMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      const dateStr = shortDate(lot.dayMs);
       grid.appendChild(
         holdingsRow(
           [
@@ -1026,7 +1037,7 @@ function renderPerformanceChart(container, series) {
   svg.appendChild(mk('text', { class: 'perf-axis', x: String(padL), y: String(padT - 3) })).textContent = fmtY(hi);
   svg.appendChild(mk('text', { class: 'perf-axis', x: String(padL), y: String(H - padB + 12) })).textContent = fmtY(lo);
   const dRange = mk('text', { class: 'perf-axis perf-axis-end', x: String(W - padR), y: String(H - padB + 12) });
-  dRange.textContent = `${fmtChartDate(t0)} – ${type === 'candle' ? fmtChartDate(t1) : 'today'}`;
+  dRange.textContent = `${shortDate(t0)} – ${type === 'candle' ? shortDate(t1) : 'today'}`;
   svg.appendChild(dRange);
 
   const guide = mk('line', { class: 'perf-guide', x1: '0', y1: String(padT), x2: '0', y2: String(H - padB), opacity: '0' });
@@ -1049,7 +1060,7 @@ function renderPerformanceChart(container, series) {
     const pnl = v - c;
     const pct = c > 0 ? (pnl / c) * 100 : null;
     readout.replaceChildren(
-      el('span', { class: 'perf-ro-date', textContent: p.now ? 'Today' : fmtChartDate(p.t) }),
+      el('span', { class: 'perf-ro-date', textContent: p.now ? 'Today' : shortDate(p.t) }),
       el('span', { class: 'perf-ro-val', textContent: usd.format(v) }),
       pnlNode(pnl, pct),
     );
@@ -1099,9 +1110,6 @@ function renderPerformanceChart(container, series) {
   lastPerfRender = { container, series };
 }
 
-function fmtChartDate(t) {
-  return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
 
 // Open auctions aren't realized lots, so they sit OUTSIDE the position — a
 // quiet "what's pending" line: total bids + the shares they'd buy at today's
@@ -1196,9 +1204,9 @@ function timeRemaining(endsAt) {
   const ms = new Date(endsAt).getTime() - Date.now();
   if (Number.isNaN(ms)) return '';
   if (ms <= 0) return 'ended';
-  const days = Math.floor(ms / 86_400_000);
-  const hours = Math.floor((ms % 86_400_000) / 3_600_000);
-  const minutes = Math.floor((ms % 3_600_000) / 60_000);
+  const days = Math.floor(ms / DAY_MS);
+  const hours = Math.floor((ms % DAY_MS) / HOUR_MS);
+  const minutes = Math.floor((ms % HOUR_MS) / MINUTE_MS);
   if (days >= 1) return `${days}d ${hours}h left`;
   if (hours >= 1) return `${hours}h ${minutes}m left`;
   return `${minutes}m left`;
@@ -1576,7 +1584,7 @@ function renderEndedItem(item) {
     priceText: usd.format(item.finalPriceUsd),
     stats: [
       bidsText(item.finalBidCount),
-      endedDate ? `Ended ${endedDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : null,
+      endedDate ? `Ended ${shortDate(endedDate)}` : null,
     ],
     split: atEnd ? item.endTimeSplit : item.split,
   });

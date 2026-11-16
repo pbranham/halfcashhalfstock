@@ -1,5 +1,16 @@
 import { imageGallery } from '/gallery.js';
-import { ADMIN_TOKEN_KEY, ebayItemUrl, endedEbayUrl, escapeHtml, hiResImg, postAdminAction } from '/shared.js';
+import {
+  ADMIN_TOKEN_KEY,
+  DAY_MS,
+  ebayItemUrl,
+  endedEbayUrl,
+  escapeHtml,
+  hiResImg,
+  HOUR_MS,
+  MINUTE_MS,
+  postAdminAction,
+  shortDate,
+} from '/shared.js';
 
 const params = new URLSearchParams(window.location.search);
 const itemId = params.get('id') || '';
@@ -428,14 +439,11 @@ syncZoomButtons();
 // value at or below ideal range/targetCount.
 function generateTimeLabels(tMin, tMax, chartWidth = 900) {
   const range = tMax - tMin;
-  const minuteMs = 60_000;
-  const hourMs = 3_600_000;
-  const dayMs = 86_400_000;
   const targetCount = chartWidth < 500 ? 5 : chartWidth < 800 ? 7 : 9;
   const ladder = [
-    minuteMs, 2 * minuteMs, 5 * minuteMs, 10 * minuteMs, 15 * minuteMs, 30 * minuteMs,
-    hourMs, 2 * hourMs, 3 * hourMs, 6 * hourMs, 12 * hourMs,
-    dayMs, 2 * dayMs, 3 * dayMs, 7 * dayMs, 14 * dayMs, 30 * dayMs,
+    MINUTE_MS, 2 * MINUTE_MS, 5 * MINUTE_MS, 10 * MINUTE_MS, 15 * MINUTE_MS, 30 * MINUTE_MS,
+    HOUR_MS, 2 * HOUR_MS, 3 * HOUR_MS, 6 * HOUR_MS, 12 * HOUR_MS,
+    DAY_MS, 2 * DAY_MS, 3 * DAY_MS, 7 * DAY_MS, 14 * DAY_MS, 30 * DAY_MS,
   ];
   // Smallest ladder step that fits within the target count. We iterate from
   // finest to coarsest and pick the first that keeps the label count under
@@ -447,7 +455,7 @@ function generateTimeLabels(tMin, tMax, chartWidth = 900) {
       break;
     }
   }
-  const useDateFormat = stepMs >= 12 * hourMs;
+  const useDateFormat = stepMs >= 12 * HOUR_MS;
 
   const start = new Date(tMin);
   if (useDateFormat) {
@@ -488,9 +496,9 @@ function computeVolumeBuckets(placementTimestamps, tMin, tMax, chartWidth) {
   const idealBucketMs = range / targetBarCount;
   const ladder = [
     1000, 5000, 10_000, 30_000,
-    60_000, 5 * 60_000, 10 * 60_000, 15 * 60_000, 30 * 60_000,
-    60 * 60_000, 2 * 60 * 60_000, 4 * 60 * 60_000, 12 * 60 * 60_000,
-    24 * 60 * 60_000, 2 * 24 * 60 * 60_000, 7 * 24 * 60 * 60_000,
+    MINUTE_MS, 5 * MINUTE_MS, 10 * MINUTE_MS, 15 * MINUTE_MS, 30 * MINUTE_MS,
+    HOUR_MS, 2 * HOUR_MS, 4 * HOUR_MS, 12 * HOUR_MS,
+    DAY_MS, 2 * DAY_MS, 7 * DAY_MS,
   ];
   let bucketMs = ladder[ladder.length - 1];
   for (const s of ladder) {
@@ -516,16 +524,13 @@ function computeVolumeBuckets(placementTimestamps, tMin, tMax, chartWidth) {
 // opened); 'snipe' mode reads "… 1h · 10m · 1m · end" (time remaining).
 function generateLogTimeLabels(tMin, tMax, mode) {
   const range = tMax - tMin;
-  const minuteMs = 60_000;
-  const hourMs = 3_600_000;
-  const dayMs = 86_400_000;
   const ladder = [
-    { ms: minuteMs, label: '1m' },
-    { ms: 10 * minuteMs, label: '10m' },
-    { ms: hourMs, label: '1h' },
-    { ms: 6 * hourMs, label: '6h' },
-    { ms: dayMs, label: '1d' },
-    { ms: 7 * dayMs, label: '1w' },
+    { ms: MINUTE_MS, label: '1m' },
+    { ms: 10 * MINUTE_MS, label: '10m' },
+    { ms: HOUR_MS, label: '1h' },
+    { ms: 6 * HOUR_MS, label: '6h' },
+    { ms: DAY_MS, label: '1d' },
+    { ms: 7 * DAY_MS, label: '1w' },
   ];
   const labels = [];
   for (const tick of ladder) {
@@ -556,7 +561,7 @@ function renderChartSourceNote(chartMode, listing, maxDots) {
   let text = '';
   if (chartMode === 'complete') {
     const when = new Date(listing.bidsImportedAt);
-    const dateStr = when.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const dateStr = shortDate(when);
     text = `Complete bid history from eBay · imported ${dateStr}`;
   } else if (chartMode === 'maxbids') {
     text = 'Built from each bidder’s highest bid — the steps between bids are estimated';

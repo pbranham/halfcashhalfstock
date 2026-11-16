@@ -122,7 +122,8 @@ public/
   lightbox.js                openImageLightbox: shared fullscreen modal
   gallery.js                 imageGallery: the one tile/item-page gallery (keyboard option)
   shared.js                  helpers every page imports: el, escapeHtml, loadChoice/saveChoice,
-                             hiResImg, ebayItemUrl/endedEbayUrl, plural, postAdminAction, ADMIN_TOKEN_KEY
+                             hiResImg, ebayItemUrl/endedEbayUrl, plural, postAdminAction, ADMIN_TOKEN_KEY,
+                             shortDate, MINUTE_MS/HOUR_MS/DAY_MS
   *.css       theme-init.js
 test/
   one *.test.ts per src/ module; vitest, no jsdom
