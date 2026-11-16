@@ -238,6 +238,14 @@ function buildDeps(
   };
 }
 
+// Routes that read Postgres answer 503 `{error: code}` when no database is
+// configured; on true, `deps.db` is narrowed to a Pool.
+function hasDb(deps: Deps, res: Response, code: string): deps is Deps & { db: Pool } {
+  if (deps.db) return true;
+  res.status(503).json({ error: code, detail: 'database not configured' });
+  return false;
+}
+
 // An item id from a query/body field, trimmed and checked against
 // ITEM_ID_RE. On a bad one, answers 400 naming `field` and returns null.
 function validItemId(res: Response, raw: unknown, field: string): string | null {
@@ -638,10 +646,7 @@ export function createApp(deps: Deps): express.Express {
   });
 
   app.get('/api/item', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
-    if (!deps.db) {
-      res.status(503).json({ error: 'item_unavailable', detail: 'database not configured' });
-      return;
-    }
+    if (!hasDb(deps, res, 'item_unavailable')) return;
     const itemId = validItemId(res, req.query.id, 'id');
     if (!itemId) return;
     try {
@@ -671,10 +676,7 @@ export function createApp(deps: Deps): express.Express {
   });
 
   app.get('/api/history', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
-    if (!deps.db) {
-      res.status(503).json({ error: 'history_unavailable', detail: 'database not configured' });
-      return;
-    }
+    if (!hasDb(deps, res, 'history_unavailable')) return;
     const itemId = validItemId(res, req.query.itemId, 'itemId');
     if (!itemId) return;
     try {
@@ -687,10 +689,7 @@ export function createApp(deps: Deps): express.Express {
   });
 
   app.get('/api/ohlc', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
-    if (!deps.db) {
-      res.status(503).json({ error: 'ohlc_unavailable', detail: 'database not configured' });
-      return;
-    }
+    if (!hasDb(deps, res, 'ohlc_unavailable')) return;
     const ticker = typeof req.query.ticker === 'string' ? req.query.ticker.trim().toUpperCase() : '';
     const daysStr = typeof req.query.days === 'string' ? req.query.days.trim() : '7';
     if (!ticker || !TICKER_RE.test(ticker)) {
@@ -714,10 +713,7 @@ export function createApp(deps: Deps): express.Express {
 
   if (deps.config.ENABLE_DEBUG_ENDPOINTS) {
     app.get('/api/debug/ohlc-stats', apiLimiter, async (_req: Request, res: Response, next: NextFunction) => {
-      if (!deps.db) {
-        res.status(503).json({ error: 'debug_unavailable', detail: 'database not configured' });
-        return;
-      }
+      if (!hasDb(deps, res, 'debug_unavailable')) return;
       try {
         const stats = await readOhlcStats(deps.db);
         const queueStatus = deps.tickerQueue?.getStatus() ?? null;
@@ -749,10 +745,7 @@ export function createApp(deps: Deps): express.Express {
   };
 
   app.get('/api/admin/stats', apiLimiter, requireAdminToken, async (req: Request, res: Response, next: NextFunction) => {
-    if (!deps.db) {
-      res.status(503).json({ error: 'stats_unavailable', detail: 'database not configured' });
-      return;
-    }
+    if (!hasDb(deps, res, 'stats_unavailable')) return;
     try {
       const hoursStr = typeof req.query.hours === 'string' ? req.query.hours.trim() : '24';
       const hours = Math.max(1, Math.min(2160, Number.parseInt(hoursStr, 10) || 24));
@@ -887,10 +880,7 @@ export function createApp(deps: Deps): express.Express {
   });
 
   app.post('/api/admin/cleanup', express.json({ limit: '4mb' }), apiLimiter, requireAdminToken, async (req: Request, res: Response, next: NextFunction) => {
-    if (!deps.db) {
-      res.status(503).json({ error: 'cleanup_unavailable', detail: 'database not configured' });
-      return;
-    }
+    if (!hasDb(deps, res, 'cleanup_unavailable')) return;
     try {
       const body = req.body as {
         action?: string;
