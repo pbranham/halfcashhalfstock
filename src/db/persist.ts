@@ -1,6 +1,49 @@
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import type { Listing } from '../ebay/seller.js';
-import type { BidRecord } from '../ebay/trading.js';
+import { normalizeTradingItemId, type BidRecord } from '../ebay/trading.js';
+import { daysAgo, isoOrNull } from '../time.js';
+
+// A pool or a checked-out client inside a transaction — both can run queries.
+type Queryable = Pick<Pool | PoolClient, 'query'>;
+
+// One multi-row INSERT: each row holds its values in `columns` order,
+// numbered $1..$N in turn. `tail` is the ON CONFLICT clause. Returns the
+// number of rows written.
+async function insertRows(
+  q: Queryable,
+  table: string,
+  columns: readonly string[],
+  rows: readonly (readonly unknown[])[],
+  tail: string,
+): Promise<number> {
+  if (rows.length === 0) return 0;
+  const placeholders = rows
+    .map((_, i) => `(${columns.map((__, j) => `$${i * columns.length + j + 1}`).join(', ')})`)
+    .join(', ');
+  const res = await q.query(
+    `INSERT INTO ${table} (${columns.join(', ')})
+     VALUES ${placeholders}
+     ${tail}`,
+    rows.flat(),
+  );
+  return res.rowCount ?? 0;
+}
+
+// A bid we can store: it has a time and a finite, non-negative amount.
+function isStorableBid(b: { bidTime: string; bidAmount: number }): boolean {
+  return Boolean(b.bidTime) && Number.isFinite(b.bidAmount) && b.bidAmount >= 0;
+}
+
+// Insert active bid rows (duplicates on item/time/bidder are skipped).
+function insertBidRows(q: Queryable, itemId: string, bids: readonly BidRecord[]): Promise<number> {
+  return insertRows(
+    q,
+    'bids',
+    ['item_id', 'bidder', 'bid_time', 'bid_amount_usd'],
+    bids.map((b) => [itemId, b.bidder || 'unknown', b.bidTime, b.bidAmount]),
+    'ON CONFLICT (item_id, bid_time, bidder) DO NOTHING',
+  );
+}
 
 export interface SnapshotPersistInput {
   listing: Listing;
@@ -89,27 +132,7 @@ export async function insertBids(
   itemId: string,
   bids: readonly BidRecord[],
 ): Promise<number> {
-  const valid = bids.filter(
-    (b) => b.bidTime && Number.isFinite(b.bidAmount) && b.bidAmount >= 0,
-  );
-  if (valid.length === 0) return 0;
-
-  const values: unknown[] = [];
-  const placeholders = valid
-    .map((bid, i) => {
-      const base = i * 4;
-      values.push(itemId, bid.bidder || 'unknown', bid.bidTime, bid.bidAmount);
-      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`;
-    })
-    .join(', ');
-
-  const res = await pool.query(
-    `INSERT INTO bids (item_id, bidder, bid_time, bid_amount_usd)
-     VALUES ${placeholders}
-     ON CONFLICT (item_id, bid_time, bidder) DO NOTHING`,
-    values,
-  );
-  return res.rowCount ?? 0;
+  return insertBidRows(pool, itemId, bids.filter(isStorableBid));
 }
 
 export async function reconcileBids(
@@ -201,21 +224,13 @@ export async function reconcileItemBids(
   finalPriceUsd: number;
   bidCount: number;
 }> {
-  const valid = bids.filter(
-    (b) => b.bidTime && Number.isFinite(b.bidAmount) && b.bidAmount >= 0,
-  );
+  const valid = bids.filter(isStorableBid);
   // Guard: never let an empty/failed parse wipe good data UNLESS the caller
   // has positive evidence that the auction is truly at zero active bids.
   if (valid.length === 0 && !options.knownZeroBids) {
     throw new Error('reconcileItemBids: refusing to replace bids with zero valid rows');
   }
-  const validRetracted = retracted.filter(
-    (b) =>
-      b.bidTime &&
-      b.removedAt &&
-      Number.isFinite(b.bidAmount) &&
-      b.bidAmount >= 0,
-  );
+  const validRetracted = retracted.filter((b) => b.removedAt && isStorableBid(b));
   const finalPriceUsd = valid.length > 0
     ? valid.reduce((max, b) => (b.bidAmount > max ? b.bidAmount : max), 0)
     : (options.zeroBidsPriceUsd ?? 0);
@@ -226,42 +241,14 @@ export async function reconcileItemBids(
     await client.query('BEGIN');
     const del = await client.query('DELETE FROM bids WHERE item_id = $1', [itemId]);
 
-    let ins = { rowCount: 0 as number | null };
-    if (valid.length > 0) {
-      const values: unknown[] = [];
-      const placeholders = valid
-        .map((bid, i) => {
-          const base = i * 4;
-          values.push(itemId, bid.bidder || 'unknown', bid.bidTime, bid.bidAmount);
-          return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`;
-        })
-        .join(', ');
-      ins = await client.query(
-        `INSERT INTO bids (item_id, bidder, bid_time, bid_amount_usd)
-         VALUES ${placeholders}
-         ON CONFLICT (item_id, bid_time, bidder) DO NOTHING`,
-        values,
-      );
-    }
-
-    let retractedInserted = 0;
-    if (validRetracted.length > 0) {
-      const rValues: unknown[] = [];
-      const rPlaceholders = validRetracted
-        .map((bid, i) => {
-          const base = i * 5;
-          rValues.push(itemId, bid.bidder || 'unknown', bid.bidTime, bid.bidAmount, bid.removedAt);
-          return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`;
-        })
-        .join(', ');
-      const rIns = await client.query(
-        `INSERT INTO bids (item_id, bidder, bid_time, bid_amount_usd, removed_at)
-         VALUES ${rPlaceholders}
-         ON CONFLICT (item_id, bid_time, bidder) DO UPDATE SET removed_at = EXCLUDED.removed_at`,
-        rValues,
-      );
-      retractedInserted = rIns.rowCount ?? 0;
-    }
+    const inserted = await insertBidRows(client, itemId, valid);
+    const retractedInserted = await insertRows(
+      client,
+      'bids',
+      ['item_id', 'bidder', 'bid_time', 'bid_amount_usd', 'removed_at'],
+      validRetracted.map((b) => [itemId, b.bidder || 'unknown', b.bidTime, b.bidAmount, b.removedAt]),
+      'ON CONFLICT (item_id, bid_time, bidder) DO UPDATE SET removed_at = EXCLUDED.removed_at',
+    );
 
     // bids_imported_at marks "a complete viewbids timeline was imported for
     // this item" — the item page's data-source label keys off it. (This
@@ -276,7 +263,7 @@ export async function reconcileItemBids(
     await client.query('COMMIT');
     return {
       deleted: del.rowCount ?? 0,
-      inserted: ins.rowCount ?? 0,
+      inserted,
       retractedInserted,
       finalPriceUsd,
       bidCount,
@@ -421,7 +408,7 @@ export async function readStuckListings(pool: Pool): Promise<StuckListingRow[]> 
   return res.rows.map((row) => ({
     itemId: row.item_id,
     title: row.title,
-    endsAt: row.ends_at ? row.ends_at.toISOString() : null,
+    endsAt: isoOrNull(row.ends_at),
     lastSeenAt: row.last_seen_at.toISOString(),
     currentPriceUsd: Number(row.current_price_usd),
     currentBidCount: row.current_bid_count,
@@ -525,7 +512,7 @@ export async function readEndedListings(
   pool: Pool,
   sinceDays: number = 14,
 ): Promise<EndedListingRow[]> {
-  const since = new Date(Date.now() - sinceDays * 86_400_000);
+  const since = daysAgo(sinceDays);
   const res = await pool.query<{
     item_id: string;
     seller_id: string;
@@ -553,7 +540,7 @@ export async function readEndedListings(
     imageUrl: row.image_url,
     itemWebUrl: row.item_web_url,
     isAuction: row.is_auction,
-    endsAt: row.ends_at ? row.ends_at.toISOString() : null,
+    endsAt: isoOrNull(row.ends_at),
     endedAt: row.ended_at.toISOString(),
     finalPriceUsd: Number(row.current_price_usd),
     finalBidCount: row.current_bid_count,
@@ -587,8 +574,8 @@ export async function readBidsForItem(pool: Pool, itemId: string): Promise<BidRo
     bidder: row.bidder,
     bidTime: row.bid_time.toISOString(),
     bidAmountUsd: Number(row.bid_amount_usd),
-    firstSeenAt: row.first_seen_at ? row.first_seen_at.toISOString() : null,
-    removedAt: row.removed_at ? row.removed_at.toISOString() : null,
+    firstSeenAt: isoOrNull(row.first_seen_at),
+    removedAt: isoOrNull(row.removed_at),
   }));
 }
 
@@ -657,8 +644,8 @@ export async function readListingDetail(
     imageUrl: row.image_url,
     itemWebUrl: row.item_web_url,
     isAuction: row.is_auction,
-    endedAt: row.ended_at ? row.ended_at.toISOString() : null,
-    endsAt: row.ends_at ? row.ends_at.toISOString() : null,
+    endedAt: isoOrNull(row.ended_at),
+    endsAt: isoOrNull(row.ends_at),
     currentPriceUsd: Number(row.current_price_usd),
     currentBidCount: row.current_bid_count,
     currency: row.currency,
@@ -666,8 +653,8 @@ export async function readListingDetail(
     lastSeenAt: row.last_seen_at.toISOString(),
     additionalImages: Array.isArray(row.additional_images) ? row.additional_images : [],
     descriptionHtml: row.description_html,
-    detailsFetchedAt: row.details_fetched_at ? row.details_fetched_at.toISOString() : null,
-    bidsImportedAt: row.bids_imported_at ? row.bids_imported_at.toISOString() : null,
+    detailsFetchedAt: isoOrNull(row.details_fetched_at),
+    bidsImportedAt: isoOrNull(row.bids_imported_at),
   };
 }
 
@@ -760,7 +747,7 @@ export async function readListingSnapshots(
     observedAt: row.observed_at.toISOString(),
     currentPriceUsd: Number(row.current_price_usd),
     currentBidCount: row.current_bid_count,
-    endsAt: row.ends_at ? row.ends_at.toISOString() : null,
+    endsAt: isoOrNull(row.ends_at),
   }));
 }
 
@@ -921,33 +908,13 @@ export async function bulkInsertOhlcData(
   source: string,
   interval: string = '15m',
 ): Promise<number> {
-  if (candles.length === 0) return 0;
-
-  const values: unknown[] = [];
-  const placeholders = candles
-    .map((candle, i) => {
-      const base = i * 8;
-      values.push(
-        ticker,
-        candle.periodStart,
-        candle.open,
-        candle.high,
-        candle.low,
-        candle.close,
-        source,
-        interval,
-      );
-      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8})`;
-    })
-    .join(', ');
-
-  const res = await pool.query(
-    `INSERT INTO ohlc_data (ticker, period_start, open, high, low, close, source, interval)
-     VALUES ${placeholders}
-     ON CONFLICT (ticker, period_start, interval) DO NOTHING`,
-    values,
+  return insertRows(
+    pool,
+    'ohlc_data',
+    ['ticker', 'period_start', 'open', 'high', 'low', 'close', 'source', 'interval'],
+    candles.map((c) => [ticker, c.periodStart, c.open, c.high, c.low, c.close, source, interval]),
+    'ON CONFLICT (ticker, period_start, interval) DO NOTHING',
   );
-  return res.rowCount ?? 0;
 }
 
 export interface OhlcIntervalStats {
@@ -984,8 +951,8 @@ export async function readOhlcStats(pool: Pool): Promise<OhlcStats> {
     if (!stats[row.ticker]) stats[row.ticker] = {};
     stats[row.ticker]![row.interval] = {
       count: Number(row.count),
-      oldest: row.oldest ? row.oldest.toISOString() : null,
-      newest: row.newest ? row.newest.toISOString() : null,
+      oldest: isoOrNull(row.oldest),
+      newest: isoOrNull(row.newest),
     };
   }
   return stats;
@@ -993,8 +960,8 @@ export async function readOhlcStats(pool: Pool): Promise<OhlcStats> {
 
 export async function purgeOldOhlcData(pool: Pool): Promise<number> {
   const now = new Date();
-  const purgeAfter15m = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
-  const purgeAfter1m = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
+  const purgeAfter15m = daysAgo(14, now);
+  const purgeAfter1m = daysAgo(5, now);
 
   const result = await pool.query(
     `DELETE FROM ohlc_data
@@ -1021,22 +988,13 @@ export async function upsertFeedback(
   pool: Pool,
   rows: readonly FeedbackRow[],
 ): Promise<number> {
-  if (rows.length === 0) return 0;
-  const values: unknown[] = [];
-  const placeholders = rows
-    .map((r, i) => {
-      const base = i * 5;
-      values.push(r.itemId, r.commentingUser, r.commentType, r.commentText, r.commentTime);
-      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`;
-    })
-    .join(', ');
-  const res = await pool.query(
-    `INSERT INTO feedback (item_id, commenting_user, comment_type, comment_text, comment_time)
-     VALUES ${placeholders}
-     ON CONFLICT (item_id, commenting_user, comment_time) DO NOTHING`,
-    values,
+  return insertRows(
+    pool,
+    'feedback',
+    ['item_id', 'commenting_user', 'comment_type', 'comment_text', 'comment_time'],
+    rows.map((r) => [r.itemId, r.commentingUser, r.commentType, r.commentText, r.commentTime]),
+    'ON CONFLICT (item_id, commenting_user, comment_time) DO NOTHING',
   );
-  return res.rowCount ?? 0;
 }
 
 export async function readFeedbackForItem(
@@ -1074,9 +1032,7 @@ export async function readNumericToCanonicalIdMap(
   const res = await pool.query<{ item_id: string }>(`SELECT item_id FROM listings`);
   const map = new Map<string, string>();
   for (const row of res.rows) {
-    const parts = row.item_id.split('|');
-    const numeric = parts.length >= 2 && parts[1] ? parts[1] : row.item_id;
-    map.set(numeric, row.item_id);
+    map.set(normalizeTradingItemId(row.item_id), row.item_id);
   }
   return map;
 }
