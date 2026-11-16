@@ -1,5 +1,6 @@
 import type { Pool } from 'pg';
 import { errorMessage, type Logger } from './log.js';
+import { createHeartbeat, logPassIfNotable, startBackgroundLoop } from './background-loop.js';
 import { getFeedbackPage, type FeedbackEntry } from './ebay/trading.js';
 import { readNumericToCanonicalIdMap, upsertFeedback, type FeedbackRow } from './db/persist.js';
 
@@ -105,14 +106,10 @@ function toRow(e: FeedbackEntry, idMap: Map<string, string>): FeedbackRow | null
 
 // Hourly background sweep, prod-gated by the caller (dev and prod share the
 // database — a second sweeper would double Trading calls without adding
-// coverage). Mirrors startBackgroundListingPoll: immediate first tick,
-// single-flight, survives tick errors, returns a stop function.
-// Heartbeat for /api/health — last completed sweep tick (ms epoch), null
-// if the sweep has never run in this process.
-let lastSweepAt: number | null = null;
-export function getFeedbackSweepHeartbeat(): number | null {
-  return lastSweepAt;
-}
+// coverage). Runs on the shared background-loop scaffold.
+const heartbeat = createHeartbeat();
+// Heartbeat for /api/health — null if the sweep never ran in this process.
+export const getFeedbackSweepHeartbeat = heartbeat.get;
 
 export function startFeedbackSweep(opts: {
   pool: Pool;
@@ -121,44 +118,21 @@ export function startFeedbackSweep(opts: {
   log: Logger;
   intervalMs?: number;
 }): () => void {
-  const intervalMs = opts.intervalMs ?? 60 * 60 * 1000;
   const log = opts.log.child({ component: 'feedback-sweep' });
-  let stopping = false;
-  let inflight = false;
-
-  const tick = async (): Promise<void> => {
-    if (stopping || inflight) return;
-    inflight = true;
-    try {
+  return startBackgroundLoop({
+    name: 'feedback sweep',
+    log,
+    intervalMs: opts.intervalMs ?? 60 * 60 * 1000,
+    heartbeat,
+    startFields: { sellers: opts.sellerIds },
+    tick: async () => {
       const { results } = await sweepFeedbackOnce({
         pool: opts.pool,
         userToken: opts.userToken,
         sellerIds: opts.sellerIds,
         log,
       });
-      const inserted = results.reduce((sum, r) => sum + r.inserted, 0);
-      if (inserted > 0 || results.some((r) => r.error)) {
-        log.info('feedback sweep', { results });
-      }
-    } catch (err) {
-      const message = errorMessage(err);
-      log.warn('feedback sweep cycle failed', { error: message });
-    } finally {
-      lastSweepAt = Date.now();
-      inflight = false;
-    }
-  };
-
-  void tick();
-  const timer = setInterval(() => {
-    void tick();
-  }, intervalMs);
-  timer.unref();
-  log.info('feedback sweep started', { intervalMs, sellers: opts.sellerIds });
-
-  return () => {
-    stopping = true;
-    clearInterval(timer);
-    log.info('feedback sweep stopped');
-  };
+      logPassIfNotable(log, 'feedback sweep', results);
+    },
+  });
 }

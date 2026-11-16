@@ -1,4 +1,5 @@
-import { errorMessage, type Logger } from './log.js';
+import type { Logger } from './log.js';
+import { createHeartbeat, startBackgroundLoop } from './background-loop.js';
 import type { Listing } from './ebay/seller.js';
 
 export interface BackgroundListingPollOptions {
@@ -25,47 +26,22 @@ export interface BackgroundListingPollOptions {
 // seller, well under the 5,000/day free-tier cap. Single-flight protection
 // on the underlying listings cache (DbBackedCache + adaptive-seller fetch)
 // means an in-flight snapshot request can't double-poll alongside this.
-// Heartbeat for /api/health: when the poll last completed a tick (ms epoch),
-// or null if it has never run in this process (e.g. dev, where the poll is
-// disabled because prod owns the shared DB).
-let lastTickAt: number | null = null;
-export function getListingPollHeartbeat(): number | null {
-  return lastTickAt;
-}
+const heartbeat = createHeartbeat();
+// Heartbeat for /api/health: null when the poll has never run in this
+// process (e.g. dev, where the poll is disabled because prod owns the DB).
+export const getListingPollHeartbeat = heartbeat.get;
 
 export function startBackgroundListingPoll(
   opts: BackgroundListingPollOptions,
 ): () => void {
-  const intervalMs = opts.intervalMs ?? 30_000;
-  const log = opts.log.child({ component: 'listing-poll' });
-  let stopping = false;
-  let inflight = false;
-
-  const tick = async (): Promise<void> => {
-    if (stopping || inflight) return; // skip overlap; the next tick will pick up
-    inflight = true;
-    try {
+  return startBackgroundLoop({
+    name: 'background listing poll',
+    log: opts.log.child({ component: 'listing-poll' }),
+    intervalMs: opts.intervalMs ?? 30_000,
+    heartbeat,
+    tick: async () => {
       const listings = await opts.fetchListings();
       await opts.process(listings);
-    } catch (err) {
-      const message = errorMessage(err);
-      log.warn('background poll cycle failed', { error: message });
-    } finally {
-      lastTickAt = Date.now();
-      inflight = false;
-    }
-  };
-
-  // Fire immediately so the first refresh isn't delayed by intervalMs.
-  void tick();
-  const timer = setInterval(() => {
-    void tick();
-  }, intervalMs);
-  log.info('background listing poll started', { intervalMs });
-
-  return () => {
-    stopping = true;
-    clearInterval(timer);
-    log.info('background listing poll stopped');
-  };
+    },
+  });
 }

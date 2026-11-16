@@ -93,6 +93,7 @@ src/
   seller-poll.ts             createAdaptiveSellerFetch: sleep sellers with 0 listings
   item-details-enricher.ts   fire-and-forget gallery + description backfill
   reconcile-finals.ts        reconcileFinalsForItems: GetItem → updateEndedListingFinals
+  background-loop.ts         startBackgroundLoop: the one immediate-tick/single-flight/stop scaffold + heartbeat
   listing-poll.ts            startBackgroundListingPoll: always-on 30s loop (prod only)
   feedback-sweep.ts          hourly GetFeedback sweep → feedback table (prod only)
   ohlc-refresh.ts            startDailyOhlcRefresh: daily 1d-OHLC pull from Yahoo (any env w/ DB)
