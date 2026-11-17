@@ -143,7 +143,7 @@ export class RequestStatsCollector {
   }
 
   private endSession(session: ActiveSession): void {
-    const hour = new Date(Math.floor(session.lastSeen / 3_600_000) * 3_600_000);
+    const hour = new Date(Math.floor(session.lastSeen / HOUR_MS) * HOUR_MS);
     const key = hour.toISOString();
     const durationSeconds = Math.max(0, (session.lastSeen - session.firstSeen) / 1000);
     const isBounce = session.requestCount === 1;
@@ -224,7 +224,7 @@ export class RequestStatsCollector {
     const rows: { hash: string; hour: Date }[] = [];
     for (const record of records) {
       if (!record.ip) continue;
-      const hour = new Date(Math.floor(record.startTime / 3_600_000) * 3_600_000);
+      const hour = new Date(Math.floor(record.startTime / HOUR_MS) * HOUR_MS);
       const hash = hashIp(record.ip);
       const key = `${hash}|${hour.toISOString()}`;
       if (seen.has(key)) continue;

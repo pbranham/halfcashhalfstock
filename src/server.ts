@@ -554,7 +554,7 @@ export function createApp(deps: Deps): express.Express {
     fetchedAt: number;
   }
   const TICKER_LOGO_TTL_MS = DAY_MS;
-  const TICKER_LOGO_BROWSER_MAX_AGE_S = DAY_MS / 1000;
+  const BROWSER_CACHE_MAX_AGE_S = DAY_MS / 1000;
   const tickerLogoCache = new Map<string, TickerLogoCacheEntry>();
   const tickerLogoInflight = new Map<string, Promise<TickerLogoCacheEntry>>();
 
@@ -575,7 +575,7 @@ export function createApp(deps: Deps): express.Express {
         res
           .status(200)
           .set('Content-Type', entry.contentType)
-          .set('Cache-Control', `public, max-age=${TICKER_LOGO_BROWSER_MAX_AGE_S}, immutable`)
+          .set('Cache-Control', `public, max-age=${BROWSER_CACHE_MAX_AGE_S}, immutable`)
           .send(entry.bytes);
       };
 
@@ -1336,7 +1336,7 @@ export function createApp(deps: Deps): express.Express {
     lastModified: true,
     setHeaders: (res, filePath) => {
       if (/\.(png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf)$/i.test(filePath)) {
-        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.setHeader('Cache-Control', `public, max-age=${BROWSER_CACHE_MAX_AGE_S}`);
       } else {
         res.setHeader('Cache-Control', 'no-cache');
       }
