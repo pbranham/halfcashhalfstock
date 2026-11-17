@@ -105,6 +105,17 @@ function isSplittablePrice(n: number | null | undefined): n is number {
   return typeof n === 'number' && Number.isFinite(n) && n >= 0;
 }
 
+/** Ended items that cleared (>0 bids) and carry a non-null split in `key`. */
+function endedWithSplit<K extends 'split' | 'endTimeSplit'>(
+  items: EndedListingView[],
+  key: K,
+): (EndedListingView & Record<K, HalfSplit>)[] {
+  return items.filter(
+    (i): i is EndedListingView & Record<K, HalfSplit> =>
+      i[key] !== null && (i.finalBidCount ?? 0) > 0,
+  );
+}
+
 export function composeSnapshot(
   listings: readonly Listing[],
   stock: PriceQuote,
@@ -210,14 +221,8 @@ export function composeSnapshot(
   // Same no-bid exclusion for ended items: an auction that ended at the
   // starting price with zero bids didn't actually clear, so its starting
   // price shouldn't roll into the ended totals.
-  const endedPriced = endedItems.filter(
-    (i): i is EndedListingView & { split: HalfSplit } =>
-      i.split !== null && (i.finalBidCount ?? 0) > 0,
-  );
-  const endedPricedAtEnd = endedItems.filter(
-    (i): i is EndedListingView & { endTimeSplit: HalfSplit } =>
-      i.endTimeSplit !== null && (i.finalBidCount ?? 0) > 0,
-  );
+  const endedPriced = endedWithSplit(endedItems, 'split');
+  const endedPricedAtEnd = endedWithSplit(endedItems, 'endTimeSplit');
 
   return {
     generatedAt: new Date().toISOString(),
