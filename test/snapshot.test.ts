@@ -21,6 +21,12 @@ function listing(overrides: Partial<Listing> = {}): Listing {
   };
 }
 
+/** The one unpriced item has a null split and the priced count is just the other item. */
+function expectUnpricedExcluded(split: unknown, pricedCount: number): void {
+  expect(split).toBeNull();
+  expect(pricedCount).toBe(1);
+}
+
 describe('composeSnapshot', () => {
   it('computes per-item splits and totals', () => {
     const snapshot = composeSnapshot(
@@ -56,8 +62,7 @@ describe('composeSnapshot', () => {
       QUOTE,
     );
     expect(snapshot.items).toHaveLength(2);
-    expect(snapshot.items[1]?.split).toBeNull();
-    expect(snapshot.totals.pricedCount).toBe(1);
+    expectUnpricedExcluded(snapshot.items[1]?.split, snapshot.totals.pricedCount);
     expect(snapshot.totals.bidUsd).toBe(100);
   });
 
@@ -324,8 +329,10 @@ describe('composeSnapshot', () => {
       ],
       new Map([['v1|9', 50]]),
     );
-    expect(snapshot.endedItems[1]?.endTimeSplit).toBeNull();
-    expect(snapshot.endedTotals.pricedAtEndCount).toBe(1);
+    expectUnpricedExcluded(
+      snapshot.endedItems[1]?.endTimeSplit,
+      snapshot.endedTotals.pricedAtEndCount,
+    );
     // Only the v1|9 item contributes to splitAtEnd (100 / 2 / 50 = 1 share).
     expect(snapshot.endedTotals.splitAtEnd).toEqual({ cashUsd: 50, stockUsd: 50, shares: 1 });
   });
