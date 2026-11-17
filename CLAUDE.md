@@ -750,10 +750,10 @@ Stale ⚠ is on `.ticker-meta::before` so it surfaces in both market-open
   in style.css — a new pill class joins those selector lists. Coarse-pointer
   (touch) devices get >=40px hit areas via the `@media (pointer: coarse)`
   block — add new pill classes to that list too.
-- Theme tokens: `:root` holds the dark palette; light lives in the
-  OS-preference block (`:root:not([data-theme='dark'])`) and the manual
-  `[data-theme='light']` override (CSS can't OR a media query with an
-  attribute, so that palette is stated for both). The item + admin page
+- Theme tokens: each themed token in `style.css :root` states its light and dark
+  value ONCE via `light-dark(light, dark)`; `color-scheme` picks the side (OS
+  preference by default, `:root[data-theme='light'|'dark']` overrides it). Add a
+  new themed token there, never a second palette block. The item + admin page
   shell (`.item-page/.admin-body`, `.item-main/.admin-main`) and their
   monospace result boxes are shared rules in style.css.
 - Sort control is pills on desktop, a native `<select>` under 600px —

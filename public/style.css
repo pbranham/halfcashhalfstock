@@ -1,29 +1,21 @@
 :root {
+  /* Each themed token states its light and dark value ONCE via light-dark();
+     color-scheme picks the side: the OS preference by default, or the manual
+     override below. */
   color-scheme: dark light;
-  --bg: #0c0e14;
-  --bg-elev: #161922;
-  --bg-card: #1d2130;
-  --fg: #e9ecf1;
-  --fg-muted: #8b93a7;
+  --bg: light-dark(#f7f8fb, #0c0e14);
+  --bg-elev: light-dark(#ffffff, #161922);
+  --bg-card: light-dark(#ffffff, #1d2130);
+  --fg: light-dark(#111827, #e9ecf1);
+  --fg-muted: light-dark(#5b6478, #8b93a7);
   --accent: #5cdb95;
-  --accent-soft: #5cdb9533;
+  --accent-soft: light-dark(#5cdb951a, #5cdb9533);
   --warn: #f5b14a;
-  --border: #262b3a;
-  --shadow: 0 1px 0 rgba(255, 255, 255, 0.04), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --border: light-dark(#e5e7ef, #262b3a);
+  --shadow:
+    0 1px 0 light-dark(rgba(0, 0, 0, 0.02), rgba(255, 255, 255, 0.04)),
+    0 8px 24px light-dark(rgba(15, 23, 42, 0.06), rgba(0, 0, 0, 0.35));
   --radius: 12px;
-}
-
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme='dark']) {
-    --bg: #f7f8fb;
-    --bg-elev: #ffffff;
-    --bg-card: #ffffff;
-    --fg: #111827;
-    --fg-muted: #5b6478;
-    --border: #e5e7ef;
-    --accent-soft: #5cdb951a;
-    --shadow: 0 1px 0 rgba(0, 0, 0, 0.02), 0 8px 24px rgba(15, 23, 42, 0.06);
-  }
 }
 
 /* Manual theme override via brand-icon click (highest precedence) */
@@ -33,14 +25,6 @@
 
 :root[data-theme='light'] {
   color-scheme: light;
-  --bg: #f7f8fb;
-  --bg-elev: #ffffff;
-  --bg-card: #ffffff;
-  --fg: #111827;
-  --fg-muted: #5b6478;
-  --border: #e5e7ef;
-  --accent-soft: #5cdb951a;
-  --shadow: 0 1px 0 rgba(0, 0, 0, 0.02), 0 8px 24px rgba(15, 23, 42, 0.06);
 }
 
 * {
