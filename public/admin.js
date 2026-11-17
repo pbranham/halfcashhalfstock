@@ -1,4 +1,4 @@
-import { ADMIN_TOKEN_KEY, endedEbayUrl, escapeHtml, formatUsdOrDash, plural, postAdminAction } from '/shared.js';
+import { ADMIN_TOKEN_KEY, endedEbayUrl, escapeHtml, formatUsd, formatUsdOrDash, plural, postAdminAction } from '/shared.js';
 const REFRESH_INTERVAL_MS = 30_000;
 const LIVE_REFRESH_INTERVAL_MS = 5_000;
 
@@ -604,7 +604,7 @@ async function recoveryFetch(action, extraBody = {}) {
       const lines = (data.results ?? []).map((r) => {
         if (r.error) return `${r.itemId}: error — ${r.error}`;
         const flag = r.updated ? '✓ updated' : r.willUpdate ? '→ would update' : r.eligible ? 'match' : `skip (${r.listingStatus ?? r.ack ?? '?'}${r.currency && r.currency !== 'USD' ? ' ' + r.currency : ''})`;
-        return `${flag}  ${formatUsdOrDash(r.dbPrice)}→${formatUsdOrDash(r.apiPrice)}  bids ${fmt(r.dbBidCount)}→${fmt(r.apiBidCount)}  ${r.title ?? r.itemId}`;
+        return `${flag}  ${formatUsdOrDash(r.dbPrice, '$—')}→${formatUsdOrDash(r.apiPrice, '$—')}  bids ${fmt(r.dbBidCount)}→${fmt(r.apiBidCount)}  ${r.title ?? r.itemId}`;
       });
       const header = `Reconcile final price/bids (${data.mode}) — scanned ${data.scanned}${data.truncated ? ' (capped)' : ''}, updated ${data.updated}:`;
       recoveryResult.textContent = `${header}\n${lines.join('\n')}`;
@@ -747,7 +747,7 @@ async function importViewbidsHtml(itemId, html, btn, statusCell) {
     const data = await response.json();
     if (data.status === 'imported') {
       statusCell.innerHTML = statusBadge('imported');
-      btn.textContent = `Imported (${data.bidCount} bids, $${Number(data.finalPriceUsd).toFixed(2)})`;
+      btn.textContent = `Imported (${data.bidCount} bids, ${formatUsd(Number(data.finalPriceUsd))})`;
     } else {
       btn.disabled = false;
       btn.textContent = 'Retry import';
@@ -784,7 +784,7 @@ if (reconcileBidsBtn) {
         const viewSrcUrl = `view-source:${bidUrl}`;
         html += `<tr>
           <td style="padding: 0.3rem; vertical-align: top;"><a href="${escapeHtml(itemUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(row.title || '')}</a></td>
-          <td class="reconcile-status" style="padding: 0.3rem; vertical-align: top; white-space: nowrap;"><a href="${escapeHtml(bidUrl)}" target="_blank" rel="noopener noreferrer">$${Number(row.currentPriceUsd).toFixed(2)} · ${row.currentBidCount} bids</a></td>
+          <td class="reconcile-status" style="padding: 0.3rem; vertical-align: top; white-space: nowrap;"><a href="${escapeHtml(bidUrl)}" target="_blank" rel="noopener noreferrer">${formatUsd(Number(row.currentPriceUsd))} · ${row.currentBidCount} bids</a></td>
           <td style="padding: 0.3rem; vertical-align: top; white-space: nowrap;"><button type="button" class="admin-btn copy-vs-btn" data-vs-url="${escapeHtml(viewSrcUrl)}">Copy view-source URL</button></td>
         </tr>
         <tr data-fallback-for="${escapeHtml(row.itemId)}">

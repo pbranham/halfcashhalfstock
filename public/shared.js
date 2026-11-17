@@ -98,9 +98,9 @@ const usdFormat = new Intl.NumberFormat(undefined, { style: 'currency', currency
 export function formatUsd(n) {
   return usdFormat.format(n);
 }
-// Same, but "—" when there is no amount.
-export function formatUsdOrDash(n) {
-  return n === null || n === undefined ? '—' : formatUsd(n);
+// Same, but `dash` (default "—") when there is no amount.
+export function formatUsdOrDash(n, dash = '—') {
+  return n === null || n === undefined ? dash : formatUsd(n);
 }
 
 // A date as the short "May 14" form (viewer's locale).
