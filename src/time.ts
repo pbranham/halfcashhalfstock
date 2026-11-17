@@ -1,4 +1,4 @@
-// Durations and date helpers every module shares.
+// Durations (from shared-module) and date helpers every module shares.
 import { DAY_MS, HOUR_MS, MINUTE_MS } from './shared-module.js';
 
 export { MINUTE_MS, HOUR_MS, DAY_MS };

@@ -59,7 +59,7 @@ import { composeSnapshot, type Snapshot } from './snapshot.js';
 import { maskBids, maskFeedback } from './anon.js';
 import { TickerQueue } from './ticker-queue.js';
 import { RequestStatsCollector } from './request-stats.js';
-import { DAY_MS, daysAgo, HOUR_MS, isoOrNull, msAgo } from './time.js';
+import { DAY_MS, daysAgo, HOUR_MS, isoOrNull, MINUTE_MS, msAgo } from './time.js';
 
 const LISTINGS_TTL_MS = 30_000;
 const PRICE_TTL_MS = 30_000;
@@ -319,7 +319,7 @@ export function createApp(deps: Deps): express.Express {
   });
 
   const apiLimiter = rateLimit({
-    windowMs: 60_000,
+    windowMs: MINUTE_MS,
     limit: 60,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
@@ -554,7 +554,7 @@ export function createApp(deps: Deps): express.Express {
     fetchedAt: number;
   }
   const TICKER_LOGO_TTL_MS = DAY_MS;
-  const TICKER_LOGO_BROWSER_MAX_AGE_S = 24 * 60 * 60;
+  const TICKER_LOGO_BROWSER_MAX_AGE_S = DAY_MS / 1000;
   const tickerLogoCache = new Map<string, TickerLogoCacheEntry>();
   const tickerLogoInflight = new Map<string, Promise<TickerLogoCacheEntry>>();
 

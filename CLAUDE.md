@@ -87,7 +87,8 @@ src/
   config.ts                  zod env schema; resolveEbayTradingUserToken / has*Credentials helpers
   cache.ts                   TtlCache + DbBackedCache (single-flight, stale-fallback, U+0000 strip)
   log.ts                     Logger + errorMessage(err)
-  time.ts                    MINUTE_MS / HOUR_MS / DAY_MS, daysAgo, isoOrNull
+  time.ts                    re-exports MINUTE_MS / HOUR_MS / DAY_MS; daysAgo, isoOrNull
+  shared-module.ts           loads public/constants.js (TICKER_RE, ITEM_ID_RE, durations) for the server
   snapshot.ts                composeSnapshot — listings + price + math + totals + galleries
   ticker-queue.ts            stock OHLC scheduler with request-windowed scoping
   request-stats.ts           privacy-respecting metrics + UA classifier + sessions
@@ -118,12 +119,15 @@ public/
   index.html  app.js         dashboard (active + recently ended)
   item.html   item.js        per-item audit page (gallery + description iframe)
   admin.html  admin.js       admin dashboard + maintenance actions
+  constants.js               TICKER_RE, ITEM_ID_RE, MINUTE_MS/HOUR_MS/DAY_MS — read by browser AND server
+                             (src/shared-module.ts); the one home for them, no build step
   carousel.js                attachCyclingCarousel: shared clone-pad cycling track
   lightbox.js                openImageLightbox: shared fullscreen modal
   gallery.js                 imageGallery: the one tile/item-page gallery (keyboard option)
   shared.js                  helpers every page imports: el, escapeHtml, loadChoice/saveChoice,
                              hiResImg, ebayItemUrl/endedEbayUrl, plural, postAdminAction, ADMIN_TOKEN_KEY,
-                             shortDate, MINUTE_MS/HOUR_MS/DAY_MS
+                             shortDate, formatUsd/formatUsdOrDash (the one money formatter, visitor's locale),
+                             MINUTE_MS/HOUR_MS/DAY_MS (re-exported from constants.js)
   *.css       theme-init.js
 test/
   one *.test.ts per src/ module; vitest, no jsdom

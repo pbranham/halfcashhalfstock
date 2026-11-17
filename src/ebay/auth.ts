@@ -1,3 +1,5 @@
+import { MINUTE_MS } from '../time.js';
+
 interface TokenResponse {
   access_token: string;
   expires_in: number;
@@ -16,7 +18,7 @@ export interface EbayAuthOptions {
 
 const TOKEN_URL = 'https://api.ebay.com/identity/v1/oauth2/token';
 const DEFAULT_SCOPE = 'https://api.ebay.com/oauth/api_scope';
-const DEFAULT_SAFETY_MS = 60_000;
+const DEFAULT_SAFETY_MS = MINUTE_MS;
 
 export class EbayAuthError extends Error {
   constructor(message: string) {

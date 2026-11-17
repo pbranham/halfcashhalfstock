@@ -178,12 +178,12 @@ export class RequestStatsCollector {
         const message = errorMessage(err);
         console.error('request stats flush failed', { error: message });
       });
-    }, 60_000);
+    }, MINUTE_MS);
     this.flushInterval.unref();
 
     this.sessionCleanupInterval = setInterval(() => {
       this.cleanupSessions();
-    }, 60_000);
+    }, MINUTE_MS);
     this.sessionCleanupInterval.unref();
 
     this.dailyRollupInterval = setInterval(() => {
@@ -519,7 +519,7 @@ export class RequestStatsCollector {
   } {
     this.trimLiveBuffer();
     const now = Date.now();
-    const last1MinCutoff = now - 60_000;
+    const last1MinCutoff = now - MINUTE_MS;
     const last1Min = this.liveBuffer.filter((r) => r.endTime >= last1MinCutoff);
     const uniqueIps = new Set(this.liveBuffer.map((r) => r.ip));
     const uaCounts = countUaClasses(this.liveBuffer);
