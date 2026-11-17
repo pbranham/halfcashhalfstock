@@ -102,7 +102,7 @@ When `DATABASE_URL` is set, the server enables:
 - **OHLC candle storage** in `ohlc_data` — 14d of 15-minute candles plus
   forward 1-minute candles for any ticker the dashboard touches
 
-Schema migrations live under `migrations/` and run sequentially at startup.
+Migrations run at startup (see [Data persistence](#data-persistence)).
 On Render, attach a free Postgres add-on and `DATABASE_URL` is provided
 automatically.
 
@@ -147,6 +147,13 @@ automatically.
 | GET    | `/api/history`             | Bid history for one item. Query: `itemId`. Requires Postgres.                 |
 | GET    | `/api/ohlc`                | OHLC candles for a ticker. Query: `ticker`, `days` (1–30, default 7). Requires Postgres. |
 | GET    | `/api/debug/ohlc-stats`    | Per-ticker per-interval candle counts + queue status. Requires `ENABLE_DEBUG_ENDPOINTS=true`. |
+
+Admin actions not described elsewhere (`docs/ebay-data.md`, `docs/dashboard.md`), all sent as
+`POST /api/admin/cleanup {action, ...}`: `count_removed_bids`, `restore_all_bids` (clear
+`bids.removed_at`), `restore_listings` (clear `listings.ended_at`), `list_stuck_listings`,
+`force_mark_ended` (`itemId`), `delete_environment` / `rename_environment` (`request_stats`
+environment labels), `delete_before` (deletes `request_stats` / `session_stats` / `seen_ips`
+rows older than a date).
 
 `/api/snapshot`, `/api/history`, `/api/ohlc`, and `/api/debug/ohlc-stats` are
 rate-limited at 60 requests/min/IP.
