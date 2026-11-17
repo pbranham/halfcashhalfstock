@@ -36,7 +36,7 @@ src/
     viewbids.ts              public bid-history page scraper + parser (current path)
   prices/
     finnhub.ts, provider.ts, types.ts   Finnhub-only quote chain
-    yahoo.ts                 getHistoricalCandles ONLY (quote endpoint dead; see "Dead code")
+    yahoo.ts                 getHistoricalCandles ONLY (quote endpoint dead; see `docs/dead-ends.md`)
 public/
   index.html  app.js         dashboard (active + recently ended)
   item.html   item.js        per-item audit page (gallery + description iframe)
