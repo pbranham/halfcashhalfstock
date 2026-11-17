@@ -1,4 +1,4 @@
-import { ADMIN_TOKEN_KEY, endedEbayUrl, escapeHtml, plural, postAdminAction } from '/shared.js';
+import { ADMIN_TOKEN_KEY, endedEbayUrl, escapeHtml, formatUsdOrDash, plural, postAdminAction } from '/shared.js';
 const REFRESH_INTERVAL_MS = 30_000;
 const LIVE_REFRESH_INTERVAL_MS = 5_000;
 
@@ -604,7 +604,7 @@ async function recoveryFetch(action, extraBody = {}) {
       const lines = (data.results ?? []).map((r) => {
         if (r.error) return `${r.itemId}: error — ${r.error}`;
         const flag = r.updated ? '✓ updated' : r.willUpdate ? '→ would update' : r.eligible ? 'match' : `skip (${r.listingStatus ?? r.ack ?? '?'}${r.currency && r.currency !== 'USD' ? ' ' + r.currency : ''})`;
-        return `${flag}  $${fmt(r.dbPrice)}→$${fmt(r.apiPrice)}  bids ${fmt(r.dbBidCount)}→${fmt(r.apiBidCount)}  ${r.title ?? r.itemId}`;
+        return `${flag}  ${formatUsdOrDash(r.dbPrice)}→${formatUsdOrDash(r.apiPrice)}  bids ${fmt(r.dbBidCount)}→${fmt(r.apiBidCount)}  ${r.title ?? r.itemId}`;
       });
       const header = `Reconcile final price/bids (${data.mode}) — scanned ${data.scanned}${data.truncated ? ' (capped)' : ''}, updated ${data.updated}:`;
       recoveryResult.textContent = `${header}\n${lines.join('\n')}`;

@@ -1,7 +1,7 @@
 // Durations and date helpers every module shares.
-export const MINUTE_MS = 60 * 1000;
-export const HOUR_MS = 60 * MINUTE_MS;
-export const DAY_MS = 24 * HOUR_MS;
+import { DAY_MS, HOUR_MS, MINUTE_MS } from './shared-module.js';
+
+export { MINUTE_MS, HOUR_MS, DAY_MS };
 
 // The moment `ms` milliseconds before `from` (default: now).
 export function msAgo(ms: number, from: Date = new Date()): Date {

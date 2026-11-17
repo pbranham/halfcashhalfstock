@@ -1,3 +1,4 @@
+import { ITEM_ID_RE } from '/constants.js';
 import { imageGallery } from '/gallery.js';
 import {
   ADMIN_TOKEN_KEY,
@@ -5,6 +6,7 @@ import {
   ebayItemUrl,
   endedEbayUrl,
   escapeHtml,
+  formatUsdOrDash,
   hiResImg,
   HOUR_MS,
   MINUTE_MS,
@@ -28,15 +30,6 @@ const bidsSummary = document.getElementById('bids-summary');
 const bidsTable = document.getElementById('bids-table');
 const snapshotsSection = document.getElementById('snapshots-section');
 const snapshotsTable = document.getElementById('snapshots-table');
-
-function fmtUsd(n) {
-  if (n === null || n === undefined) return '—';
-  return Number(n).toLocaleString(undefined, {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 2,
-  });
-}
 
 function fmtCount(n) {
   if (n === null || n === undefined) return '—';
@@ -166,14 +159,14 @@ function renderCurrentState(listing, bids) {
   let highCards = '';
   if (!ended) {
     highCards =
-      statCardHtml('Highest active bid', fmtUsd(highestActive)) +
-      statCardHtml('Highest ever seen', fmtUsd(highestEver));
+      statCardHtml('Highest active bid', formatUsdOrDash(highestActive)) +
+      statCardHtml('Highest ever seen', formatUsdOrDash(highestEver));
   } else if (highestEver > listing.currentPriceUsd + 0.005) {
-    highCards = statCardHtml('Highest bid tracked', fmtUsd(highestEver));
+    highCards = statCardHtml('Highest bid tracked', formatUsdOrDash(highestEver));
   }
 
   currentState.innerHTML =
-    statCardHtml(ended ? 'Final price' : 'Current price', fmtUsd(listing.currentPriceUsd)) +
+    statCardHtml(ended ? 'Final price' : 'Current price', formatUsdOrDash(listing.currentPriceUsd)) +
     statCardHtml('Bids', fmtCount(ebayCount), bidsSubline) +
     removedCard +
     highCards;
@@ -681,7 +674,7 @@ function renderChart(snapshots, listing, bids) {
 
 function defaultChartHelp(points) {
   const last = points[points.length - 1];
-  return `${fmtTime(new Date(last.t).toISOString())} — ${fmtUsd(last.price)} · ${fmtCount(last.count)} bids · Drag along the chart to scrub.`;
+  return `${fmtTime(new Date(last.t).toISOString())} — ${formatUsdOrDash(last.price)} · ${fmtCount(last.count)} bids · Drag along the chart to scrub.`;
 }
 
 function drawChart() {
@@ -822,9 +815,9 @@ function drawChart() {
       // Shift the min label up and the max label down so neither rides
       // the plot edge; the text floats over the plot background.
       const dy = i === 0 ? -4 : i === yTickValues.length - 1 ? 12 : 4;
-      return `<text x="${PAD.left + 4}" y="${(y + dy).toFixed(1)}" text-anchor="start" font-size="11" font-weight="500" fill="#5cdb95" opacity="0.9">${fmtUsd(p)}</text>`;
+      return `<text x="${PAD.left + 4}" y="${(y + dy).toFixed(1)}" text-anchor="start" font-size="11" font-weight="500" fill="#5cdb95" opacity="0.9">${formatUsdOrDash(p)}</text>`;
     }
-    return `<text x="${PAD.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="12" font-weight="500" fill="#5cdb95" opacity="0.95">${fmtUsd(p)}</text>`;
+    return `<text x="${PAD.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="12" font-weight="500" fill="#5cdb95" opacity="0.95">${formatUsdOrDash(p)}</text>`;
   }).join('');
 
   // Sampled-mode markers are hollow: each is "the price we observed at a
@@ -900,7 +893,7 @@ function drawChart() {
     markerPrice.setAttribute('cx', px);
     markerPrice.setAttribute('cy', yPriceFor(p.price));
     markerPrice.setAttribute('opacity', '1');
-    chartHelp.textContent = `${fmtTime(new Date(p.t).toISOString())} — ${fmtUsd(p.price)} · ${fmtCount(p.count)} bids`;
+    chartHelp.textContent = `${fmtTime(new Date(p.t).toISOString())} — ${formatUsdOrDash(p.price)} · ${fmtCount(p.count)} bids`;
   };
 
   const updateFromX = (clientX) => {
@@ -1000,7 +993,7 @@ function renderBids(bids) {
       html += `<tr class="bid-row is-removed has-note">
         <td><button type="button" class="bid-note-toggle" data-note-id="${noteId}" aria-expanded="true" aria-label="Toggle removal note">▾</button><span class="bid-strike">${escapeHtml(fmtTime(bid.bidTime))}</span></td>
         <td><span class="bid-strike">${escapeHtml(bid.bidder || 'unknown')}</span></td>
-        <td class="numeric"><span class="bid-strike">${fmtUsd(bid.bidAmountUsd)}</span></td>
+        <td class="numeric"><span class="bid-strike">${formatUsdOrDash(bid.bidAmountUsd)}</span></td>
       </tr>
       <tr class="bid-note-row" id="${noteId}">
         <td colspan="3" class="bid-note-cell">
@@ -1011,7 +1004,7 @@ function renderBids(bids) {
       html += `<tr class="bid-row">
         <td>${escapeHtml(fmtTime(bid.bidTime))}</td>
         <td>${escapeHtml(bid.bidder || 'unknown')}</td>
-        <td class="numeric">${fmtUsd(bid.bidAmountUsd)}</td>
+        <td class="numeric">${formatUsdOrDash(bid.bidAmountUsd)}</td>
       </tr>`;
     }
   }
@@ -1082,7 +1075,7 @@ function renderSnapshots(snapshots) {
   for (const snap of sorted) {
     html += `<tr>
       <td>${escapeHtml(fmtTime(snap.observedAt))}</td>
-      <td class="numeric">${fmtUsd(snap.currentPriceUsd)}</td>
+      <td class="numeric">${formatUsdOrDash(snap.currentPriceUsd)}</td>
       <td class="numeric">${fmtCount(snap.currentBidCount)}</td>
       <td>${escapeHtml(fmtTime(snap.endsAt))}</td>
     </tr>`;
@@ -1147,7 +1140,7 @@ function maybeShowAdminSection() {
 }
 
 async function load() {
-  if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
+  if (!itemId || !ITEM_ID_RE.test(itemId)) {
     showError('Missing or invalid item id in URL.');
     return;
   }

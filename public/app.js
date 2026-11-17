@@ -1,8 +1,11 @@
+import { TICKER_RE } from '/constants.js';
 import { imageGallery } from '/gallery.js';
 import {
   DAY_MS,
   el,
   endedEbayUrl,
+  formatUsd,
+  formatUsdOrDash,
   hiResImg,
   HOUR_MS,
   loadChoice,
@@ -17,8 +20,6 @@ const QUICK_RETRY_MS = 4_000;
 const STALE_MS = 120_000;
 
 const SUPPORTED_SYMBOLS = ['EBAY', 'GME'];
-// A ticker the server accepts (mirrors TICKER_RE in src/config.ts).
-const TICKER_RE = /^[A-Z][A-Z0-9.\-:]{0,19}$/;
 // "By seller" valuation mode: not a real ticker. The server values each item
 // in its seller's paired stock and returns one live price per stock. It has a
 // pill but never goes in the custom-ticker input.
@@ -28,7 +29,6 @@ function isPillSymbol(s) {
 }
 let activeSymbol = SUPPORTED_SYMBOLS[0];
 
-const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const shares = new Intl.NumberFormat('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
 // Compact form for narrow split columns on tiles: round to 4 significant
 // digits so values like 14.7438 → 14.74 fit on one line beside the logo
@@ -466,7 +466,7 @@ function pnlNode(pnl, pct) {
   const up = pnl >= 0;
   const arrow = up ? '\u25b2' : '\u25bc';
   const node = el('span', { class: `pnl ${up ? 'pnl-up' : 'pnl-down'}` });
-  node.appendChild(el('span', { class: 'pnl-amt', textContent: `${arrow} ${up ? '+' : '\u2212'}${usd.format(Math.abs(pnl))}` }));
+  node.appendChild(el('span', { class: 'pnl-amt', textContent: `${arrow} ${up ? '+' : '\u2212'}${formatUsd(Math.abs(pnl))}` }));
   if (pct !== null && Number.isFinite(pct)) {
     node.appendChild(el('span', { class: 'pnl-pct', textContent: `(${up ? '+' : ''}${pct.toFixed(1)}%)` }));
   }
@@ -510,9 +510,6 @@ function tickerCell(ticker) {
   return cell;
 }
 
-function moneyOrDash(n) {
-  return n !== null && n !== undefined ? usd.format(n) : '—';
-}
 function pnlCell(pnl, pct) {
   return pnl !== null && pnl !== undefined ? pnlNode(pnl, pct) : el('span', { textContent: '—' });
 }
@@ -549,9 +546,9 @@ const HOLDINGS_HEAD = ['Stock', 'Shares', 'Avg cost', 'Cost basis', 'Worth today
 function holdingsMoneyCells(sharesText, avgCost, r) {
   return [
     { value: sharesText, label: HOLDINGS_HEAD[1] },
-    { value: typeof avgCost === 'string' ? avgCost : moneyOrDash(avgCost), label: HOLDINGS_HEAD[2] },
-    { value: moneyOrDash(r.costBasis), label: HOLDINGS_HEAD[3] },
-    { value: moneyOrDash(r.worthNow), label: HOLDINGS_HEAD[4] },
+    { value: typeof avgCost === 'string' ? avgCost : formatUsdOrDash(avgCost), label: HOLDINGS_HEAD[2] },
+    { value: formatUsdOrDash(r.costBasis), label: HOLDINGS_HEAD[3] },
+    { value: formatUsdOrDash(r.worthNow), label: HOLDINGS_HEAD[4] },
     { value: pnlCell(r.pnl, r.pnlPct), label: HOLDINGS_HEAD[5] },
   ];
 }
@@ -1033,7 +1030,7 @@ function renderPerformanceChart(container, series) {
     }
   }
 
-  const fmtY = isPct ? (v) => `${(v * 100).toFixed(v >= 0.1 || v <= -0.1 ? 0 : 1)}%` : (v) => usd.format(v);
+  const fmtY = isPct ? (v) => `${(v * 100).toFixed(v >= 0.1 || v <= -0.1 ? 0 : 1)}%` : (v) => formatUsd(v);
   svg.appendChild(mk('text', { class: 'perf-axis', x: String(padL), y: String(padT - 3) })).textContent = fmtY(hi);
   svg.appendChild(mk('text', { class: 'perf-axis', x: String(padL), y: String(H - padB + 12) })).textContent = fmtY(lo);
   const dRange = mk('text', { class: 'perf-axis perf-axis-end', x: String(W - padR), y: String(H - padB + 12) });
@@ -1051,7 +1048,7 @@ function renderPerformanceChart(container, series) {
       const sp = priceSpans[tk];
       if (!sp) continue;
       const cl = p.closeByTicker ? p.closeByTicker[tk] : null;
-      sp.textContent = cl != null ? usd.format(cl) : '—';
+      sp.textContent = cl != null ? formatUsd(cl) : '—';
     }
   };
   const setReadout = (p) => {
@@ -1061,7 +1058,7 @@ function renderPerformanceChart(container, series) {
     const pct = c > 0 ? (pnl / c) * 100 : null;
     readout.replaceChildren(
       el('span', { class: 'perf-ro-date', textContent: p.now ? 'Today' : shortDate(p.t) }),
-      el('span', { class: 'perf-ro-val', textContent: usd.format(v) }),
+      el('span', { class: 'perf-ro-val', textContent: formatUsd(v) }),
       pnlNode(pnl, pct),
     );
     setLegendPrices(p);
@@ -1132,7 +1129,7 @@ function renderPendingCallout(el2, filteredActive, priceForTicker) {
   const sharesStr = [...byTicker.entries()].map(([tk, sh]) => `+${sharesCompact.format(sh)} $${tk}`).join(' · ');
   setText(
     el2,
-    `${plural(live.length, 'open auction')} · ${usd.format(cost)} in bids${sharesStr ? ` → ${sharesStr} if they close now` : ''}`,
+    `${plural(live.length, 'open auction')} · ${formatUsd(cost)} in bids${sharesStr ? ` → ${sharesStr} if they close now` : ''}`,
   );
   el2.hidden = false;
 }
@@ -1264,7 +1261,7 @@ function renderTicker(snapshot) {
       ...stocks.map((q) =>
         el('div', { class: 'ticker-quote' }, [
           el('span', { class: 'ticker-symbol', textContent: `$${q.symbol}` }),
-          el('span', { class: 'ticker-price', textContent: q.price ? usd.format(q.price) : '—' }),
+          el('span', { class: 'ticker-price', textContent: q.price ? formatUsd(q.price) : '—' }),
         ]),
       ),
     );
@@ -1339,8 +1336,8 @@ function renderTotals(snapshot, totals) {
   const { listingsCount, bidsCount, bidUsd, cashUsd, sharesByTicker } = totals;
   root.appendChild(statCard('Active listings', integer.format(listingsCount)));
   root.appendChild(statCard('Bids', integer.format(bidsCount ?? 0)));
-  root.appendChild(statCard('Sum of current bids', usd.format(bidUsd)));
-  root.appendChild(statCard('Half Cash', usd.format(cashUsd)));
+  root.appendChild(statCard('Sum of current bids', formatUsd(bidUsd)));
+  root.appendChild(statCard('Half Cash', formatUsd(cashUsd)));
   root.appendChild(sharesCard('Half Stock', sharesByTicker));
 }
 
@@ -1445,7 +1442,7 @@ function splitBox(cashUsd, sharesAmount, ticker) {
   split.appendChild(
     el('div', { class: 'split-half' }, [
       el('span', { class: 'label', textContent: 'Half Cash' }),
-      el('span', { class: 'value', textContent: usd.format(cashUsd) }),
+      el('span', { class: 'value', textContent: formatUsd(cashUsd) }),
     ]),
   );
   split.appendChild(
@@ -1520,7 +1517,7 @@ function renderItem(item) {
     cardClass: 'item',
     href: item.itemWebUrl,
     tag: saleTag(item.isAuction),
-    priceText: item.priceUsd != null ? usd.format(item.priceUsd) : '—',
+    priceText: item.priceUsd != null ? formatUsd(item.priceUsd) : '—',
     stats: [bidsText(item.bidCount), timeRemaining(item.endsAt)],
     split: item.split,
   });
@@ -1556,8 +1553,8 @@ function renderEndedSection(snapshot, endedItems, totals) {
     const sharesSuffix = atEnd ? ' (at end)' : ' (live)';
     totalsRoot.appendChild(statCard('Ended listings', integer.format(totals.listingsCount)));
     totalsRoot.appendChild(statCard('Bids', integer.format(totals.bidsCount)));
-    totalsRoot.appendChild(statCard('Sum of final bids', usd.format(totals.bidUsd)));
-    totalsRoot.appendChild(statCard('Half Cash', usd.format(display.cashUsd)));
+    totalsRoot.appendChild(statCard('Sum of final bids', formatUsd(totals.bidUsd)));
+    totalsRoot.appendChild(statCard('Half Cash', formatUsd(display.cashUsd)));
     totalsRoot.appendChild(sharesCard(`Half Stock${sharesSuffix}`, display.sharesByTicker));
     // When some ended items lack OHLC history, flag the gap so users know
     // the at-end aggregate is a subset.
@@ -1581,7 +1578,7 @@ function renderEndedItem(item) {
     cardClass: 'item ended-item',
     href: endedEbayUrl(item.itemWebUrl, item.itemId),
     tag: el('span', { class: 'tag tag-ended', textContent: 'Ended' }),
-    priceText: usd.format(item.finalPriceUsd),
+    priceText: formatUsd(item.finalPriceUsd),
     stats: [
       bidsText(item.finalBidCount),
       endedDate ? `Ended ${shortDate(endedDate)}` : null,
@@ -1712,7 +1709,7 @@ function renderMostRecentBid(snapshot, items) {
         })
       : el('div', { class: 'most-recent-bid-title', textContent: bid.title }),
   );
-  info.appendChild(el('div', { class: 'most-recent-bid-amount', textContent: usd.format(bid.bidAmount) }));
+  info.appendChild(el('div', { class: 'most-recent-bid-amount', textContent: formatUsd(bid.bidAmount) }));
   info.appendChild(
     el('div', {
       class: 'most-recent-bid-time',

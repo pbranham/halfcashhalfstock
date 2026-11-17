@@ -90,10 +90,18 @@ export function postAdminAction(token, body) {
   });
 }
 
-// Durations in milliseconds.
-export const MINUTE_MS = 60_000;
-export const HOUR_MS = 60 * MINUTE_MS;
-export const DAY_MS = 24 * HOUR_MS;
+// Durations in milliseconds (one home: constants.js, also read by the server).
+export { MINUTE_MS, HOUR_MS, DAY_MS } from '/constants.js';
+
+// US dollars in the visitor's locale — the one money formatter every page uses.
+const usdFormat = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' });
+export function formatUsd(n) {
+  return usdFormat.format(n);
+}
+// Same, but "—" when there is no amount.
+export function formatUsdOrDash(n) {
+  return n === null || n === undefined ? '—' : formatUsd(n);
+}
 
 // A date as the short "May 14" form (viewer's locale).
 export function shortDate(when) {

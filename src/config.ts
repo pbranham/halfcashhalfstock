@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { ITEM_ID_RE, TICKER_RE } from './shared-module.js';
 export const DEFAULT_EBAY_USER_TOKEN_FILE = '.cache/ebay-auth-token.json';
 
 const SELLER_ID_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 // The shapes every input is validated against (one home, every route reads it).
-export const TICKER_RE = /^[A-Z][A-Z0-9.\-:]{0,19}$/;
-// eBay item IDs, including the Browse `v1|<numeric>|0` form.
-export const ITEM_ID_RE = /^[A-Za-z0-9|.-]{1,64}$/;
+// The patterns themselves live in public/constants.js (the browser reads them too).
+export { TICKER_RE, ITEM_ID_RE };
 // request_stats environment tags ("prod", "dev", ...).
 export const ENVIRONMENT_RE = /^[a-zA-Z0-9_-]{1,32}$/;
 const DEFAULT_SELLER_IDS = ['boilerpaulie', 'ryan_5050'] as const;
