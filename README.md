@@ -19,7 +19,7 @@ like `BINANCE:BTCUSDT`).
 - Node.js 20+ / TypeScript / Express
 - eBay [Browse API](https://developer.ebay.com/api-docs/buy/browse/overview.html)
   (OAuth client_credentials) for active listings; eBay Trading API
-  (optional) for per-bid timestamps
+  (optional) for per-bid timestamps, parsed with `fast-xml-parser`
 - Stock quotes from Finnhub (sole live-quote provider); Yahoo Finance is used only for historical daily candles
 - Postgres (optional) for cross-instance request dedup, bid history, and
   OHLC candle storage
@@ -142,7 +142,7 @@ automatically.
 | GET    | `/api/health`              | Health JSON (`ok`/`degraded`/`error`; 503 on DB failure); see `docs/operations.md` |
 | GET    | `/api/item`                | Per-item audit data (bids, feedback, gallery). Query: `itemId`. |
 | GET    | `/api/ohlc-history`        | Retained daily OHLC for the performance chart. Query: `tickers`, `days`. |
-| GET    | `/api/ticker-logo`         | Server-side logo.dev proxy. Query: `symbol`. |
+| GET    | `/api/ticker-logo`         | Server-side logo.dev proxy (keeps `LOGO_DEV_TOKEN` off the client); cached 24h in memory and in the browser. Query: `symbol`. |
 | GET/POST | `/api/admin/*`           | Admin stats + maintenance (`ADMIN_TOKEN`); all actions are `POST /api/admin/cleanup`. |
 | GET    | `/api/history`             | Bid history for one item. Query: `itemId`. Requires Postgres.                 |
 | GET    | `/api/ohlc`                | OHLC candles for a ticker. Query: `ticker`, `days` (1–30, default 7). Requires Postgres. |
