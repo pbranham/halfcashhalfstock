@@ -516,6 +516,9 @@ server-side, no paste required.
   nothing. Re-run with `apply:true` to persist. Only acts when the item is
   Completed/Ended, USD, price finite/>0, Ack≠Failure, and the value differs.
   Capped at 60 items/run. Admin UI has "Dry run" + "Apply" buttons.
+  Its output prints money through the shared `formatUsd` (visitor's locale, e.g.
+  `$120.00`, null → `$—`), not raw numbers (`$120`) — commit b2696c4, by design
+  under the one-money-formatter rule; shares stay en-US.
 - **Verified live** (PR #30): the dry-run reported every DB price already
   matched eBay (`$X → $X` across 45 items), confirming GetItem works for
   both own and others' listings. Bid counts diverged on heavy-bid items
