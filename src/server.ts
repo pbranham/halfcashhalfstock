@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import 'dotenv/config';
@@ -1325,6 +1326,19 @@ export function createApp(deps: Deps): express.Express {
       }
 
       res.status(400).json({ error: 'bad_request', detail: 'unknown action' });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // admin.html / item.html share one head (public/head-common.html), pulled
+  // in at the <!--#head-common--> marker so the two pages never drift.
+  app.get(/^\/(admin|item)(\.html)?$/, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const read = (f: string) => readFile(path.join(PUBLIC_DIR, f), 'utf8');
+      const [page, head] = [await read(`${req.params[0]}.html`), await read('head-common.html')];
+      res.setHeader('Cache-Control', 'no-cache');
+      res.type('html').send(page.replace('<!--#head-common-->', head.trim()));
     } catch (err) {
       next(err);
     }

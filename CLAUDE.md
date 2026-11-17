@@ -119,6 +119,8 @@ public/
   index.html  app.js         dashboard (active + recently ended)
   item.html   item.js        per-item audit page (gallery + description iframe)
   admin.html  admin.js       admin dashboard + maintenance actions
+  head-common.html           the one shared <head> (meta/theme-init/style.css/icon) for admin.html + item.html;
+                             src/server.ts expands the <!--#head-common--> marker when serving those two pages
   constants.js               TICKER_RE, ITEM_ID_RE, MINUTE_MS/HOUR_MS/DAY_MS — read by browser AND server
                              (src/shared-module.ts); the one home for them, no build step
   carousel.js                attachCyclingCarousel: shared clone-pad cycling track

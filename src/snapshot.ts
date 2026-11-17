@@ -27,18 +27,7 @@ export interface ListingView {
   additionalImages: string[];
 }
 
-export interface EndedListingView {
-  itemId: string;
-  sellerId: string;
-  title: string;
-  imageUrl: string | null;
-  itemWebUrl: string | null;
-  isAuction: boolean;
-  endsAt: string | null;
-  endedAt: string;
-  finalPriceUsd: number;
-  finalBidCount: number;
-  currency: string;
+export interface EndedListingView extends EndedListingRow {
   // Same shape as ListingView.additionalImages — gallery URLs from the
   // per-item Browse details, excluding imageUrl.
   additionalImages: string[];

@@ -3,6 +3,15 @@ import { expect, vi } from 'vitest';
 import { EbayAppTokenProvider } from '../src/ebay/auth.js';
 import { EbayClient } from '../src/ebay/client.js';
 import { createLogger, type Logger } from '../src/log.js';
+import type { PriceQuote } from '../src/prices/types.js';
+
+export const QUOTE: PriceQuote = {
+  symbol: 'EBAY',
+  price: 50,
+  currency: 'USD',
+  asOf: '2026-05-06T18:00:00.000Z',
+  source: 'finnhub',
+};
 
 // A logger that drops everything (errors included).
 export function silentLogger(): Logger {

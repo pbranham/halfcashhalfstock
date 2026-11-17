@@ -7,11 +7,6 @@
   display: flex;
   gap: 1rem;
   margin-bottom: 1.5rem;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 1rem;
   flex-wrap: wrap;
 }
 
@@ -89,11 +84,6 @@
 }
 
 .item-section {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 1rem;
   margin-bottom: 1.5rem;
 }
 
@@ -408,16 +398,10 @@
 }
 
 .error-banner {
-  background: #5a1f1f;
   color: #ffecec;
-  padding: 0.75rem 1rem;
-  border-radius: 6px;
-  margin-bottom: 1rem;
 }
 
 .loading {
-  text-align: center;
-  padding: 2rem;
   color: var(--fg-muted);
 }
 

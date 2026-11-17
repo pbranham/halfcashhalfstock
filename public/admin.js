@@ -355,10 +355,7 @@ function renderUaTable(data) {
     (row) => row.environment,
     (row) => ({ environment: row.environment, bot: 0, mobile: 0, desktop: 0, other: 0, total: 0 }),
     (entry, row) => {
-      entry.bot += Number(row.bot_count) || 0;
-      entry.mobile += Number(row.mobile_count) || 0;
-      entry.desktop += Number(row.desktop_count) || 0;
-      entry.other += Number(row.other_count) || 0;
+      for (const k of ['bot', 'mobile', 'desktop', 'other']) entry[k] += Number(row[`${k}_count`]) || 0;
       entry.total += Number(row.request_count) || 0;
     },
   ).sort((a, b) => b.total - a.total);

@@ -1,16 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { expectSellerValuation } from './helpers.js';
+import { QUOTE, expectSellerValuation } from './helpers.js';
 import { composeSnapshot } from '../src/snapshot.js';
 import type { Listing } from '../src/ebay/seller.js';
 import type { PriceQuote } from '../src/prices/types.js';
-
-const QUOTE: PriceQuote = {
-  symbol: 'EBAY',
-  price: 50,
-  currency: 'USD',
-  asOf: '2026-05-06T18:00:00.000Z',
-  source: 'finnhub',
-};
 
 function listing(overrides: Partial<Listing> = {}): Listing {
   return {

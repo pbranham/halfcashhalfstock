@@ -1,19 +1,11 @@
 import type http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { expectSellerValuation, silentLogger } from './helpers.js';
+import { QUOTE, expectSellerValuation, silentLogger } from './helpers.js';
 import { createApp } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import type { Listing } from '../src/ebay/seller.js';
 import type { PriceQuote } from '../src/prices/types.js';
-
-const QUOTE: PriceQuote = {
-  symbol: 'EBAY',
-  price: 50,
-  currency: 'USD',
-  asOf: '2026-05-06T18:00:00.000Z',
-  source: 'finnhub',
-};
 
 const LISTING: Listing = {
   itemId: 'v1|999',

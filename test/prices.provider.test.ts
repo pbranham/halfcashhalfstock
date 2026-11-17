@@ -1,18 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ChainedPriceProvider } from '../src/prices/provider.js';
 import { PriceProviderError, type PriceProvider, type PriceQuote } from '../src/prices/types.js';
+import { QUOTE as BASE_QUOTE } from './helpers.js';
+
+const QUOTE: PriceQuote = { ...BASE_QUOTE, price: 57.92 };
 
 function stubProvider(name: string, impl: () => Promise<PriceQuote>): PriceProvider {
   return { name, getQuote: vi.fn(impl) };
 }
-
-const QUOTE: PriceQuote = {
-  symbol: 'EBAY',
-  price: 57.92,
-  currency: 'USD',
-  asOf: '2026-05-06T18:00:00.000Z',
-  source: 'finnhub',
-};
 
 // Chaining [a, b] yields QUOTE after asking `a` once and `b` `bCalls` times.
 async function expectChainQuote(a: PriceProvider, b: PriceProvider, bCalls: number): Promise<void> {

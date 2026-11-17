@@ -494,7 +494,8 @@ export async function backfillBidsImportedStamps(
   }));
 }
 
-export interface EndedListingRow {
+// The listing fields every stored-listing shape shares.
+export interface ListingBase {
   itemId: string;
   sellerId: string;
   title: string;
@@ -502,10 +503,13 @@ export interface EndedListingRow {
   itemWebUrl: string | null;
   isAuction: boolean;
   endsAt: string | null;
+  currency: string;
+}
+
+export interface EndedListingRow extends ListingBase {
   endedAt: string;
   finalPriceUsd: number;
   finalBidCount: number;
-  currency: string;
 }
 
 // The listing columns both the ended list and the item page read, and their
@@ -592,18 +596,10 @@ export async function readBidsForItem(pool: Pool, itemId: string): Promise<BidRo
   }));
 }
 
-export interface ListingDetail {
-  itemId: string;
-  sellerId: string;
-  title: string;
-  imageUrl: string | null;
-  itemWebUrl: string | null;
-  isAuction: boolean;
-  endsAt: string | null;
+export interface ListingDetail extends ListingBase {
   endedAt: string | null;
   currentPriceUsd: number;
   currentBidCount: number;
-  currency: string;
   firstSeenAt: string;
   lastSeenAt: string;
   // Filled in by the background detail-enrichment pass. additionalImages
