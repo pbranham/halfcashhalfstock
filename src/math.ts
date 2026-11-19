@@ -27,3 +27,8 @@ export function sumSplits(splits: readonly HalfSplit[]): HalfSplit {
     { cashUsd: 0, stockUsd: 0, shares: 0 },
   );
 }
+
+// The sum of `value` over `items`.
+export function sumBy<T>(items: readonly T[], value: (item: T) => number): number {
+  return items.reduce((sum, item) => sum + value(item), 0);
+}

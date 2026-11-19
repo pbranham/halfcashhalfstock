@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { silentLogger } from './helpers.js';
 import type { Pool } from 'pg';
 import { createItemDetailsEnricher, _resetInflightForTests } from '../src/item-details-enricher.js';
-import { createLogger } from '../src/log.js';
 import type { EbayClient } from '../src/ebay/client.js';
 import type { Listing } from '../src/ebay/seller.js';
 
@@ -39,7 +39,7 @@ function makeMocks(missing: string[]) {
       return { rows: [] };
     }),
   } as unknown as Pool;
-  const log = createLogger({ level: 'error', sink: () => {} });
+  const log = silentLogger();
   return { pool, log, updates };
 }
 

@@ -1,18 +1,21 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ChainedPriceProvider } from '../src/prices/provider.js';
 import { PriceProviderError, type PriceProvider, type PriceQuote } from '../src/prices/types.js';
+import { QUOTE as BASE_QUOTE } from './helpers.js';
+
+const QUOTE: PriceQuote = { ...BASE_QUOTE, price: 57.92 };
 
 function stubProvider(name: string, impl: () => Promise<PriceQuote>): PriceProvider {
   return { name, getQuote: vi.fn(impl) };
 }
 
-const QUOTE: PriceQuote = {
-  symbol: 'EBAY',
-  price: 57.92,
-  currency: 'USD',
-  asOf: '2026-05-06T18:00:00.000Z',
-  source: 'finnhub',
-};
+// Chaining [a, b] yields QUOTE after asking `a` once and `b` `bCalls` times.
+async function expectChainQuote(a: PriceProvider, b: PriceProvider, bCalls: number): Promise<void> {
+  const chained = new ChainedPriceProvider([a, b]);
+  expect(await chained.getQuote('EBAY')).toEqual(QUOTE);
+  expect(a.getQuote).toHaveBeenCalledTimes(1);
+  expect(b.getQuote).toHaveBeenCalledTimes(bCalls);
+}
 
 describe('ChainedPriceProvider', () => {
   it('returns the first successful quote', async () => {
@@ -20,10 +23,7 @@ describe('ChainedPriceProvider', () => {
     const b = stubProvider('b', async () => {
       throw new Error('should not be called');
     });
-    const chained = new ChainedPriceProvider([a, b]);
-    expect(await chained.getQuote('EBAY')).toEqual(QUOTE);
-    expect(a.getQuote).toHaveBeenCalledTimes(1);
-    expect(b.getQuote).not.toHaveBeenCalled();
+    await expectChainQuote(a, b, 0);
   });
 
   it('falls through to the next provider when the first fails', async () => {
@@ -31,10 +31,7 @@ describe('ChainedPriceProvider', () => {
       throw new PriceProviderError('a', 'boom');
     });
     const b = stubProvider('b', async () => QUOTE);
-    const chained = new ChainedPriceProvider([a, b]);
-    expect(await chained.getQuote('EBAY')).toEqual(QUOTE);
-    expect(a.getQuote).toHaveBeenCalledTimes(1);
-    expect(b.getQuote).toHaveBeenCalledTimes(1);
+    await expectChainQuote(a, b, 1);
   });
 
   it('throws aggregated error when all providers fail', async () => {

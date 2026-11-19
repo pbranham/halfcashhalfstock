@@ -1,7 +1,9 @@
 import type { Pool } from 'pg';
-import type { Logger } from './log.js';
+import { errorMessage, type Logger } from './log.js';
+import { logPassIfNotable, startBackgroundLoop } from './background-loop.js';
 import { YahooProvider } from './prices/yahoo.js';
 import { bulkInsertOhlcData } from './db/persist.js';
+import { DAY_MS } from './time.js';
 
 export interface OhlcRefreshResult {
   ticker: string;
@@ -39,19 +41,19 @@ export async function refreshDailyOhlcOnce(opts: {
         ticker,
         candles: 0,
         inserted: 0,
-        error: err instanceof Error ? err.message : String(err),
+        error: errorMessage(err),
       });
     }
   }
   return results;
 }
 
-// Daily background refresh of the 1d OHLC history. Immediate first tick (so a
-// deploy fills any gap right away), single-flight, survives tick errors,
-// returns a stop function. Mirrors startFeedbackSweep. NOT prod-gated like the
-// listing poll: it's idempotent and runs at most once/day per ticker (2 Yahoo
-// calls), so a dev + prod pair both running it costs nothing meaningful — and
-// running on dev means the preview self-heals its history on deploy.
+// Daily background refresh of the 1d OHLC history, on the shared background-
+// loop scaffold (immediate first tick, so a deploy fills any gap right away).
+// NOT prod-gated like the listing poll: it's idempotent and runs at most
+// once/day per ticker (2 Yahoo calls), so a dev + prod pair both running it
+// costs nothing meaningful — and running on dev means the preview self-heals
+// its history on deploy.
 export function startDailyOhlcRefresh(opts: {
   pool: Pool;
   tickers: readonly string[];
@@ -59,39 +61,16 @@ export function startDailyOhlcRefresh(opts: {
   yahoo?: YahooProvider;
   intervalMs?: number;
 }): () => void {
-  const intervalMs = opts.intervalMs ?? 24 * 60 * 60 * 1000;
   const yahoo = opts.yahoo ?? new YahooProvider();
   const log = opts.log.child({ component: 'ohlc-refresh' });
-  let stopping = false;
-  let inflight = false;
-
-  const tick = async (): Promise<void> => {
-    if (stopping || inflight) return;
-    inflight = true;
-    try {
+  return startBackgroundLoop({
+    name: 'daily ohlc refresh',
+    log,
+    intervalMs: opts.intervalMs ?? DAY_MS,
+    startFields: { tickers: opts.tickers },
+    tick: async () => {
       const results = await refreshDailyOhlcOnce({ pool: opts.pool, yahoo, tickers: opts.tickers, log });
-      const inserted = results.reduce((sum, r) => sum + r.inserted, 0);
-      if (inserted > 0 || results.some((r) => r.error)) {
-        log.info('daily ohlc refresh', { results });
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn('daily ohlc refresh cycle failed', { error: message });
-    } finally {
-      inflight = false;
-    }
-  };
-
-  void tick();
-  const timer = setInterval(() => {
-    void tick();
-  }, intervalMs);
-  timer.unref();
-  log.info('daily ohlc refresh started', { intervalMs, tickers: opts.tickers });
-
-  return () => {
-    stopping = true;
-    clearInterval(timer);
-    log.info('daily ohlc refresh stopped');
-  };
+      logPassIfNotable(log, 'daily ohlc refresh', results);
+    },
+  });
 }

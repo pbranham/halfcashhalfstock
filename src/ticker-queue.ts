@@ -1,8 +1,9 @@
 import type { Pool } from 'pg';
-import type { Logger } from './log.js';
+import { errorMessage, type Logger } from './log.js';
 import type { YahooProvider } from './prices/yahoo.js';
 import type { PriceProvider, PriceQuote } from './prices/types.js';
 import { storeOhlcData, bulkInsertOhlcData, purgeOldOhlcData } from './db/persist.js';
+import { HOUR_MS, MINUTE_MS, isoOrNull } from './time.js';
 
 export type ValidationResult =
   | { valid: true; symbol: string; price: number }
@@ -67,8 +68,8 @@ export class TickerQueue {
     this.#passiveIntervalMs = options.passiveIntervalMs ?? 30_000;
     this.#activeIntervalMs = options.activeIntervalMs ?? 2_500;
     this.#maxWaitMs = options.maxWaitMs ?? 4_000;
-    this.#negativeCacheTtlMs = options.negativeCacheTtlMs ?? 60 * 60 * 1000;
-    this.#requestWindowMs = options.requestWindowMs ?? 30 * 60 * 1000;
+    this.#negativeCacheTtlMs = options.negativeCacheTtlMs ?? HOUR_MS;
+    this.#requestWindowMs = options.requestWindowMs ?? 30 * MINUTE_MS;
 
     for (const t of this.#alwaysActive) this.#knownTickers.add(t);
   }
@@ -99,7 +100,7 @@ export class TickerQueue {
     activelyPolling: string[];
   } {
     return {
-      lastBackfillAt: this.#lastBackfillAt ? this.#lastBackfillAt.toISOString() : null,
+      lastBackfillAt: isoOrNull(this.#lastBackfillAt),
       backfillStatus: this.#backfillStatus,
       knownTickers: Array.from(this.#knownTickers).sort(),
       // The set the passive poll actually refreshes right now: always-active
@@ -122,7 +123,7 @@ export class TickerQueue {
       const purged = await purgeOldOhlcData(this.#db);
       if (purged > 0) this.#log.info('purged old ohlc data', { count: purged });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       this.#log.warn('purge failed', { error: message });
     }
 
@@ -241,7 +242,7 @@ export class TickerQueue {
       for (const t of this.#alwaysActive) this.#knownTickers.add(t);
       for (const row of res.rows) this.#knownTickers.add(row.ticker);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       this.#log.error('failed to refresh known tickers', { error: message });
     }
   }
@@ -305,7 +306,7 @@ export class TickerQueue {
         if (wrote) stored += 1;
         else skipped += 1;
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         this.#log.debug('passive store failed', { ticker, error: message });
       }
     }
@@ -348,7 +349,7 @@ export class TickerQueue {
       this.#log.info('backfilled ticker', { ticker, candles: candles.length, inserted });
       return 'ok';
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       this.#log.warn('ticker backfill failed', { ticker, error: message });
       return 'fail';
     }

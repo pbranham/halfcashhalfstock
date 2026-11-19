@@ -1,4 +1,5 @@
-import type { BidRecord } from './trading.js';
+import { byBidTime, highestBidAmount, type BidRecord } from './trading.js';
+import { errorMessage } from '../log.js';
 
 // One-time reconciliation of ENDED auction bid history from eBay's public
 // bid-history page (https://www.ebay.com/bfl/viewbids/<id>). eBay's APIs do not
@@ -65,65 +66,64 @@ const MONTHS: Record<string, string> = {
   jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
 };
 
-// Handles both "May-09-26 14:23:01 PDT" and
-// "May 09, 2026 at 2:23:01 PM PDT". Returns a UTC ISO string.
+// The eBay date formats we read. Every pattern captures the same groups —
+// year 3, hour 4, minute 5, second 6, AM/PM 7 (empty for 24-hour), zone 8 —
+// with the month and day in the groups named per format. The tokenizer
+// finds dates with the same patterns (DATE_TOKEN_RE).
+const DATE_FORMATS: ReadonlyArray<{ re: RegExp; month: number; day: number }> = [
+  // Mon-DD-YY HH:MM:SS ZZZ (24-hour, dashes)
+  {
+    re: /([A-Za-z]{3})-(\d{1,2})-(\d{2,4})\s+(\d{1,2}):(\d{2}):(\d{2})()\s+([A-Za-z]{2,4})/,
+    month: 1,
+    day: 2,
+  },
+  // Mon DD, YYYY at H:MM:SS AM/PM ZZZ (month-first 12-hour)
+  {
+    re: /([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{2,4})\s+(?:at\s+)?(\d{1,2}):(\d{2}):(\d{2})\s*([AaPp][Mm])\s+([A-Za-z]{2,4})/,
+    month: 1,
+    day: 2,
+  },
+  // DD Mon YYYY at H:MM:SSam/pm ZZZ (day-first 12-hour — eBay viewbids)
+  {
+    re: /(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})\s+(?:at\s+)?(\d{1,2}):(\d{2}):(\d{2})\s*([AaPp][Mm])\s+([A-Za-z]{2,4})/,
+    month: 2,
+    day: 1,
+  },
+];
+
+// A dollar amount as eBay's viewbids page renders it ("$2,900.00"); group 1
+// is the number with its commas.
+const MONEY_RE = /\$\s*([\d,]+\.\d{2})/;
+
+// Any of DATE_FORMATS, for finding date tokens in page text.
+const DATE_TOKEN_RE = new RegExp(DATE_FORMATS.map((f) => `(?:${f.re.source})`).join('|'), 'g');
+
+// Handles every DATE_FORMATS form, e.g. "May-09-26 14:23:01 PDT",
+// "May 09, 2026 at 2:23:01 PM PDT", "13 May 2026 at 11:38:33am PDT".
+// Returns a UTC ISO string.
 export function parseEbayDate(raw: string): string {
   const text = raw.replace(/\s+/g, ' ').trim();
 
-  // Format A: Mon-DD-YY HH:MM:SS ZZZ (24-hour, dashes)
-  const a = text.match(
-    /([A-Za-z]{3})-(\d{1,2})-(\d{2,4})\s+(\d{1,2}):(\d{2}):(\d{2})\s+([A-Za-z]{2,4})/,
-  );
-  // Format B: Mon DD, YYYY at H:MM:SS AM/PM ZZZ (month-first 12-hour)
-  const b = text.match(
-    /([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{2,4})\s+(?:at\s+)?(\d{1,2}):(\d{2}):(\d{2})\s*([AaPp][Mm])\s+([A-Za-z]{2,4})/,
-  );
-  // Format C: DD Mon YYYY at H:MM:SSam/pm ZZZ (day-first 12-hour — eBay viewbids)
-  const c = text.match(
-    /(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})\s+(?:at\s+)?(\d{1,2}):(\d{2}):(\d{2})\s*([AaPp][Mm])\s+([A-Za-z]{2,4})/,
-  );
-
-  let month: string | undefined;
-  let day: string;
-  let year: string;
-  let hour: number;
-  let minute: string;
-  let second: string;
-  let zone: string;
-
-  if (a) {
-    month = MONTHS[a[1]!.toLowerCase().slice(0, 3)];
-    day = a[2]!;
-    year = a[3]!;
-    hour = Number(a[4]);
-    minute = a[5]!;
-    second = a[6]!;
-    zone = a[7]!.toUpperCase();
-  } else if (b) {
-    month = MONTHS[b[1]!.toLowerCase().slice(0, 3)];
-    day = b[2]!;
-    year = b[3]!;
-    hour = Number(b[4]);
-    minute = b[5]!;
-    second = b[6]!;
-    const meridiem = b[7]!.toUpperCase();
-    if (meridiem === 'PM' && hour < 12) hour += 12;
-    if (meridiem === 'AM' && hour === 12) hour = 0;
-    zone = b[8]!.toUpperCase();
-  } else if (c) {
-    day = c[1]!;
-    month = MONTHS[c[2]!.toLowerCase().slice(0, 3)];
-    year = c[3]!;
-    hour = Number(c[4]);
-    minute = c[5]!;
-    second = c[6]!;
-    const meridiem = c[7]!.toUpperCase();
-    if (meridiem === 'PM' && hour < 12) hour += 12;
-    if (meridiem === 'AM' && hour === 12) hour = 0;
-    zone = c[8]!.toUpperCase();
-  } else {
-    throw new Error(`unrecognized eBay date format: "${raw}"`);
+  let found: { m: RegExpMatchArray; month: number; day: number } | null = null;
+  for (const f of DATE_FORMATS) {
+    const m = text.match(f.re);
+    if (m) {
+      found = { m, month: f.month, day: f.day };
+      break;
+    }
   }
+  if (!found) throw new Error(`unrecognized eBay date format: "${raw}"`);
+  const g = found.m;
+  const month = MONTHS[g[found.month]!.toLowerCase().slice(0, 3)];
+  const day = g[found.day]!;
+  let year = g[3]!;
+  let hour = Number(g[4]);
+  const minute = g[5]!;
+  const second = g[6]!;
+  const meridiem = g[7]!.toUpperCase();
+  if (meridiem === 'PM' && hour < 12) hour += 12;
+  if (meridiem === 'AM' && hour === 12) hour = 0;
+  const zone = g[8]!.toUpperCase();
 
   if (!month) throw new Error(`unrecognized month in eBay date: "${raw}"`);
   const offset = ZONE_OFFSETS[zone];
@@ -143,6 +143,74 @@ interface Token {
   index: number;
   kind: 'bidder' | 'amount' | 'date';
   value: string;
+}
+
+// The amount, bidder and date tokens in flattened page text, in page order.
+// Shared by the active-bids table and the retraction table.
+function tokenize(text: string): Token[] {
+  const tokens: Token[] = [];
+
+  // Amounts: eBay's viewbids page renders bid prices as "$2,900.00" — no
+  // "US $" prefix. The leading "Winning bid: $X" header amount that precedes
+  // every bidder token is dropped naturally by the bidder-delimited walk
+  // (amounts before the first bidder have no row to attach to).
+  const amountRe = new RegExp(MONEY_RE.source, 'g');
+  for (let m = amountRe.exec(text); m; m = amountRe.exec(text)) {
+    tokens.push({ index: m.index, kind: 'amount', value: m[1]!.replace(/,/g, '') });
+  }
+
+  // Bidder tokens: either the anonymized "5***t" form (anonymous view) or
+  // the synthetic "__BIDDER_<name>__" marker injected for /usr/ profile
+  // links (seller-logged-in view). The trailing char of the masked form
+  // includes `_`, `-`, and `.` because eBay usernames can end with any of
+  // those (the mask preserves the original last character — e.g. a
+  // bidder named "alice_2025_" appears as "a***_" on the public view).
+  const bidderRe = /([0-9A-Za-z])\*{2,4}([0-9A-Za-z_.-])|__BIDDER_([A-Za-z0-9._-]+)__/g;
+  for (let m = bidderRe.exec(text); m; m = bidderRe.exec(text)) {
+    // Marker capture group is m[3]; mask group is m[0]. Prefer the captured
+    // full username when present so the stored bidder reflects identity.
+    tokens.push({ index: m.index, kind: 'bidder', value: m[3] ?? m[0] });
+  }
+
+  DATE_TOKEN_RE.lastIndex = 0;
+  for (let m = DATE_TOKEN_RE.exec(text); m; m = DATE_TOKEN_RE.exec(text)) {
+    tokens.push({ index: m.index, kind: 'date', value: m[0] });
+  }
+
+  return tokens.sort((x, y) => x.index - y.index);
+}
+
+// True the first time this (bidder, time, amount) bid is seen; records it.
+function isNewBid(seen: Set<string>, bidder: string, bidTime: string, amount: number): boolean {
+  const key = `${bidder}|${bidTime}|${amount}`;
+  if (seen.has(key)) return false;
+  seen.add(key);
+  return true;
+}
+
+// Bidder-delimited rows: each bidder token starts a row that collects the
+// first amount and up to `dates` dates after it. Rows missing the amount or
+// any of the dates are dropped. Order-agnostic within a row.
+function bidderRows(
+  tokens: readonly Token[],
+  dates: number,
+): Array<{ bidder: string; bidderIndex: number; amount: number; dates: string[] }> {
+  const rows: Array<{ bidder: string; bidderIndex: number; amount: number; dates: string[] }> = [];
+  let cur: { bidder: string; bidderIndex: number; amount: number | null; dates: string[] } | null = null;
+  const flush = (): void => {
+    if (cur && cur.amount !== null && cur.dates.length === dates) rows.push({ ...cur, amount: cur.amount });
+  };
+  for (const token of tokens) {
+    if (token.kind === 'bidder') {
+      flush();
+      cur = { bidder: token.value, bidderIndex: token.index, amount: null, dates: [] };
+    } else if (cur) {
+      if (token.kind === 'amount' && cur.amount === null) cur.amount = Number(token.value);
+      else if (token.kind === 'date' && cur.dates.length < dates) cur.dates.push(token.value);
+    }
+  }
+  flush();
+  return rows;
 }
 
 // The viewbids DOM uses obfuscated, churn-prone class names, so parsing anchors
@@ -194,51 +262,12 @@ export function parseViewbids(html: string): ViewbidsParseResult {
   const text = retractIdx > 0 ? fullText.slice(0, retractIdx) : fullText;
   const retractionText = retractIdx > 0 ? fullText.slice(retractIdx) : '';
 
-  const tokens: Token[] = [];
-
-  // Amounts: eBay's viewbids page renders bid prices as "$2,900.00" — no
-  // "US $" prefix. The leading "Winning bid: $X" header amount that precedes
-  // every bidder token is dropped naturally by the bidder-delimited walk
-  // below (amounts before the first bidder have no row to attach to).
-  const amountRe = /\$\s*([\d,]+\.\d{2})/g;
-  for (let m = amountRe.exec(text); m; m = amountRe.exec(text)) {
-    tokens.push({ index: m.index, kind: 'amount', value: m[1]!.replace(/,/g, '') });
-  }
-
-  // Bidder tokens: either the anonymized "5***t" form (anonymous view) or
-  // the synthetic "__BIDDER_<name>__" marker we injected for /usr/ profile
-  // links (seller-logged-in view). The trailing char of the masked form
-  // includes `_`, `-`, and `.` because eBay usernames can end with any of
-  // those (the mask preserves the original last character — e.g. a
-  // bidder named "alice_2025_" appears as "a***_" on the public view).
-  const bidderRe = /([0-9A-Za-z])\*{2,4}([0-9A-Za-z_.-])|__BIDDER_([A-Za-z0-9._-]+)__/g;
-  for (let m = bidderRe.exec(text); m; m = bidderRe.exec(text)) {
-    // Marker capture group is m[3]; mask group is m[0]. Prefer the captured
-    // full username when present so the stored bidder reflects identity.
-    const value = m[3] ?? m[0];
-    tokens.push({ index: m.index, kind: 'bidder', value });
-  }
-
-  const dateRe = new RegExp(
-    // Mon-DD-YY HH:MM:SS ZZZ
-    '(?:[A-Za-z]{3}-\\d{1,2}-\\d{2,4}\\s+\\d{1,2}:\\d{2}:\\d{2}\\s+[A-Za-z]{2,4})' +
-    // Mon DD, YYYY at H:MM:SS AM/PM ZZZ
-    '|(?:[A-Za-z]{3,9}\\s+\\d{1,2},?\\s+\\d{2,4}\\s+(?:at\\s+)?\\d{1,2}:\\d{2}:\\d{2}\\s*[AaPp][Mm]\\s+[A-Za-z]{2,4})' +
-    // DD Mon YYYY at H:MM:SSam/pm ZZZ (eBay viewbids day-first)
-    '|(?:\\d{1,2}\\s+[A-Za-z]{3,9}\\s+\\d{2,4}\\s+(?:at\\s+)?\\d{1,2}:\\d{2}:\\d{2}\\s*[AaPp][Mm]\\s+[A-Za-z]{2,4})',
-    'g',
-  );
-  for (let m = dateRe.exec(text); m; m = dateRe.exec(text)) {
-    tokens.push({ index: m.index, kind: 'date', value: m[0] });
-  }
-
-  tokens.sort((x, y) => x.index - y.index);
+  const tokens = tokenize(text);
 
   const bids: BidRecord[] = [];
   const seen = new Set<string>();
   let dateParseFailures = 0;
   let autoBidsSkipped = 0;
-  let cur: { bidder: string; bidderIndex: number; amount: number | null; date: string | null } | null = null;
 
   const isAutoBid = (bidderIdx: number): boolean => {
     // eBay places the italic marker "This is an automatic bid (proxy bid)
@@ -250,35 +279,21 @@ export function parseViewbids(html: string): ViewbidsParseResult {
     return /the bidder\.\s*$/.test(window);
   };
 
-  const flush = (): void => {
-    if (!cur || cur.amount === null || cur.date === null) return;
-    if (isAutoBid(cur.bidderIndex)) {
+  for (const row of bidderRows(tokens, 1)) {
+    if (isAutoBid(row.bidderIndex)) {
       autoBidsSkipped += 1;
-      return;
+      continue;
     }
     let bidTime: string;
     try {
-      bidTime = parseEbayDate(cur.date);
+      bidTime = parseEbayDate(row.dates[0]!);
     } catch {
       dateParseFailures += 1;
-      return;
+      continue;
     }
-    const key = `${cur.bidder}|${bidTime}|${cur.amount}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    bids.push({ bidder: cur.bidder, bidTime, bidAmount: cur.amount });
-  };
-
-  for (const token of tokens) {
-    if (token.kind === 'bidder') {
-      flush();
-      cur = { bidder: token.value, bidderIndex: token.index, amount: null, date: null };
-    } else if (cur) {
-      if (token.kind === 'amount' && cur.amount === null) cur.amount = Number(token.value);
-      else if (token.kind === 'date' && cur.date === null) cur.date = token.value;
-    }
+    if (!isNewBid(seen, row.bidder, bidTime, row.amount)) continue;
+    bids.push({ bidder: row.bidder, bidTime, bidAmount: row.amount });
   }
-  flush();
 
   // Distinguish "this auction genuinely has zero active bids right now"
   // from "the parser failed to find bid data it expected to be there".
@@ -302,7 +317,7 @@ export function parseViewbids(html: string): ViewbidsParseResult {
     const around = firstAmount
       ? text.slice(Math.max(0, firstAmount.index - 200), firstAmount.index + 200).replace(/\s+/g, ' ').trim()
       : '';
-    const rawHasDollar = /\$\s*[\d,]+\.\d{2}/.test(html);
+    const rawHasDollar = MONEY_RE.test(html);
     const rawHasChallenge = /Pardon Our Interruption|captcha|unusual traffic/i.test(html);
     const sellerView = /Status for seller/i.test(html) || /__BIDDER_/.test(text);
     throw new ViewbidsParseError(
@@ -311,14 +326,14 @@ export function parseViewbids(html: string): ViewbidsParseResult {
     );
   }
 
-  bids.sort((x, y) => (x.bidTime < y.bidTime ? -1 : x.bidTime > y.bidTime ? 1 : 0));
+  bids.sort(byBidTime);
   // For zero-active-bid auctions, the "current price" the listing should
   // display is the starting bid (the floor a bidder would have to meet).
   const startingMatch = !knownZeroBids
     ? null
-    : html.match(/Starting\s+(?:Bid|Price):[^$]{0,80}\$\s*([\d,]+\.\d{2})/i);
+    : html.match(new RegExp(`Starting\\s+(?:Bid|Price):[^$]{0,80}${MONEY_RE.source}`, 'i'));
   const finalPriceUsd = bids.length > 0
-    ? bids.reduce((max, b) => (b.bidAmount > max ? b.bidAmount : max), 0)
+    ? highestBidAmount(bids)
     : startingMatch
       ? Number(startingMatch[1]!.replace(/,/g, ''))
       : 0;
@@ -335,43 +350,16 @@ export function parseViewbids(html: string): ViewbidsParseResult {
 // dates, it's skipped. The slice we receive is purely the retraction section,
 // so misclassifying active bids isn't possible.
 export function parseRetractedSection(retractionText: string): RetractedBid[] {
-  const tokens: Token[] = [];
-
-  const amountRe = /\$\s*([\d,]+\.\d{2})/g;
-  for (let m = amountRe.exec(retractionText); m; m = amountRe.exec(retractionText)) {
-    tokens.push({ index: m.index, kind: 'amount', value: m[1]!.replace(/,/g, '') });
-  }
-  // Same expanded trailing-char class as parseViewbids: the masked form
-  // can end in `_`, `-`, or `.` when the original username does.
-  const bidderRe = /([0-9A-Za-z])\*{2,4}([0-9A-Za-z_.-])|__BIDDER_([A-Za-z0-9._-]+)__/g;
-  for (let m = bidderRe.exec(retractionText); m; m = bidderRe.exec(retractionText)) {
-    const value = m[3] ?? m[0];
-    tokens.push({ index: m.index, kind: 'bidder', value });
-  }
-  const dateRe = new RegExp(
-    '(?:[A-Za-z]{3}-\\d{1,2}-\\d{2,4}\\s+\\d{1,2}:\\d{2}:\\d{2}\\s+[A-Za-z]{2,4})' +
-    '|(?:[A-Za-z]{3,9}\\s+\\d{1,2},?\\s+\\d{2,4}\\s+(?:at\\s+)?\\d{1,2}:\\d{2}:\\d{2}\\s*[AaPp][Mm]\\s+[A-Za-z]{2,4})' +
-    '|(?:\\d{1,2}\\s+[A-Za-z]{3,9}\\s+\\d{2,4}\\s+(?:at\\s+)?\\d{1,2}:\\d{2}:\\d{2}\\s*[AaPp][Mm]\\s+[A-Za-z]{2,4})',
-    'g',
-  );
-  for (let m = dateRe.exec(retractionText); m; m = dateRe.exec(retractionText)) {
-    tokens.push({ index: m.index, kind: 'date', value: m[0] });
-  }
-  tokens.sort((x, y) => x.index - y.index);
-
   const out: RetractedBid[] = [];
   const seen = new Set<string>();
-  let cur: { bidder: string; amount: number | null; dates: string[] } | null = null;
-
-  const flush = (): void => {
-    if (!cur || cur.amount === null || cur.dates.length < 2) return;
+  for (const row of bidderRows(tokenize(retractionText), 2)) {
     let bidTime: string;
     let removedAt: string;
     try {
-      bidTime = parseEbayDate(cur.dates[0]!);
-      removedAt = parseEbayDate(cur.dates[1]!);
+      bidTime = parseEbayDate(row.dates[0]!);
+      removedAt = parseEbayDate(row.dates[1]!);
     } catch {
-      return;
+      continue;
     }
     // If the two parsed timestamps are out of chronological order (retraction
     // earlier than the bid), eBay rendered the columns in (retraction, bid)
@@ -381,22 +369,9 @@ export function parseRetractedSection(retractionText: string): RetractedBid[] {
       bidTime = removedAt;
       removedAt = tmp;
     }
-    const key = `${cur.bidder}|${bidTime}|${cur.amount}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push({ bidder: cur.bidder, bidTime, bidAmount: cur.amount, removedAt });
-  };
-
-  for (const token of tokens) {
-    if (token.kind === 'bidder') {
-      flush();
-      cur = { bidder: token.value, amount: null, dates: [] };
-    } else if (cur) {
-      if (token.kind === 'amount' && cur.amount === null) cur.amount = Number(token.value);
-      else if (token.kind === 'date' && cur.dates.length < 2) cur.dates.push(token.value);
-    }
+    if (!isNewBid(seen, row.bidder, bidTime, row.amount)) continue;
+    out.push({ bidder: row.bidder, bidTime, bidAmount: row.amount, removedAt });
   }
-  flush();
   return out;
 }
 
@@ -443,7 +418,7 @@ export async function fetchViewbidsHtml(numericId: string): Promise<ViewbidsFetc
     }
     return { status: 'ok', html };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return { status: 'error', message };
   } finally {
     clearTimeout(timeout);

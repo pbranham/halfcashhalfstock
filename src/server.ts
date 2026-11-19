@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import 'dotenv/config';
@@ -13,14 +14,16 @@ import {
   resolveEbayTradingUserToken,
   resolveSellerTicker,
   type Config,
+  ENVIRONMENT_RE,
+  ITEM_ID_RE,
+  TICKER_RE,
 } from './config.js';
-import { createLogger, type Logger } from './log.js';
+import { createLogger, errorMessage, type Logger } from './log.js';
 import { TtlCache, DbBackedCache } from './cache.js';
 import { createPool } from './db/pool.js';
 import { runMigrations } from './db/migrate.js';
 import {
   backfillBidsImportedStamps,
-  bulkInsertOhlcData,
   forceMarkEnded,
   getClosingPriceAt,
   persistSnapshot,
@@ -42,10 +45,10 @@ import { EbayClient } from './ebay/client.js';
 import { listSellerActiveItems, type Listing } from './ebay/seller.js';
 import { createAdaptiveSellerFetch } from './seller-poll.js';
 import { createItemDetailsEnricher } from './item-details-enricher.js';
-import { reconcileFinalsForItems, getTradingAuthFailureStreak } from './reconcile-finals.js';
+import { reconcileFinalsForItems, getTradingAuthFailureStreak, finalsEligibility } from './reconcile-finals.js';
 import { startBackgroundListingPoll, getListingPollHeartbeat } from './listing-poll.js';
 import { startFeedbackSweep, sweepFeedbackOnce, getFeedbackSweepHeartbeat } from './feedback-sweep.js';
-import { startDailyOhlcRefresh } from './ohlc-refresh.js';
+import { refreshDailyOhlcOnce, startDailyOhlcRefresh } from './ohlc-refresh.js';
 import { fetchBidHistory } from './ebay/bid-history.js';
 import { normalizeTradingItemId } from './ebay/trading.js';
 import { parseViewbids, ViewbidsParseError } from './ebay/viewbids.js';
@@ -54,9 +57,10 @@ import { YahooProvider } from './prices/yahoo.js';
 import { ChainedPriceProvider } from './prices/provider.js';
 import type { PriceProvider, PriceQuote } from './prices/types.js';
 import { composeSnapshot, type Snapshot } from './snapshot.js';
-import { maskBidder } from './anon.js';
+import { maskBids, maskFeedback } from './anon.js';
 import { TickerQueue } from './ticker-queue.js';
 import { RequestStatsCollector } from './request-stats.js';
+import { DAY_MS, daysAgo, HOUR_MS, isoOrNull, MINUTE_MS, msAgo } from './time.js';
 
 const LISTINGS_TTL_MS = 30_000;
 const PRICE_TTL_MS = 30_000;
@@ -138,7 +142,7 @@ async function enrichWithBidHistory(deps: Deps, listings: Listing[]): Promise<Li
         }
       })
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         deps.log.error('db persistence failed', { error: message });
       });
   }
@@ -236,6 +240,42 @@ function buildDeps(
   };
 }
 
+// The three request-stats tables the admin maintenance actions prune together.
+const STATS_TABLES = ['request_stats', 'session_stats', 'seen_ips'] as const;
+
+// DELETE the rows matching `where` from every stats table; returns the
+// per-table deleted counts.
+async function deleteFromStatsTables(
+  db: Pool,
+  where: string,
+  params: unknown[],
+): Promise<Record<(typeof STATS_TABLES)[number], number>> {
+  const deleted = {} as Record<(typeof STATS_TABLES)[number], number>;
+  for (const table of STATS_TABLES) {
+    deleted[table] = (await db.query(`DELETE FROM ${table} WHERE ${where}`, params)).rowCount ?? 0;
+  }
+  return deleted;
+}
+
+// Routes that read Postgres answer 503 `{error: code}` when no database is
+// configured; on true, `deps.db` is narrowed to a Pool.
+function hasDb(deps: Deps, res: Response, code: string): deps is Deps & { db: Pool } {
+  if (deps.db) return true;
+  res.status(503).json({ error: code, detail: 'database not configured' });
+  return false;
+}
+
+// An item id from a query/body field, trimmed and checked against
+// ITEM_ID_RE. On a bad one, answers 400 naming `field` and returns null.
+function validItemId(res: Response, raw: unknown, field: string): string | null {
+  const itemId = typeof raw === 'string' ? raw.trim() : '';
+  if (!itemId || !ITEM_ID_RE.test(itemId)) {
+    res.status(400).json({ error: 'bad_request', detail: `missing or invalid ${field}` });
+    return null;
+  }
+  return itemId;
+}
+
 export function createApp(deps: Deps): express.Express {
   const app = express();
   app.disable('x-powered-by');
@@ -280,7 +320,7 @@ export function createApp(deps: Deps): express.Express {
   });
 
   const apiLimiter = rateLimit({
-    windowMs: 60_000,
+    windowMs: MINUTE_MS,
     limit: 60,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
@@ -322,22 +362,16 @@ export function createApp(deps: Deps): express.Express {
     // Background loops: 'not-running' is the normal state everywhere
     // except prod. 'stalled' (ran before, then went silent well past its
     // cadence) is the failure worth flagging.
-    const pollHb = getListingPollHeartbeat();
-    if (pollHb === null) {
-      checks.listingPoll = 'not-running';
-    } else {
-      const ageS = Math.round((Date.now() - pollHb) / 1000);
-      checks.listingPoll = ageS > 150 ? `stalled (last tick ${ageS}s ago)` : 'ok';
-      if (ageS > 150) degrade();
-    }
-    const sweepHb = getFeedbackSweepHeartbeat();
-    if (sweepHb === null) {
-      checks.feedbackSweep = 'not-running';
-    } else {
-      const ageS = Math.round((Date.now() - sweepHb) / 1000);
-      checks.feedbackSweep = ageS > 2 * 3600 + 300 ? `stalled (last tick ${ageS}s ago)` : 'ok';
-      if (ageS > 2 * 3600 + 300) degrade();
-    }
+    // A loop is stalled once its last tick is older than maxAgeS.
+    const loopCheck = (heartbeat: number | null, maxAgeS: number): string => {
+      if (heartbeat === null) return 'not-running';
+      const ageS = Math.round((Date.now() - heartbeat) / 1000);
+      if (ageS <= maxAgeS) return 'ok';
+      degrade();
+      return `stalled (last tick ${ageS}s ago)`;
+    };
+    checks.listingPoll = loopCheck(getListingPollHeartbeat(), 150);
+    checks.feedbackSweep = loopCheck(getFeedbackSweepHeartbeat(), 2 * 3600 + 300);
 
     const authStreak = getTradingAuthFailureStreak();
     if (authStreak >= 5) {
@@ -359,7 +393,7 @@ export function createApp(deps: Deps): express.Express {
   // Daily OHLC history for the performance chart. Changes at most once per
   // trading day, so a coarse TTL is plenty; keyed by `${tickers}:${days}`.
   const ohlcHistoryCache = new TtlCache<Awaited<ReturnType<typeof readDailyOhlc>>>();
-  const OHLC_HISTORY_TTL_MS = 60 * 60 * 1000;
+  const OHLC_HISTORY_TTL_MS = HOUR_MS;
 
   // Cache for end-time stock closes: the OHLC close for a fixed (item,
   // ticker) pair never changes — the past doesn't change — so look it up
@@ -373,7 +407,7 @@ export function createApp(deps: Deps): express.Express {
   app.get('/api/snapshot', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const rawSymbol = typeof req.query.symbol === 'string' ? req.query.symbol.trim().toUpperCase() : '';
-      const symbol = rawSymbol && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(rawSymbol) ? rawSymbol : deps.config.STOCK_SYMBOL;
+      const symbol = rawSymbol && TICKER_RE.test(rawSymbol) ? rawSymbol : deps.config.STOCK_SYMBOL;
       // "By seller" mode: value each item in its seller's paired stock instead
       // of one ticker for everyone. MIXED isn't a real symbol, so it bypasses
       // ticker validation; the snapshot fetches every seller-paired ticker.
@@ -520,8 +554,8 @@ export function createApp(deps: Deps): express.Express {
     contentType: string;
     fetchedAt: number;
   }
-  const TICKER_LOGO_TTL_MS = 24 * 60 * 60 * 1000;
-  const TICKER_LOGO_BROWSER_MAX_AGE_S = 24 * 60 * 60;
+  const TICKER_LOGO_TTL_MS = DAY_MS;
+  const BROWSER_CACHE_MAX_AGE_S = DAY_MS / 1000;
   const tickerLogoCache = new Map<string, TickerLogoCacheEntry>();
   const tickerLogoInflight = new Map<string, Promise<TickerLogoCacheEntry>>();
 
@@ -533,7 +567,7 @@ export function createApp(deps: Deps): express.Express {
         return;
       }
       const rawSymbol = typeof req.query.symbol === 'string' ? req.query.symbol.trim().toUpperCase() : '';
-      if (!/^[A-Z][A-Z0-9.\-:]{0,19}$/.test(rawSymbol)) {
+      if (!TICKER_RE.test(rawSymbol)) {
         res.status(400).json({ error: 'bad_request', detail: 'invalid symbol' });
         return;
       }
@@ -542,7 +576,7 @@ export function createApp(deps: Deps): express.Express {
         res
           .status(200)
           .set('Content-Type', entry.contentType)
-          .set('Cache-Control', `public, max-age=${TICKER_LOGO_BROWSER_MAX_AGE_S}, immutable`)
+          .set('Cache-Control', `public, max-age=${BROWSER_CACHE_MAX_AGE_S}, immutable`)
           .send(entry.bytes);
       };
 
@@ -598,7 +632,7 @@ export function createApp(deps: Deps): express.Express {
           raw
             .split(',')
             .map((s) => s.trim().toUpperCase())
-            .filter((s) => /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(s)),
+            .filter((s) => TICKER_RE.test(s)),
         ),
       ).slice(0, 5);
       const rawDays = typeof req.query.days === 'string' ? Number.parseInt(req.query.days, 10) : 180;
@@ -609,7 +643,7 @@ export function createApp(deps: Deps): express.Express {
         return;
       }
       const db = deps.db;
-      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const since = daysAgo(days);
       const ohlc = await ohlcHistoryCache.get(
         `ohlc-history:${tickers.join(',')}:${days}`,
         OHLC_HISTORY_TTL_MS,
@@ -625,15 +659,9 @@ export function createApp(deps: Deps): express.Express {
   });
 
   app.get('/api/item', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
-    if (!deps.db) {
-      res.status(503).json({ error: 'item_unavailable', detail: 'database not configured' });
-      return;
-    }
-    const itemId = typeof req.query.id === 'string' ? req.query.id.trim() : '';
-    if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
-      res.status(400).json({ error: 'bad_request', detail: 'missing or invalid id' });
-      return;
-    }
+    if (!hasDb(deps, res, 'item_unavailable')) return;
+    const itemId = validItemId(res, req.query.id, 'id');
+    if (!itemId) return;
     try {
       const [listing, bids, snapshots, feedback] = await Promise.all([
         readListingDetail(deps.db, itemId),
@@ -649,8 +677,8 @@ export function createApp(deps: Deps): express.Express {
       // Trading API returns full IDs; eBay's own public bid-history page
       // shows them masked, so the public dashboard does the same. Feedback
       // commenters get the same treatment.
-      const maskedBids = bids.map((b) => ({ ...b, bidder: maskBidder(b.bidder) }));
-      const maskedFeedback = feedback.map((f) => ({ ...f, commentingUser: maskBidder(f.commentingUser) }));
+      const maskedBids = maskBids(bids);
+      const maskedFeedback = maskFeedback(feedback);
       res
         .status(200)
         .set('Cache-Control', 'public, max-age=15')
@@ -661,18 +689,12 @@ export function createApp(deps: Deps): express.Express {
   });
 
   app.get('/api/history', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
-    if (!deps.db) {
-      res.status(503).json({ error: 'history_unavailable', detail: 'database not configured' });
-      return;
-    }
-    const itemId = typeof req.query.itemId === 'string' ? req.query.itemId.trim() : '';
-    if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
-      res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
-      return;
-    }
+    if (!hasDb(deps, res, 'history_unavailable')) return;
+    const itemId = validItemId(res, req.query.itemId, 'itemId');
+    if (!itemId) return;
     try {
       const bids = await readBidsForItem(deps.db, itemId);
-      const maskedBids = bids.map((b) => ({ ...b, bidder: maskBidder(b.bidder) }));
+      const maskedBids = maskBids(bids);
       res.status(200).set('Cache-Control', 'public, max-age=15').json({ itemId, bids: maskedBids });
     } catch (err) {
       next(err);
@@ -680,20 +702,17 @@ export function createApp(deps: Deps): express.Express {
   });
 
   app.get('/api/ohlc', apiLimiter, async (req: Request, res: Response, next: NextFunction) => {
-    if (!deps.db) {
-      res.status(503).json({ error: 'ohlc_unavailable', detail: 'database not configured' });
-      return;
-    }
+    if (!hasDb(deps, res, 'ohlc_unavailable')) return;
     const ticker = typeof req.query.ticker === 'string' ? req.query.ticker.trim().toUpperCase() : '';
     const daysStr = typeof req.query.days === 'string' ? req.query.days.trim() : '7';
-    if (!ticker || !/^[A-Z][A-Z0-9.\-:]{0,19}$/.test(ticker)) {
+    if (!ticker || !TICKER_RE.test(ticker)) {
       res.status(400).json({ error: 'bad_request', detail: 'missing or invalid ticker' });
       return;
     }
     const days = Math.max(1, Math.min(30, Number.parseInt(daysStr, 10) || 7));
     try {
       const now = new Date();
-      const startTime = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+      const startTime = daysAgo(days, now);
       const { readOhlcData } = await import('./db/persist.js');
       const candles = await readOhlcData(deps.db, ticker, startTime, now);
       res
@@ -707,10 +726,7 @@ export function createApp(deps: Deps): express.Express {
 
   if (deps.config.ENABLE_DEBUG_ENDPOINTS) {
     app.get('/api/debug/ohlc-stats', apiLimiter, async (_req: Request, res: Response, next: NextFunction) => {
-      if (!deps.db) {
-        res.status(503).json({ error: 'debug_unavailable', detail: 'database not configured' });
-        return;
-      }
+      if (!hasDb(deps, res, 'debug_unavailable')) return;
       try {
         const stats = await readOhlcStats(deps.db);
         const queueStatus = deps.tickerQueue?.getStatus() ?? null;
@@ -742,10 +758,7 @@ export function createApp(deps: Deps): express.Express {
   };
 
   app.get('/api/admin/stats', apiLimiter, requireAdminToken, async (req: Request, res: Response, next: NextFunction) => {
-    if (!deps.db) {
-      res.status(503).json({ error: 'stats_unavailable', detail: 'database not configured' });
-      return;
-    }
+    if (!hasDb(deps, res, 'stats_unavailable')) return;
     try {
       const hoursStr = typeof req.query.hours === 'string' ? req.query.hours.trim() : '24';
       const hours = Math.max(1, Math.min(2160, Number.parseInt(hoursStr, 10) || 24));
@@ -763,11 +776,11 @@ export function createApp(deps: Deps): express.Express {
       }
       const sessionInterval = interval === '5min' ? 'hour' : interval;
 
-      const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+      const since = msAgo(hours * HOUR_MS);
       const params: unknown[] = [since, interval];
       const sessionParams: unknown[] = [since, sessionInterval];
       let envClause = '';
-      if (envFilter && /^[a-zA-Z0-9_-]{1,32}$/.test(envFilter)) {
+      if (envFilter && ENVIRONMENT_RE.test(envFilter)) {
         envClause = ' AND environment = $3';
         params.push(envFilter);
         sessionParams.push(envFilter);
@@ -784,7 +797,7 @@ export function createApp(deps: Deps): express.Express {
         `,
         params,
       );
-      const ipEnvClause = envFilter && /^[a-zA-Z0-9_-]{1,32}$/.test(envFilter)
+      const ipEnvClause = envFilter && ENVIRONMENT_RE.test(envFilter)
         ? ' AND environment = $2'
         : '';
       const ipParams: unknown[] = [since];
@@ -880,10 +893,7 @@ export function createApp(deps: Deps): express.Express {
   });
 
   app.post('/api/admin/cleanup', express.json({ limit: '4mb' }), apiLimiter, requireAdminToken, async (req: Request, res: Response, next: NextFunction) => {
-    if (!deps.db) {
-      res.status(503).json({ error: 'cleanup_unavailable', detail: 'database not configured' });
-      return;
-    }
+    if (!hasDb(deps, res, 'cleanup_unavailable')) return;
     try {
       const body = req.body as {
         action?: string;
@@ -900,21 +910,14 @@ export function createApp(deps: Deps): express.Express {
 
       if (action === 'delete_environment') {
         const env = body?.environment?.trim() ?? '';
-        if (!env || !/^[a-zA-Z0-9_-]{1,32}$/.test(env)) {
+        if (!env || !ENVIRONMENT_RE.test(env)) {
           res.status(400).json({ error: 'bad_request', detail: 'invalid environment' });
           return;
         }
-        const reqDel = await deps.db.query('DELETE FROM request_stats WHERE environment = $1', [env]);
-        const sessDel = await deps.db.query('DELETE FROM session_stats WHERE environment = $1', [env]);
-        const ipDel = await deps.db.query('DELETE FROM seen_ips WHERE environment = $1', [env]);
         res.status(200).json({
           action: 'delete_environment',
           environment: env,
-          deleted: {
-            request_stats: reqDel.rowCount ?? 0,
-            session_stats: sessDel.rowCount ?? 0,
-            seen_ips: ipDel.rowCount ?? 0,
-          },
+          deleted: await deleteFromStatsTables(deps.db, 'environment = $1', [env]),
         });
         return;
       }
@@ -922,7 +925,7 @@ export function createApp(deps: Deps): express.Express {
       if (action === 'rename_environment') {
         const from = body?.from?.trim() ?? '';
         const to = body?.to?.trim() ?? '';
-        if (!from || !/^[a-zA-Z0-9_-]{1,32}$/.test(from) || !to || !/^[a-zA-Z0-9_-]{1,32}$/.test(to)) {
+        if (!from || !ENVIRONMENT_RE.test(from) || !to || !ENVIRONMENT_RE.test(to)) {
           res.status(400).json({ error: 'bad_request', detail: 'invalid from/to environment' });
           return;
         }
@@ -938,7 +941,6 @@ export function createApp(deps: Deps): express.Express {
            )`,
           [from, to],
         );
-        await deps.db.query('DELETE FROM request_stats WHERE environment = $1', [from]);
         const sessUpd = await deps.db.query(
           `UPDATE session_stats SET environment = $2 WHERE environment = $1
            AND NOT EXISTS (
@@ -949,7 +951,6 @@ export function createApp(deps: Deps): express.Express {
            )`,
           [from, to],
         );
-        await deps.db.query('DELETE FROM session_stats WHERE environment = $1', [from]);
         const ipUpd = await deps.db.query(
           `UPDATE seen_ips SET environment = $2 WHERE environment = $1
            AND NOT EXISTS (
@@ -960,7 +961,8 @@ export function createApp(deps: Deps): express.Express {
            )`,
           [from, to],
         );
-        await deps.db.query('DELETE FROM seen_ips WHERE environment = $1', [from]);
+        // Rows the target already had for the same key stay; the leftovers go.
+        await deleteFromStatsTables(deps.db, 'environment = $1', [from]);
         res.status(200).json({
           action: 'rename_environment',
           from,
@@ -1014,22 +1016,16 @@ export function createApp(deps: Deps): express.Express {
       }
 
       if (action === 'force_mark_ended') {
-        const itemId = (body?.itemId ?? '').trim();
-        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
-          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
-          return;
-        }
+        const itemId = validItemId(res, body?.itemId, 'itemId');
+        if (!itemId) return;
         const marked = await forceMarkEnded(deps.db, itemId);
         res.status(200).json({ action: 'force_mark_ended', itemId, marked });
         return;
       }
 
       if (action === 'inspect_bid_history') {
-        const itemId = (body?.itemId ?? '').trim();
-        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
-          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
-          return;
-        }
+        const itemId = validItemId(res, body?.itemId, 'itemId');
+        if (!itemId) return;
         const userToken = resolveEbayTradingUserToken(deps.config);
         if (!deps.config.EBAY_DEV_ID || !userToken) {
           res.status(503).json({
@@ -1069,12 +1065,12 @@ export function createApp(deps: Deps): express.Express {
             db: {
               currentPriceUsd: dbRow ? Number(dbRow.current_price_usd) : null,
               currentBidCount: dbRow?.current_bid_count ?? null,
-              endedAt: dbRow?.ended_at ? dbRow.ended_at.toISOString() : null,
+              endedAt: isoOrNull(dbRow?.ended_at),
               totalBidRows: Number(dbBids.rows[0]?.count ?? '0'),
             },
           });
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = errorMessage(err);
           res.status(200).json({
             action: 'inspect_bid_history',
             itemId,
@@ -1091,17 +1087,10 @@ export function createApp(deps: Deps): express.Express {
           res.status(400).json({ error: 'bad_request', detail: 'invalid date' });
           return;
         }
-        const reqDel = await deps.db.query('DELETE FROM request_stats WHERE hour < $1', [before]);
-        const sessDel = await deps.db.query('DELETE FROM session_stats WHERE hour < $1', [before]);
-        const ipDel = await deps.db.query('DELETE FROM seen_ips WHERE hour < $1', [before]);
         res.status(200).json({
           action: 'delete_before',
           before: before.toISOString(),
-          deleted: {
-            request_stats: reqDel.rowCount ?? 0,
-            session_stats: sessDel.rowCount ?? 0,
-            seen_ips: ipDel.rowCount ?? 0,
-          },
+          deleted: await deleteFromStatsTables(deps.db, 'hour < $1', [before]),
         });
         return;
       }
@@ -1169,7 +1158,7 @@ export function createApp(deps: Deps): express.Express {
           mode: apply ? 'applied' : 'dry-run',
           results,
           // Commenters masked even in admin output — consistent boundary.
-          sample: sample.map((f) => ({ ...f, commentingUser: maskBidder(f.commentingUser) })),
+          sample: maskFeedback(sample),
         });
         return;
       }
@@ -1193,7 +1182,7 @@ export function createApp(deps: Deps): express.Express {
         }
         const apply = body?.apply === true;
         const singleItemId = typeof body?.itemId === 'string' ? body.itemId.trim() : '';
-        if (singleItemId && !/^[A-Za-z0-9|.-]{1,64}$/.test(singleItemId)) {
+        if (singleItemId && !ITEM_ID_RE.test(singleItemId)) {
           res.status(400).json({ error: 'bad_request', detail: 'invalid itemId' });
           return;
         }
@@ -1212,10 +1201,7 @@ export function createApp(deps: Deps): express.Express {
         for (const e of capped) {
           try {
             const ss = await getItemSellingStatus(e.itemId, userToken);
-            const closed = ss.listingStatus === 'Completed' || ss.listingStatus === 'Ended';
-            const usd = ss.currencyId === null || ss.currencyId === 'USD';
-            const priceOk = Number.isFinite(ss.currentPrice) && ss.currentPrice > 0;
-            const eligible = ss.ack !== 'Failure' && closed && usd && priceOk;
+            const { eligible } = finalsEligibility(ss);
             const priceChanged = Math.abs(ss.currentPrice - e.finalPriceUsd) > 0.005;
             const bidChanged = ss.bidCount !== e.finalBidCount;
             const willUpdate = eligible && (priceChanged || bidChanged);
@@ -1249,7 +1235,7 @@ export function createApp(deps: Deps): express.Express {
             results.push({
               itemId: e.itemId,
               title: e.title,
-              error: err instanceof Error ? err.message : String(err),
+              error: errorMessage(err),
             });
           }
         }
@@ -1272,7 +1258,7 @@ export function createApp(deps: Deps): express.Express {
         // auctions at the EBAY close on the day they ended.
         const tickersIn = Array.isArray(body?.tickers) ? body.tickers : ['EBAY', 'GME'];
         const tickers = tickersIn
-          .filter((t): t is string => typeof t === 'string' && /^[A-Z][A-Z0-9.\-:]{0,19}$/.test(t))
+          .filter((t): t is string => typeof t === 'string' && TICKER_RE.test(t))
           .slice(0, 10);
         if (tickers.length === 0) {
           res.status(400).json({ error: 'bad_request', detail: 'no valid tickers' });
@@ -1281,34 +1267,20 @@ export function createApp(deps: Deps): express.Express {
         const range = typeof body?.range === 'string' && /^\d{1,3}(d|mo|y)$/.test(body.range)
           ? body.range
           : '90d';
-        const yahoo = new YahooProvider();
-        const perTicker: Array<{ ticker: string; candles: number; inserted: number; error?: string }> = [];
-        for (const ticker of tickers) {
-          try {
-            const candles = await yahoo.getHistoricalCandles(ticker, '1d', range);
-            const inserted = candles.length === 0
-              ? 0
-              : await bulkInsertOhlcData(deps.db, ticker, candles, 'yahoo', '1d');
-            perTicker.push({ ticker, candles: candles.length, inserted });
-          } catch (err) {
-            perTicker.push({
-              ticker,
-              candles: 0,
-              inserted: 0,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
+        const perTicker = await refreshDailyOhlcOnce({
+          pool: deps.db,
+          yahoo: new YahooProvider(),
+          tickers,
+          range,
+          log: deps.log,
+        });
         res.status(200).json({ action: 'backfill_ohlc_history', range, results: perTicker });
         return;
       }
 
       if (action === 'import_viewbids_html') {
-        const itemId = (body?.itemId ?? '').trim();
-        if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
-          res.status(400).json({ error: 'bad_request', detail: 'missing or invalid itemId' });
-          return;
-        }
+        const itemId = validItemId(res, body?.itemId, 'itemId');
+        if (!itemId) return;
         const html = body?.html ?? '';
         if (typeof html !== 'string' || html.trim().length === 0 || html.length > 3_000_000) {
           res.status(400).json({ error: 'bad_request', detail: 'missing or oversized html' });
@@ -1341,7 +1313,7 @@ export function createApp(deps: Deps): express.Express {
             knownZeroBids: parsed.knownZeroBids ?? false,
           });
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = errorMessage(err);
           res.status(200).json({
             action: 'import_viewbids_html',
             itemId,
@@ -1359,13 +1331,26 @@ export function createApp(deps: Deps): express.Express {
     }
   });
 
+  // admin.html / item.html share one head (public/head-common.html), pulled
+  // in at the <!--#head-common--> marker so the two pages never drift.
+  app.get(/^\/(admin|item)(\.html)?$/, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const read = (f: string) => readFile(path.join(PUBLIC_DIR, f), 'utf8');
+      const [page, head] = [await read(`${req.params[0]}.html`), await read('head-common.html')];
+      res.setHeader('Cache-Control', 'no-cache');
+      res.type('html').send(page.replace('<!--#head-common-->', head.trim()));
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.use(express.static(PUBLIC_DIR, {
     extensions: ['html'],
     etag: true,
     lastModified: true,
     setHeaders: (res, filePath) => {
       if (/\.(png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf)$/i.test(filePath)) {
-        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.setHeader('Cache-Control', `public, max-age=${BROWSER_CACHE_MAX_AGE_S}`);
       } else {
         res.setHeader('Cache-Control', 'no-cache');
       }
@@ -1403,7 +1388,7 @@ async function main(): Promise<void> {
       await runMigrations(db, log);
       log.info('database ready');
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       log.error('database initialization failed; continuing without persistence', {
         error: message,
       });
@@ -1431,7 +1416,7 @@ async function main(): Promise<void> {
     requestStats = new RequestStatsCollector(db, environment);
     requestStats.start();
     requestStats.purgeOldStats().catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       log.warn('request stats purge failed', { error: message });
     });
   }
@@ -1522,7 +1507,7 @@ async function main(): Promise<void> {
 const isEntrypoint = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isEntrypoint) {
   main().catch((err: unknown) => {
-    process.stderr.write(`fatal: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(`fatal: ${errorMessage(err)}\n`);
     process.exit(1);
   });
 }

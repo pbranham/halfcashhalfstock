@@ -1,11 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { silentLogger } from './helpers.js';
 import type { Pool } from 'pg';
 import { reconcileFinalsForItems } from '../src/reconcile-finals.js';
-import { createLogger } from '../src/log.js';
-
-function silentLogger() {
-  return createLogger({ level: 'error', sink: () => {} });
-}
 
 function makePool(matched = 1) {
   const query = vi.fn().mockResolvedValue({ rows: [], rowCount: matched });

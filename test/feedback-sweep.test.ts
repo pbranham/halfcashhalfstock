@@ -1,11 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { silentLogger } from './helpers.js';
 import type { Pool } from 'pg';
 import { sweepFeedbackOnce } from '../src/feedback-sweep.js';
-import { createLogger } from '../src/log.js';
-
-function silentLogger() {
-  return createLogger({ level: 'error', sink: () => {} });
-}
 
 afterEach(() => vi.restoreAllMocks());
 

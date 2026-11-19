@@ -19,8 +19,8 @@ like `BINANCE:BTCUSDT`).
 - Node.js 20+ / TypeScript / Express
 - eBay [Browse API](https://developer.ebay.com/api-docs/buy/browse/overview.html)
   (OAuth client_credentials) for active listings; eBay Trading API
-  (optional) for per-bid timestamps
-- Pluggable stock price provider — Finnhub primary, Yahoo Finance fallback
+  (optional) for per-bid timestamps, parsed with `fast-xml-parser`
+- Stock quotes from Finnhub (sole live-quote provider); Yahoo Finance is used only for historical daily candles
 - Postgres (optional) for cross-instance request dedup, bid history, and
   OHLC candle storage
 - Background `TickerQueue` service that polls all known tickers continuously
@@ -85,11 +85,11 @@ Two eBay-imposed time limits worth knowing:
 1. Sign up at <https://finnhub.io/register>.
 2. Copy the API key into `.env` as `FINNHUB_API_KEY`.
 
-If `FINNHUB_API_KEY` is unset, the server falls back to Yahoo Finance's
-unofficial endpoint. Finnhub is more reliable for arbitrary tickers and has
-a real free tier (60 calls/min, US stocks plus crypto/forex via prefixed
-symbols). For custom tickers beyond EBAY/GME, Finnhub is effectively required
-because Yahoo's `/v7/finance/quote` increasingly rejects unauthenticated calls.
+Finnhub is the only live-quote provider (free tier: 60 calls/min, US stocks
+plus crypto/forex via prefixed symbols). If `FINNHUB_API_KEY` is unset the
+server still boots, but every quote fails and the dashboard shows the stale
+banner; Yahoo's unofficial quote endpoint was removed (it now requires a
+crumb token). Yahoo is still used for historical daily candles.
 
 ### Postgres (optional but recommended)
 
@@ -102,7 +102,7 @@ When `DATABASE_URL` is set, the server enables:
 - **OHLC candle storage** in `ohlc_data` — 14d of 15-minute candles plus
   forward 1-minute candles for any ticker the dashboard touches
 
-Schema migrations live under `migrations/` and run sequentially at startup.
+Migrations run at startup (see [Data persistence](#data-persistence)).
 On Render, attach a free Postgres add-on and `DATABASE_URL` is provided
 automatically.
 
@@ -116,14 +116,17 @@ automatically.
 | `EBAY_USER_TOKEN`         | no       | —             | Auth'n'Auth user token; alternative to file                        |
 | `EBAY_USER_TOKEN_FILE`    | no       | `.cache/...`  | Path to JSON file containing the user token                        |
 | `EBAY_SELLER_IDS`         | no       | `boilerpaulie,ryan_5050` | Comma-separated seller usernames to track. Legacy `EBAY_SELLER_ID` (single value) is accepted as a fallback. |
+| `EBAY_SELLER_TICKERS`     | no       | `boilerpaulie:GME,ryan_5050:EBAY` | `seller:TICKER,...` pairing for "By seller" valuation; sellers absent from the map use `STOCK_SYMBOL` |
 | `EBAY_MARKETPLACE_ID`     | no       | `EBAY_US`     | eBay marketplace                                                   |
-| `FINNHUB_API_KEY`         | no       | —             | Enables Finnhub primary; Yahoo used otherwise                      |
+| `FINNHUB_API_KEY`         | no       | —             | Live stock quotes (sole provider); without it quotes fail          |
 | `STOCK_SYMBOL`            | no       | `EBAY`        | Default ticker for the stock half of the math                      |
 | `DATABASE_URL`            | no       | —             | Postgres connection string; enables persistence + OHLC + queue     |
 | `PORT`                    | no       | `3000`        |                                                                    |
 | `LOG_LEVEL`               | no       | `info`        | `debug` \| `info` \| `warn` \| `error`                             |
 | `NODE_ENV`                | no       | `development` | `development` \| `test` \| `production`                            |
 | `ENABLE_DEBUG_ENDPOINTS`  | no       | `false`       | When `true`, exposes `/api/debug/ohlc-stats` (dev/staging only)    |
+| `ADMIN_TOKEN`             | no       | —             | Gates `/admin` and `/api/admin/*` (>= 8 chars)                     |
+| `APP_ENVIRONMENT`         | no       | —             | Tags `request_stats` rows (`prod` / `dev`). Only `prod` runs the background listing poll and feedback sweep (dev and prod share one DB). |
 | `LOGO_DEV_TOKEN`          | no       | —             | logo.dev publishable API key. When set, the dashboard renders the ticker logo as the shares "unit"; otherwise falls back to spelled-out "shares". |
 
 \* Without eBay credentials the server still boots and serves the static UI;
@@ -136,9 +139,21 @@ automatically.
 | GET    | `/`                        | Static frontend (`public/index.html`)                                        |
 | GET    | `/healthz`                 | Liveness probe; always 200 once the server is listening                      |
 | GET    | `/api/snapshot`            | JSON snapshot. Query: `symbol` (1–20 chars, regex `^[A-Z][A-Z0-9.\-:]{0,19}$`); falls back to `STOCK_SYMBOL` if absent or invalid. Unknown symbols are validated through the TickerQueue (synchronous, up to ~4s). |
+| GET    | `/api/health`              | Health JSON (`ok`/`degraded`/`error`; 503 on DB failure); see `docs/operations.md` |
+| GET    | `/api/item`                | Per-item audit data (bids, feedback, gallery). Query: `itemId`. |
+| GET    | `/api/ohlc-history`        | Retained daily OHLC for the performance chart. Query: `tickers`, `days`. |
+| GET    | `/api/ticker-logo`         | Server-side logo.dev proxy (keeps `LOGO_DEV_TOKEN` off the client); cached 24h in memory and in the browser. Query: `symbol`. |
+| GET/POST | `/api/admin/*`           | Admin stats + maintenance (`ADMIN_TOKEN`); all actions are `POST /api/admin/cleanup`. |
 | GET    | `/api/history`             | Bid history for one item. Query: `itemId`. Requires Postgres.                 |
 | GET    | `/api/ohlc`                | OHLC candles for a ticker. Query: `ticker`, `days` (1–30, default 7). Requires Postgres. |
 | GET    | `/api/debug/ohlc-stats`    | Per-ticker per-interval candle counts + queue status. Requires `ENABLE_DEBUG_ENDPOINTS=true`. |
+
+Admin actions not described elsewhere (`docs/ebay-data.md`, `docs/dashboard.md`), all sent as
+`POST /api/admin/cleanup {action, ...}`: `count_removed_bids`, `restore_all_bids` (clear
+`bids.removed_at`), `restore_listings` (clear `listings.ended_at`), `list_stuck_listings`,
+`force_mark_ended` (`itemId`), `delete_environment` / `rename_environment` (`request_stats`
+environment labels), `delete_before` (deletes `request_stats` / `session_stats` / `seen_ips`
+rows older than a date).
 
 `/api/snapshot`, `/api/history`, `/api/ohlc`, and `/api/debug/ohlc-stats` are
 rate-limited at 60 requests/min/IP.
@@ -158,7 +173,7 @@ rate-limited at 60 requests/min/IP.
 ## Live data flow (`TickerQueue`)
 
 When Postgres is configured, `src/ticker-queue.ts` runs two coordinated loops
-on top of the chained price provider (Finnhub → Yahoo). Together they decouple
+on top of the Finnhub price provider. Together they decouple
 data ingestion from user activity and bound API quota use regardless of how
 many users submit custom tickers.
 
@@ -176,7 +191,7 @@ many users submit custom tickers.
                     │  ┌────────────────────────┐  │
                     │  │  known tickers (Set)   │──┼──▶ live 1m writes
                     │  │  EBAY + GME always +   │  │    (deduped by quote.asOf)
-                    │  │  recent customs (5d)   │  │
+                    │  │  recent customs (30m)  │  │
                     │  │  passive every ~30s    │  │
                     │  └────────────────────────┘  │
                     │                              │
@@ -188,8 +203,8 @@ many users submit custom tickers.
                     └──────────────┬───────────────┘
                                    │
                                    ▼
-                          chained price provider
-                          (Finnhub → Yahoo per ticker)
+                             price provider
+                                (Finnhub)
 ```
 
 **Behaviors that matter:**
@@ -279,7 +294,7 @@ own VPS — all the same `docker run` invocation.
                   │                                   │
                   ▼                                   ▼
          eBay Browse + Trading APIs           TickerQueue + price providers
-         (OAuth, TTL/DB cached)                (Finnhub → Yahoo)
+         (OAuth, TTL/DB cached)                (Finnhub)
                   │                                   │
                   └─────────────┬─────────────────────┘
                                 ▼
@@ -290,6 +305,7 @@ own VPS — all the same `docker run` invocation.
                        │  bids            │
                        │  cache_entries   │
                        │  ohlc_data       │
+                       │  feedback, ...   │
                        └──────────────────┘
 ```
 
@@ -312,7 +328,10 @@ Schema migrations live under `migrations/` and run at startup in lexical order.
 | `listings`        | Current state per item, upserted on every snapshot poll               |
 | `bids`            | Append-only individual bids (Trading API), `(item, time, bidder)` PK  |
 | `cache_entries`   | JSONB payloads keyed by cache_key with `expires_at` for cross-replica dedup |
-| `ohlc_data`       | OHLC candles, `(ticker, period_start)` PK, `interval` column ('15m', '1m') |
+| `ohlc_data`       | OHLC candles, PK includes `interval` ('15m', '1m', '1d'); 1d rows are never purged |
+| `listing_snapshots` | Deduped per-listing price/bid history |
+| `feedback`        | Buyer feedback captured hourly (unique on item/commenter/time) |
+| `request_stats`, `session_stats`, `seen_ips` | Privacy-respecting request metrics |
 
 **Retention policy** (enforced by `purgeOldOhlcData` on TickerQueue startup):
 

@@ -1,4 +1,4 @@
-import { splitHalfCashHalfStock, sumSplits, type HalfSplit } from './math.js';
+import { splitHalfCashHalfStock, sumBy, sumSplits, type HalfSplit } from './math.js';
 import type { Listing } from './ebay/seller.js';
 import type { PriceQuote } from './prices/types.js';
 import type { EndedListingRow } from './db/persist.js';
@@ -27,18 +27,7 @@ export interface ListingView {
   additionalImages: string[];
 }
 
-export interface EndedListingView {
-  itemId: string;
-  sellerId: string;
-  title: string;
-  imageUrl: string | null;
-  itemWebUrl: string | null;
-  isAuction: boolean;
-  endsAt: string | null;
-  endedAt: string;
-  finalPriceUsd: number;
-  finalBidCount: number;
-  currency: string;
+export interface EndedListingView extends EndedListingRow {
   // Same shape as ListingView.additionalImages — gallery URLs from the
   // per-item Browse details, excluding imageUrl.
   additionalImages: string[];
@@ -116,6 +105,17 @@ function isSplittablePrice(n: number | null | undefined): n is number {
   return typeof n === 'number' && Number.isFinite(n) && n >= 0;
 }
 
+/** Ended items that cleared (>0 bids) and carry a non-null split in `key`. */
+function endedWithSplit<K extends 'split' | 'endTimeSplit'>(
+  items: EndedListingView[],
+  key: K,
+): (EndedListingView & Record<K, HalfSplit>)[] {
+  return items.filter(
+    (i): i is EndedListingView & Record<K, HalfSplit> =>
+      i[key] !== null && (i.finalBidCount ?? 0) > 0,
+  );
+}
+
 export function composeSnapshot(
   listings: readonly Listing[],
   stock: PriceQuote,
@@ -139,21 +139,37 @@ export function composeSnapshot(
   const priceFor = (sellerId: string): number =>
     valuation ? valuation.quoteForTicker(valuation.tickerForSeller(sellerId)).price : stock.price;
 
+  // The listing fields every card view carries, active or ended, plus its
+  // gallery and the ticker it's valued in.
+  const viewBase = <
+    T extends { itemId: string; sellerId: string } & Record<
+      'title' | 'imageUrl' | 'itemWebUrl' | 'isAuction' | 'endsAt' | 'currency',
+      unknown
+    >,
+  >(
+    x: T,
+  ): Pick<T, 'itemId' | 'sellerId' | 'title' | 'imageUrl' | 'itemWebUrl' | 'isAuction' | 'endsAt' | 'currency'> & {
+    additionalImages: string[];
+    valuationTicker: string;
+  } => ({
+    itemId: x.itemId,
+    sellerId: x.sellerId,
+    title: x.title,
+    imageUrl: x.imageUrl,
+    itemWebUrl: x.itemWebUrl,
+    isAuction: x.isAuction,
+    endsAt: x.endsAt,
+    currency: x.currency,
+    additionalImages: additionalImagesByItemId.get(x.itemId) ?? [],
+    valuationTicker: tickerFor(x.sellerId),
+  });
+
   const items: ListingView[] = listings.map((l) => ({
-    itemId: l.itemId,
-    sellerId: l.sellerId,
-    title: l.title,
-    imageUrl: l.imageUrl,
-    itemWebUrl: l.itemWebUrl,
-    currency: l.currency,
+    ...viewBase(l),
     priceUsd: isSplittablePrice(l.priceUsd) ? l.priceUsd : null,
     bidCount: l.bidCount,
-    endsAt: l.endsAt,
-    isAuction: l.isAuction,
     split: isSplittablePrice(l.priceUsd) ? splitHalfCashHalfStock(l.priceUsd, priceFor(l.sellerId)) : null,
-    valuationTicker: tickerFor(l.sellerId),
     lastBidTime: l.lastBidTime ?? null,
-    additionalImages: additionalImagesByItemId.get(l.itemId) ?? [],
   }));
 
   // Items with at least one real bid AND a USD price contribute to the
@@ -190,38 +206,23 @@ export function composeSnapshot(
     const endTimeClose =
       rawClose !== null && Number.isFinite(rawClose) && rawClose > 0 ? rawClose : null;
     return {
-      itemId: e.itemId,
-      sellerId: e.sellerId,
-      title: e.title,
-      imageUrl: e.imageUrl,
-      itemWebUrl: e.itemWebUrl,
-      isAuction: e.isAuction,
-      endsAt: e.endsAt,
+      ...viewBase(e),
       endedAt: e.endedAt,
       finalPriceUsd: e.finalPriceUsd,
       finalBidCount: e.finalBidCount,
-      currency: e.currency,
-      additionalImages: additionalImagesByItemId.get(e.itemId) ?? [],
       split: isUsd && isSplittablePrice(e.finalPriceUsd) ? splitHalfCashHalfStock(e.finalPriceUsd, priceFor(e.sellerId)) : null,
       endTimePriceUsd: endTimeClose,
       endTimeSplit:
         isUsd && isSplittablePrice(e.finalPriceUsd) && endTimeClose !== null
           ? splitHalfCashHalfStock(e.finalPriceUsd, endTimeClose)
           : null,
-      valuationTicker: tickerFor(e.sellerId),
     };
   });
   // Same no-bid exclusion for ended items: an auction that ended at the
   // starting price with zero bids didn't actually clear, so its starting
   // price shouldn't roll into the ended totals.
-  const endedPriced = endedItems.filter(
-    (i): i is EndedListingView & { split: HalfSplit } =>
-      i.split !== null && (i.finalBidCount ?? 0) > 0,
-  );
-  const endedPricedAtEnd = endedItems.filter(
-    (i): i is EndedListingView & { endTimeSplit: HalfSplit } =>
-      i.endTimeSplit !== null && (i.finalBidCount ?? 0) > 0,
-  );
+  const endedPriced = endedWithSplit(endedItems, 'split');
+  const endedPricedAtEnd = endedWithSplit(endedItems, 'endTimeSplit');
 
   return {
     generatedAt: new Date().toISOString(),
@@ -238,14 +239,14 @@ export function composeSnapshot(
     totals: {
       listingsCount: items.length,
       pricedCount: priced.length,
-      bidsCount: items.reduce((sum, i) => sum + (i.bidCount ?? 0), 0),
-      bidUsd: priced.reduce((sum, i) => sum + i.priceUsd, 0),
+      bidsCount: sumBy(items, (i) => i.bidCount ?? 0),
+      bidUsd: sumBy(priced, (i) => i.priceUsd),
       split: sumSplits(priced.map((i) => i.split)),
     },
     endedTotals: {
       listingsCount: endedItems.length,
-      bidsCount: endedItems.reduce((sum, i) => sum + i.finalBidCount, 0),
-      bidUsd: endedPriced.reduce((sum, i) => sum + i.finalPriceUsd, 0),
+      bidsCount: sumBy(endedItems, (i) => i.finalBidCount),
+      bidUsd: sumBy(endedPriced, (i) => i.finalPriceUsd),
       split: sumSplits(endedPriced.map((i) => i.split)),
       splitAtEnd: sumSplits(endedPricedAtEnd.map((i) => i.endTimeSplit)),
       pricedAtEndCount: endedPricedAtEnd.length,

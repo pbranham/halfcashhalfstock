@@ -1,13 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
+import { silentLogger } from './helpers.js';
 import type { Pool } from 'pg';
 import { TickerQueue } from '../src/ticker-queue.js';
-import { createLogger } from '../src/log.js';
 import type { YahooProvider } from '../src/prices/yahoo.js';
 import type { PriceProvider } from '../src/prices/types.js';
-
-function silentLogger() {
-  return createLogger({ level: 'error', sink: () => {} });
-}
 
 function makeQueue(opts: { requestWindowMs?: number } = {}) {
   const pool = { query: vi.fn().mockResolvedValue({ rows: [] }) } as unknown as Pool;

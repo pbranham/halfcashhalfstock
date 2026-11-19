@@ -1,27 +1,12 @@
 /* Item audit page. Reuses the shared theme tokens from style.css (:root)
    so it matches the dashboard's look in both dark and light modes. The page
    body carries .item-page (not .item-body — that's the dashboard card class
-   in style.css). */
-.item-page {
-  background: var(--bg);
-  color: var(--fg);
-}
-
-.item-main {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 1.5rem 1rem;
-}
-
+   in style.css); its shell (.item-page / .item-main) is shared with the
+   admin page in style.css. */
 .item-header {
   display: flex;
   gap: 1rem;
   margin-bottom: 1.5rem;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 1rem;
   flex-wrap: wrap;
 }
 
@@ -99,11 +84,6 @@
 }
 
 .item-section {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 1rem;
   margin-bottom: 1.5rem;
 }
 
@@ -418,16 +398,10 @@
 }
 
 .error-banner {
-  background: #5a1f1f;
   color: #ffecec;
-  padding: 0.75rem 1rem;
-  border-radius: 6px;
-  margin-bottom: 1rem;
 }
 
 .loading {
-  text-align: center;
-  padding: 2rem;
   color: var(--fg-muted);
 }
 
@@ -453,17 +427,8 @@
 }
 
 .admin-output {
-  margin-top: 0.75rem;
-  padding: 0.8rem 1rem;
   background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 0.75rem;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  white-space: pre-wrap;
-  word-break: break-all;
   max-height: 500px;
-  overflow-y: auto;
 }
 
 .admin-subheading {
