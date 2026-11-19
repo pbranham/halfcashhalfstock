@@ -2,7 +2,8 @@ import type http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QUOTE, expectSellerValuation, silentLogger } from './helpers.js';
-import { createApp } from '../src/server.js';
+import { createApp, listenOrExit } from '../src/server.js';
+import { createLogger } from '../src/log.js';
 import { loadConfig } from '../src/config.js';
 import type { Listing } from '../src/ebay/seller.js';
 import type { PriceQuote } from '../src/prices/types.js';
@@ -220,5 +221,64 @@ describe('/api/health', () => {
     expect(status).toBe(503);
     expect(body.status).toBe('error');
     expect(body.checks.db).toBe('error');
+  });
+});
+
+describe('listenOrExit', () => {
+  it('logs and exits 1 when the port is taken', async () => {
+    await startApp();
+    const takenPort = (server.address() as AddressInfo).port;
+    const lines: string[] = [];
+    const app = createApp({
+      config: loadConfig({}),
+      log: silentLogger(),
+      fetchListings: async () => [],
+      fetchQuote: async () => QUOTE,
+    });
+    // Settles on whichever callback path runs: exit(1) or a 'listening' log.
+    const code = await new Promise<number | 'listening'>((resolve) => {
+      const second = listenOrExit(app, takenPort, createLogger({
+        level: 'info',
+        sink: (l) => {
+          lines.push(l);
+          if (JSON.parse(l).msg === 'listening') {
+            second.close();
+            resolve('listening');
+          }
+        },
+      }), {}, (c) => resolve(c));
+    });
+    expect(code).toBe(1);
+    const entry = JSON.parse(lines.find((l) => JSON.parse(l).msg === 'listen failed') ?? '{}');
+    expect(entry).toMatchObject({ level: 'error', port: takenPort });
+    expect(entry.error).toMatch(/EADDRINUSE/);
+  });
+});
+
+// Express 5 (path-to-regexp 8, router 2, serve-static 2) route shapes.
+describe('page + static routes', () => {
+  it.each(['/admin', '/admin.html', '/item', '/item.html'])('%s inlines the shared head', async (p) => {
+    await startApp();
+    const res = await fetch(`${baseUrl}${p}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/text\/html/);
+    const html = await res.text();
+    expect(html).not.toContain('<!--#head-common-->');
+    expect(html).toContain('<head>');
+  });
+
+  it('serves / and /shared.js from public/', async () => {
+    await startApp();
+    const root = await fetch(`${baseUrl}/`);
+    expect(root.status).toBe(200);
+    expect(root.headers.get('cache-control')).toBe('no-cache');
+    const js = await fetch(`${baseUrl}/shared.js`);
+    expect(js.status).toBe(200);
+    expect(js.headers.get('content-type')).toMatch(/javascript/);
+  });
+
+  it('404s an unknown path', async () => {
+    await startApp();
+    expect((await fetch(`${baseUrl}/nope`)).status).toBe(404);
   });
 });
