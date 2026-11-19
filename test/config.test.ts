@@ -11,6 +11,18 @@ import {
   resolveSellerTicker,
 } from '../src/config.js';
 
+// Run `fn` with a temp token file holding `json`; the file is removed after.
+function withTokenFile(json: unknown, fn: (tokenFile: string) => void): void {
+  const dir = mkdtempSync(path.join(tmpdir(), 'hchs-config-'));
+  try {
+    const tokenFile = path.join(dir, 'token.json');
+    writeFileSync(tokenFile, JSON.stringify(json), 'utf8');
+    fn(tokenFile);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 describe('loadConfig', () => {
   it('applies defaults when only minimal env is provided', () => {
     const cfg = loadConfig({});
@@ -100,32 +112,22 @@ describe('loadConfig', () => {
   });
 
   it('hasEbayTradingCredentials reports token-file based Trading credentials as present', () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'hchs-config-'));
-    try {
-      const tokenFile = path.join(dir, 'token.json');
-      writeFileSync(tokenFile, JSON.stringify({ token: 'from-file-token' }), 'utf8');
+    withTokenFile({ token: 'from-file-token' }, (tokenFile) => {
       const cfg = loadConfig({ EBAY_DEV_ID: 'd', EBAY_USER_TOKEN_FILE: tokenFile });
       expect(hasEbayTradingCredentials(cfg)).toBe(true);
       expect(resolveEbayTradingUserToken(cfg)).toBe('from-file-token');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    });
   });
 
   it('resolveEbayTradingUserToken prefers token file over env token', () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'hchs-config-'));
-    try {
-      const tokenFile = path.join(dir, 'token.json');
-      writeFileSync(tokenFile, JSON.stringify({ eBayAuthToken: 'file-wins' }), 'utf8');
+    withTokenFile({ eBayAuthToken: 'file-wins' }, (tokenFile) => {
       const cfg = loadConfig({
         EBAY_DEV_ID: 'd',
         EBAY_USER_TOKEN: 'env-fallback',
         EBAY_USER_TOKEN_FILE: tokenFile,
       });
       expect(resolveEbayTradingUserToken(cfg)).toBe('file-wins');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    });
   });
 
   it('resolveEbayTradingUserToken falls back to EBAY_USER_TOKEN when token file is missing', () => {

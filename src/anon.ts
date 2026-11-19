@@ -16,3 +16,18 @@ export function maskBidder(bidder: string | null | undefined): string {
   if (bidder.length <= 2) return bidder;
   return `${bidder[0]}***${bidder[bidder.length - 1]}`;
 }
+
+// Bid rows and feedback rows with their usernames masked — what every API
+// response that carries them sends.
+function maskField<K extends string, T extends Record<K, string | null>>(
+  rows: readonly T[],
+  key: K,
+): T[] {
+  return rows.map((r) => ({ ...r, [key]: maskBidder(r[key]) }));
+}
+
+export const maskBids = <T extends { bidder: string | null }>(rows: readonly T[]) =>
+  maskField(rows, 'bidder');
+
+export const maskFeedback = <T extends { commentingUser: string | null }>(rows: readonly T[]) =>
+  maskField(rows, 'commentingUser');

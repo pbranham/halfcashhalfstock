@@ -1,5 +1,18 @@
-import { openImageLightbox } from '/lightbox.js';
-import { attachCyclingCarousel } from '/carousel.js';
+import { ITEM_ID_RE } from '/constants.js';
+import { imageGallery } from '/gallery.js';
+import {
+  ADMIN_TOKEN_KEY,
+  DAY_MS,
+  ebayItemUrl,
+  endedEbayUrl,
+  escapeHtml,
+  formatUsdOrDash,
+  hiResImg,
+  HOUR_MS,
+  MINUTE_MS,
+  postAdminAction,
+  shortDate,
+} from '/shared.js';
 
 const params = new URLSearchParams(window.location.search);
 const itemId = params.get('id') || '';
@@ -18,15 +31,6 @@ const bidsTable = document.getElementById('bids-table');
 const snapshotsSection = document.getElementById('snapshots-section');
 const snapshotsTable = document.getElementById('snapshots-table');
 
-function fmtUsd(n) {
-  if (n === null || n === undefined) return '—';
-  return Number(n).toLocaleString(undefined, {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 2,
-  });
-}
-
 function fmtCount(n) {
   if (n === null || n === undefined) return '—';
   return Number(n).toLocaleString();
@@ -35,113 +39,6 @@ function fmtCount(n) {
 function fmtTime(iso) {
   if (!iso) return '—';
   return new Date(iso).toLocaleString();
-}
-
-function ebayItemUrl(itemId) {
-  if (!itemId) return 'https://www.ebay.com/';
-  const parts = String(itemId).split('|');
-  const legacyNumber = parts.length >= 2 && parts[1] ? parts[1] : itemId;
-  return `https://www.ebay.com/itm/${encodeURIComponent(legacyNumber)}`;
-}
-
-// Append eBay's no-redirect parameter so ended catalog-linked listings show
-// the original page instead of redirecting to "similar items".
-function endedEbayUrl(itemWebUrl, itemId) {
-  const base = itemWebUrl || ebayItemUrl(itemId);
-  const sep = base.includes('?') ? '&' : '?';
-  return `${base}${sep}nordt=true&orig_cvip=true`;
-}
-
-function hiResImg(url, size = 1600) {
-  if (!url || !/(^|\.)ebayimg\.com\//.test(url)) return url;
-  return url.replace(/\/s-l\d+(\.\w+)/i, `/s-l${size}$1`);
-}
-
-// Mirrors imageGallery() in app.js — uses the same attachCyclingCarousel
-// helper for clone-pad wrap-around and counter, built with DOM methods so
-// it slots next to the innerHTML-rendered header text.
-function buildImageGallery(images, alt) {
-  const cleaned = (images || []).filter(Boolean).map((u) => hiResImg(u));
-  const seen = new Set();
-  const ordered = [];
-  for (const u of cleaned) {
-    if (seen.has(u)) continue;
-    seen.add(u);
-    ordered.push(u);
-  }
-  const single = ordered.length <= 1;
-  const wrap = document.createElement('div');
-  wrap.className = `item-gallery${single ? ' single-image' : ''}`;
-  if (ordered.length === 0) return wrap;
-
-  const track = document.createElement('div');
-  track.className = 'gallery-track';
-  wrap.appendChild(track);
-  const counter = document.createElement('div');
-  counter.className = 'gallery-counter';
-  counter.setAttribute('aria-hidden', 'true');
-  wrap.appendChild(counter);
-
-  const mkBtn = (cls, label, text) => {
-    const b = document.createElement('button');
-    b.className = `gallery-nav ${cls}`;
-    b.type = 'button';
-    b.setAttribute('aria-label', label);
-    b.textContent = text;
-    return b;
-  };
-  const prev = mkBtn('gallery-prev', 'Previous image', '‹');
-  const next = mkBtn('gallery-next', 'Next image', '›');
-  if (!single) wrap.append(prev, next);
-
-  const carousel = attachCyclingCarousel(track, {
-    images: ordered,
-    alt: alt || '',
-    counterEl: counter,
-  });
-  prev.addEventListener('click', (e) => { e.stopPropagation(); carousel.step(-1); });
-  next.addEventListener('click', (e) => { e.stopPropagation(); carousel.step(1); });
-
-  track.style.cursor = 'zoom-in';
-  track.addEventListener('click', (e) => {
-    if (!(e.target instanceof HTMLImageElement)) return;
-    e.stopPropagation();
-    openImageLightbox(ordered, carousel.getIndex(), alt || '', {
-      onClose: (finalIdx) => carousel.goTo(finalIdx),
-    });
-  });
-
-  // Keyboard support: the gallery is focusable; arrow keys flip slides,
-  // Enter/Space opens the lightbox at the current slide (mirroring click).
-  if (!single) {
-    wrap.tabIndex = 0;
-    wrap.setAttribute('role', 'group');
-    wrap.setAttribute('aria-label', 'Image gallery — use arrow keys to browse');
-    wrap.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        carousel.step(-1);
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        carousel.step(1);
-      } else if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        openImageLightbox(ordered, carousel.getIndex(), alt || '', {
-          onClose: (finalIdx) => carousel.goTo(finalIdx),
-        });
-      }
-    });
-  }
-  return wrap;
-}
-
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 function showError(message) {
@@ -165,9 +62,10 @@ function renderHeader(listing) {
       <p class="item-meta"><a href="${escapeHtml(ebayUrl)}" target="_blank" rel="noopener noreferrer">View on eBay ↗</a></p>
     </div>
   `;
-  const gallery = buildImageGallery(
+  const gallery = imageGallery(
     [listing.imageUrl, ...(listing.additionalImages || [])],
     listing.title,
+    { keyboard: true },
   );
   headerEl.insertBefore(gallery, headerEl.firstChild);
   headerEl.hidden = false;
@@ -206,14 +104,26 @@ function renderDescription(descriptionHtml) {
   section.hidden = false;
 }
 
+// The highest bid amount among `bids` (0 when there are none).
+function highestBidUsd(bids) {
+  return bids.reduce((max, b) => (b.bidAmountUsd > max ? b.bidAmountUsd : max), 0);
+}
+
+// One stat card: label over value, with optional extra markup inside it.
+function statCardHtml(label, value, extra = '') {
+  return `
+    <div class="stat-card">
+      <div class="stat-label">${label}</div>
+      <div class="stat-value">${value}</div>${extra}
+    </div>`;
+}
+
 function renderCurrentState(listing, bids) {
   const ended = Boolean(listing.endedAt);
   const activeBids = bids.filter((b) => !b.removedAt).length;
   const removedBids = bids.filter((b) => b.removedAt).length;
-  const highestActive = bids
-    .filter((b) => !b.removedAt)
-    .reduce((max, b) => (b.bidAmountUsd > max ? b.bidAmountUsd : max), 0);
-  const highestEver = bids.reduce((max, b) => (b.bidAmountUsd > max ? b.bidAmountUsd : max), 0);
+  const highestActive = highestBidUsd(bids.filter((b) => !b.removedAt));
+  const highestEver = highestBidUsd(bids);
 
   // Ended auctions get "Final result" — calling reconciled, immutable
   // numbers "current state" reads wrong once the hammer is down.
@@ -238,12 +148,7 @@ function renderCurrentState(listing, bids) {
     : '';
   // Removed-bids card only earns its grid cell when there's something
   // to report.
-  const removedCard = removedBids > 0
-    ? `<div class="stat-card">
-         <div class="stat-label">Removed bids</div>
-         <div class="stat-value">${fmtCount(removedBids)}</div>
-       </div>`
-    : '';
+  const removedCard = removedBids > 0 ? statCardHtml('Removed bids', fmtCount(removedBids)) : '';
 
   // For an ended auction the final price, highest active bid, and highest
   // ever seen are almost always the same number — three cards repeating
@@ -253,36 +158,18 @@ function renderCurrentState(listing, bids) {
   // can be either, so don't claim one.
   let highCards = '';
   if (!ended) {
-    highCards = `
-    <div class="stat-card">
-      <div class="stat-label">Highest active bid</div>
-      <div class="stat-value">${fmtUsd(highestActive)}</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Highest ever seen</div>
-      <div class="stat-value">${fmtUsd(highestEver)}</div>
-    </div>`;
+    highCards =
+      statCardHtml('Highest active bid', formatUsdOrDash(highestActive)) +
+      statCardHtml('Highest ever seen', formatUsdOrDash(highestEver));
   } else if (highestEver > listing.currentPriceUsd + 0.005) {
-    highCards = `
-    <div class="stat-card">
-      <div class="stat-label">Highest bid tracked</div>
-      <div class="stat-value">${fmtUsd(highestEver)}</div>
-    </div>`;
+    highCards = statCardHtml('Highest bid tracked', formatUsdOrDash(highestEver));
   }
 
-  currentState.innerHTML = `
-    <div class="stat-card">
-      <div class="stat-label">${ended ? 'Final price' : 'Current price'}</div>
-      <div class="stat-value">${fmtUsd(listing.currentPriceUsd)}</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Bids</div>
-      <div class="stat-value">${fmtCount(ebayCount)}</div>
-      ${bidsSubline}
-    </div>
-    ${removedCard}
-    ${highCards}
-  `;
+  currentState.innerHTML =
+    statCardHtml(ended ? 'Final price' : 'Current price', formatUsdOrDash(listing.currentPriceUsd)) +
+    statCardHtml('Bids', fmtCount(ebayCount), bidsSubline) +
+    removedCard +
+    highCards;
   currentSection.hidden = false;
 }
 
@@ -545,14 +432,11 @@ syncZoomButtons();
 // value at or below ideal range/targetCount.
 function generateTimeLabels(tMin, tMax, chartWidth = 900) {
   const range = tMax - tMin;
-  const minuteMs = 60_000;
-  const hourMs = 3_600_000;
-  const dayMs = 86_400_000;
   const targetCount = chartWidth < 500 ? 5 : chartWidth < 800 ? 7 : 9;
   const ladder = [
-    minuteMs, 2 * minuteMs, 5 * minuteMs, 10 * minuteMs, 15 * minuteMs, 30 * minuteMs,
-    hourMs, 2 * hourMs, 3 * hourMs, 6 * hourMs, 12 * hourMs,
-    dayMs, 2 * dayMs, 3 * dayMs, 7 * dayMs, 14 * dayMs, 30 * dayMs,
+    MINUTE_MS, 2 * MINUTE_MS, 5 * MINUTE_MS, 10 * MINUTE_MS, 15 * MINUTE_MS, 30 * MINUTE_MS,
+    HOUR_MS, 2 * HOUR_MS, 3 * HOUR_MS, 6 * HOUR_MS, 12 * HOUR_MS,
+    DAY_MS, 2 * DAY_MS, 3 * DAY_MS, 7 * DAY_MS, 14 * DAY_MS, 30 * DAY_MS,
   ];
   // Smallest ladder step that fits within the target count. We iterate from
   // finest to coarsest and pick the first that keeps the label count under
@@ -564,7 +448,7 @@ function generateTimeLabels(tMin, tMax, chartWidth = 900) {
       break;
     }
   }
-  const useDateFormat = stepMs >= 12 * hourMs;
+  const useDateFormat = stepMs >= 12 * HOUR_MS;
 
   const start = new Date(tMin);
   if (useDateFormat) {
@@ -605,9 +489,9 @@ function computeVolumeBuckets(placementTimestamps, tMin, tMax, chartWidth) {
   const idealBucketMs = range / targetBarCount;
   const ladder = [
     1000, 5000, 10_000, 30_000,
-    60_000, 5 * 60_000, 10 * 60_000, 15 * 60_000, 30 * 60_000,
-    60 * 60_000, 2 * 60 * 60_000, 4 * 60 * 60_000, 12 * 60 * 60_000,
-    24 * 60 * 60_000, 2 * 24 * 60 * 60_000, 7 * 24 * 60 * 60_000,
+    MINUTE_MS, 5 * MINUTE_MS, 10 * MINUTE_MS, 15 * MINUTE_MS, 30 * MINUTE_MS,
+    HOUR_MS, 2 * HOUR_MS, 4 * HOUR_MS, 12 * HOUR_MS,
+    DAY_MS, 2 * DAY_MS, 7 * DAY_MS,
   ];
   let bucketMs = ladder[ladder.length - 1];
   for (const s of ladder) {
@@ -633,16 +517,13 @@ function computeVolumeBuckets(placementTimestamps, tMin, tMax, chartWidth) {
 // opened); 'snipe' mode reads "… 1h · 10m · 1m · end" (time remaining).
 function generateLogTimeLabels(tMin, tMax, mode) {
   const range = tMax - tMin;
-  const minuteMs = 60_000;
-  const hourMs = 3_600_000;
-  const dayMs = 86_400_000;
   const ladder = [
-    { ms: minuteMs, label: '1m' },
-    { ms: 10 * minuteMs, label: '10m' },
-    { ms: hourMs, label: '1h' },
-    { ms: 6 * hourMs, label: '6h' },
-    { ms: dayMs, label: '1d' },
-    { ms: 7 * dayMs, label: '1w' },
+    { ms: MINUTE_MS, label: '1m' },
+    { ms: 10 * MINUTE_MS, label: '10m' },
+    { ms: HOUR_MS, label: '1h' },
+    { ms: 6 * HOUR_MS, label: '6h' },
+    { ms: DAY_MS, label: '1d' },
+    { ms: 7 * DAY_MS, label: '1w' },
   ];
   const labels = [];
   for (const tick of ladder) {
@@ -673,7 +554,7 @@ function renderChartSourceNote(chartMode, listing, maxDots) {
   let text = '';
   if (chartMode === 'complete') {
     const when = new Date(listing.bidsImportedAt);
-    const dateStr = when.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const dateStr = shortDate(when);
     text = `Complete bid history from eBay · imported ${dateStr}`;
   } else if (chartMode === 'maxbids') {
     text = 'Built from each bidder’s highest bid — the steps between bids are estimated';
@@ -793,7 +674,7 @@ function renderChart(snapshots, listing, bids) {
 
 function defaultChartHelp(points) {
   const last = points[points.length - 1];
-  return `${fmtTime(new Date(last.t).toISOString())} — ${fmtUsd(last.price)} · ${fmtCount(last.count)} bids · Drag along the chart to scrub.`;
+  return `${fmtTime(new Date(last.t).toISOString())} — ${formatUsdOrDash(last.price)} · ${fmtCount(last.count)} bids · Drag along the chart to scrub.`;
 }
 
 function drawChart() {
@@ -934,9 +815,9 @@ function drawChart() {
       // Shift the min label up and the max label down so neither rides
       // the plot edge; the text floats over the plot background.
       const dy = i === 0 ? -4 : i === yTickValues.length - 1 ? 12 : 4;
-      return `<text x="${PAD.left + 4}" y="${(y + dy).toFixed(1)}" text-anchor="start" font-size="11" font-weight="500" fill="#5cdb95" opacity="0.9">${fmtUsd(p)}</text>`;
+      return `<text x="${PAD.left + 4}" y="${(y + dy).toFixed(1)}" text-anchor="start" font-size="11" font-weight="500" fill="#5cdb95" opacity="0.9">${formatUsdOrDash(p)}</text>`;
     }
-    return `<text x="${PAD.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="12" font-weight="500" fill="#5cdb95" opacity="0.95">${fmtUsd(p)}</text>`;
+    return `<text x="${PAD.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="12" font-weight="500" fill="#5cdb95" opacity="0.95">${formatUsdOrDash(p)}</text>`;
   }).join('');
 
   // Sampled-mode markers are hollow: each is "the price we observed at a
@@ -1003,6 +884,18 @@ function drawChart() {
   const markerPrice = svg.querySelector('.chart-marker-price');
   const hitArea = svg.querySelector('.chart-hit');
 
+  // Move the guide line + price marker to point `p` and show its readout.
+  const selectPoint = (p) => {
+    const px = xFor(p.t);
+    guide.setAttribute('x1', px);
+    guide.setAttribute('x2', px);
+    guide.setAttribute('opacity', '0.6');
+    markerPrice.setAttribute('cx', px);
+    markerPrice.setAttribute('cy', yPriceFor(p.price));
+    markerPrice.setAttribute('opacity', '1');
+    chartHelp.textContent = `${fmtTime(new Date(p.t).toISOString())} — ${formatUsdOrDash(p.price)} · ${fmtCount(p.count)} bids`;
+  };
+
   const updateFromX = (clientX) => {
     const rect = svg.getBoundingClientRect();
     const ratio = (clientX - rect.left) / rect.width;
@@ -1016,15 +909,7 @@ function drawChart() {
         closestIdx = i;
       }
     }
-    const p = points[closestIdx];
-    const px = xFor(p.t);
-    guide.setAttribute('x1', px);
-    guide.setAttribute('x2', px);
-    guide.setAttribute('opacity', '0.6');
-    markerPrice.setAttribute('cx', px);
-    markerPrice.setAttribute('cy', yPriceFor(p.price));
-    markerPrice.setAttribute('opacity', '1');
-    chartHelp.textContent = `${fmtTime(new Date(p.t).toISOString())} — ${fmtUsd(p.price)} · ${fmtCount(p.count)} bids`;
+    selectPoint(points[closestIdx]);
   };
 
   const resetSelection = () => {
@@ -1079,16 +964,7 @@ function drawChart() {
     dot.style.cursor = 'pointer';
     dot.addEventListener('click', (e) => {
       e.stopPropagation();
-      const idx = Number(dot.dataset.idx);
-      const p = points[idx];
-      const px = xFor(p.t);
-      guide.setAttribute('x1', px);
-      guide.setAttribute('x2', px);
-      guide.setAttribute('opacity', '0.6');
-      markerPrice.setAttribute('cx', px);
-      markerPrice.setAttribute('cy', yPriceFor(p.price));
-      markerPrice.setAttribute('opacity', '1');
-      chartHelp.textContent = `${fmtTime(new Date(p.t).toISOString())} — ${fmtUsd(p.price)} · ${fmtCount(p.count)} bids`;
+      selectPoint(points[Number(dot.dataset.idx)]);
     });
   });
 
@@ -1117,7 +993,7 @@ function renderBids(bids) {
       html += `<tr class="bid-row is-removed has-note">
         <td><button type="button" class="bid-note-toggle" data-note-id="${noteId}" aria-expanded="true" aria-label="Toggle removal note">▾</button><span class="bid-strike">${escapeHtml(fmtTime(bid.bidTime))}</span></td>
         <td><span class="bid-strike">${escapeHtml(bid.bidder || 'unknown')}</span></td>
-        <td class="numeric"><span class="bid-strike">${fmtUsd(bid.bidAmountUsd)}</span></td>
+        <td class="numeric"><span class="bid-strike">${formatUsdOrDash(bid.bidAmountUsd)}</span></td>
       </tr>
       <tr class="bid-note-row" id="${noteId}">
         <td colspan="3" class="bid-note-cell">
@@ -1128,7 +1004,7 @@ function renderBids(bids) {
       html += `<tr class="bid-row">
         <td>${escapeHtml(fmtTime(bid.bidTime))}</td>
         <td>${escapeHtml(bid.bidder || 'unknown')}</td>
-        <td class="numeric">${fmtUsd(bid.bidAmountUsd)}</td>
+        <td class="numeric">${formatUsdOrDash(bid.bidAmountUsd)}</td>
       </tr>`;
     }
   }
@@ -1199,7 +1075,7 @@ function renderSnapshots(snapshots) {
   for (const snap of sorted) {
     html += `<tr>
       <td>${escapeHtml(fmtTime(snap.observedAt))}</td>
-      <td class="numeric">${fmtUsd(snap.currentPriceUsd)}</td>
+      <td class="numeric">${formatUsdOrDash(snap.currentPriceUsd)}</td>
       <td class="numeric">${fmtCount(snap.currentBidCount)}</td>
       <td>${escapeHtml(fmtTime(snap.endsAt))}</td>
     </tr>`;
@@ -1209,7 +1085,6 @@ function renderSnapshots(snapshots) {
   snapshotsSection.hidden = false;
 }
 
-const ADMIN_TOKEN_KEY = 'hchs.admin.token';
 const adminSection = document.getElementById('admin-section');
 const inspectBtn = document.getElementById('inspect-btn');
 const adminOutput = document.getElementById('admin-output');
@@ -1228,11 +1103,7 @@ async function adminRequest(action, extraBody = {}) {
   adminOutput.hidden = false;
   adminOutput.textContent = `Running ${action}...`;
   try {
-    const response = await fetch('/api/admin/cleanup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ action, itemId, ...extraBody }),
-    });
+    const response = await postAdminAction(token, { action, itemId, ...extraBody });
     const data = await response.json();
     adminOutput.textContent = JSON.stringify(data, null, 2);
     return data;
@@ -1269,7 +1140,7 @@ function maybeShowAdminSection() {
 }
 
 async function load() {
-  if (!itemId || !/^[A-Za-z0-9|.-]{1,64}$/.test(itemId)) {
+  if (!itemId || !ITEM_ID_RE.test(itemId)) {
     showError('Missing or invalid item id in URL.');
     return;
   }

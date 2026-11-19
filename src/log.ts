@@ -41,3 +41,8 @@ export function createLogger(options: LoggerOptions): Logger {
     child: (fields) => createLogger({ level: options.level, base: { ...base, ...fields }, sink }),
   };
 }
+
+// The message of anything thrown: an Error's message, otherwise its string form.
+export function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}

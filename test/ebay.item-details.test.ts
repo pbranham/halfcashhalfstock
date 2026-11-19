@@ -1,34 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
-import { EbayAppTokenProvider } from '../src/ebay/auth.js';
-import { EbayClient, EbayApiError } from '../src/ebay/client.js';
+import { describe, it, expect } from 'vitest';
+import { buildClient, fetchWithToken, jsonResponse } from './helpers.js';
+import { EbayApiError } from '../src/ebay/client.js';
 import { fetchItemDetails } from '../src/ebay/item-details.js';
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  });
-}
-
-function buildClient(fetchImpl: ReturnType<typeof vi.fn>): EbayClient {
-  const tokenProvider = new EbayAppTokenProvider({
-    appId: 'a',
-    certId: 'b',
-    fetchImpl: fetchImpl as unknown as typeof fetch,
-  });
-  return new EbayClient({
-    tokenProvider,
-    marketplaceId: 'EBAY_US',
-    fetchImpl: fetchImpl as unknown as typeof fetch,
-  });
-}
 
 describe('fetchItemDetails', () => {
   it('returns hi-res gallery (s-l1600) deduped against the primary image', async () => {
-    const fetchImpl = vi.fn();
-    fetchImpl.mockResolvedValueOnce(
-      jsonResponse({ access_token: 't', expires_in: 7200, token_type: 'Application' }),
-    );
+    const fetchImpl = fetchWithToken();
     fetchImpl.mockResolvedValueOnce(
       jsonResponse({
         image: { imageUrl: 'https://i.ebayimg.com/images/g/abc/s-l500.jpg' },
@@ -50,10 +27,7 @@ describe('fetchItemDetails', () => {
   });
 
   it('falls back to the per-item primary image when there is no gallery', async () => {
-    const fetchImpl = vi.fn();
-    fetchImpl.mockResolvedValueOnce(
-      jsonResponse({ access_token: 't', expires_in: 7200, token_type: 'Application' }),
-    );
+    const fetchImpl = fetchWithToken();
     fetchImpl.mockResolvedValueOnce(
       jsonResponse({
         image: { imageUrl: 'https://i.ebayimg.com/images/g/xyz/s-l500.jpg' },
@@ -70,10 +44,7 @@ describe('fetchItemDetails', () => {
   });
 
   it('returns null on 404 instead of throwing', async () => {
-    const fetchImpl = vi.fn();
-    fetchImpl.mockResolvedValueOnce(
-      jsonResponse({ access_token: 't', expires_in: 7200, token_type: 'Application' }),
-    );
+    const fetchImpl = fetchWithToken();
     fetchImpl.mockResolvedValueOnce(new Response('not found', { status: 404 }));
     const client = buildClient(fetchImpl);
     const out = await fetchItemDetails(client, 'v1|999|0');
@@ -81,10 +52,7 @@ describe('fetchItemDetails', () => {
   });
 
   it('re-throws non-404 errors', async () => {
-    const fetchImpl = vi.fn();
-    fetchImpl.mockResolvedValueOnce(
-      jsonResponse({ access_token: 't', expires_in: 7200, token_type: 'Application' }),
-    );
+    const fetchImpl = fetchWithToken();
     fetchImpl.mockResolvedValueOnce(new Response('boom', { status: 500 }));
     const client = buildClient(fetchImpl);
     await expect(fetchItemDetails(client, 'v1|abc|0')).rejects.toBeInstanceOf(EbayApiError);

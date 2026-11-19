@@ -1,15 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import { QUOTE, expectSellerValuation } from './helpers.js';
 import { composeSnapshot } from '../src/snapshot.js';
 import type { Listing } from '../src/ebay/seller.js';
 import type { PriceQuote } from '../src/prices/types.js';
-
-const QUOTE: PriceQuote = {
-  symbol: 'EBAY',
-  price: 50,
-  currency: 'USD',
-  asOf: '2026-05-06T18:00:00.000Z',
-  source: 'finnhub',
-};
 
 function listing(overrides: Partial<Listing> = {}): Listing {
   return {
@@ -26,6 +19,12 @@ function listing(overrides: Partial<Listing> = {}): Listing {
     isAuction: true,
     ...overrides,
   };
+}
+
+/** The one unpriced item has a null split and the priced count is just the other item. */
+function expectUnpricedExcluded(split: unknown, pricedCount: number): void {
+  expect(split).toBeNull();
+  expect(pricedCount).toBe(1);
 }
 
 describe('composeSnapshot', () => {
@@ -63,8 +62,7 @@ describe('composeSnapshot', () => {
       QUOTE,
     );
     expect(snapshot.items).toHaveLength(2);
-    expect(snapshot.items[1]?.split).toBeNull();
-    expect(snapshot.totals.pricedCount).toBe(1);
+    expectUnpricedExcluded(snapshot.items[1]?.split, snapshot.totals.pricedCount);
     expect(snapshot.totals.bidUsd).toBe(100);
   });
 
@@ -331,8 +329,10 @@ describe('composeSnapshot', () => {
       ],
       new Map([['v1|9', 50]]),
     );
-    expect(snapshot.endedItems[1]?.endTimeSplit).toBeNull();
-    expect(snapshot.endedTotals.pricedAtEndCount).toBe(1);
+    expectUnpricedExcluded(
+      snapshot.endedItems[1]?.endTimeSplit,
+      snapshot.endedTotals.pricedAtEndCount,
+    );
     // Only the v1|9 item contributes to splitAtEnd (100 / 2 / 50 = 1 share).
     expect(snapshot.endedTotals.splitAtEnd).toEqual({ cashUsd: 50, stockUsd: 50, shares: 1 });
   });
@@ -372,14 +372,7 @@ describe('composeSnapshot — By seller (mixed) valuation', () => {
       new Map(),
       valuation,
     );
-    expect(snapshot.valuationMode).toBe('mixed');
-    expect(snapshot.stocks.map((q) => q.symbol)).toEqual(['EBAY', 'GME']);
-    // Ryan's item → $EBAY @ 50: shares = (100/2)/50 = 1.
-    expect(snapshot.items[0]?.valuationTicker).toBe('EBAY');
-    expect(snapshot.items[0]?.split).toEqual({ cashUsd: 50, stockUsd: 50, shares: 1 });
-    // My item → $GME @ 25: shares = (100/2)/25 = 2.
-    expect(snapshot.items[1]?.valuationTicker).toBe('GME');
-    expect(snapshot.items[1]?.split).toEqual({ cashUsd: 50, stockUsd: 50, shares: 2 });
+    expectSellerValuation(snapshot);
   });
 
   it('values an ended item live + at-end in its seller stock', () => {

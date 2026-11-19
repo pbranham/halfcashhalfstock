@@ -1,18 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
+import { jsonResponse, tokenResponse } from './helpers.js';
 import { EbayAppTokenProvider, EbayAuthError } from '../src/ebay/auth.js';
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  });
-}
 
 describe('EbayAppTokenProvider', () => {
   it('mints a token, returns it, and caches within ttl', async () => {
     let now = 0;
     const fetchImpl = vi.fn().mockResolvedValue(
-      jsonResponse({ access_token: 'tok-1', expires_in: 7200, token_type: 'Application' }),
+      tokenResponse('tok-1', 7200),
     );
     const provider = new EbayAppTokenProvider({
       appId: 'app',
@@ -32,10 +26,10 @@ describe('EbayAppTokenProvider', () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(
-        jsonResponse({ access_token: 'tok-1', expires_in: 60, token_type: 'Application' }),
+        tokenResponse('tok-1', 60),
       )
       .mockResolvedValueOnce(
-        jsonResponse({ access_token: 'tok-2', expires_in: 60, token_type: 'Application' }),
+        tokenResponse('tok-2', 60),
       );
 
     const provider = new EbayAppTokenProvider({

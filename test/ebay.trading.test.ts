@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { respondWith, sentRequest } from './helpers.js';
 import { getFeedbackPage, getItemBidHistory, getItemSellingStatus } from '../src/ebay/trading.js';
 
 const GET_ALL_BIDDERS_XML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -19,26 +20,22 @@ afterEach(() => {
 
 describe('getItemBidHistory', () => {
   it('normalizes Browse API IDs before calling Trading API', async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response(GET_ALL_BIDDERS_XML, { status: 200 }));
+    const fetchSpy = respondWith(GET_ALL_BIDDERS_XML);
 
     const result = await getItemBidHistory('v1|12345|0', 'dev-id', 'user-token');
 
-    const requestInit = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect(String(requestInit?.body)).toContain('<ItemID>12345</ItemID>');
+    const sent = sentRequest(fetchSpy);
+    expect(sent.body).toContain('<ItemID>12345</ItemID>');
     expect(result.itemId).toBe('12345');
   });
 
   it('passes through numeric IDs unchanged', async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response(GET_ALL_BIDDERS_XML, { status: 200 }));
+    const fetchSpy = respondWith(GET_ALL_BIDDERS_XML);
 
     const result = await getItemBidHistory('67890', 'dev-id', 'user-token');
 
-    const requestInit = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect(String(requestInit?.body)).toContain('<ItemID>67890</ItemID>');
+    const sent = sentRequest(fetchSpy);
+    expect(sent.body).toContain('<ItemID>67890</ItemID>');
     expect(result.itemId).toBe('67890');
   });
 });
@@ -67,15 +64,13 @@ const GET_ITEM_FAILURE_XML = `<?xml version="1.0" encoding="UTF-8"?>
 
 describe('getItemSellingStatus', () => {
   it('parses final price, bid count, currency and status from GetItem', async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response(GET_ITEM_XML, { status: 200 }));
+    const fetchSpy = respondWith(GET_ITEM_XML);
 
     const ss = await getItemSellingStatus('v1|12345|0', 'user-token');
 
-    const requestInit = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect(String(requestInit?.body)).toContain('<ItemID>12345</ItemID>');
-    expect((requestInit?.headers as Record<string, string>)['X-EBAY-API-CALL-NAME']).toBe('GetItem');
+    const sent = sentRequest(fetchSpy);
+    expect(sent.body).toContain('<ItemID>12345</ItemID>');
+    expect(sent.callName).toBe('GetItem');
     expect(ss).toMatchObject({
       itemId: '12345',
       listingStatus: 'Completed',
@@ -88,9 +83,7 @@ describe('getItemSellingStatus', () => {
   });
 
   it('surfaces Ack=Failure with the error message and zeroed numbers', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(GET_ITEM_FAILURE_XML, { status: 200 }),
-    );
+    respondWith(GET_ITEM_FAILURE_XML);
     const ss = await getItemSellingStatus('99', 'user-token');
     expect(ss.ack).toBe('Failure');
     expect(ss.errorMessage).toContain('invalid or no longer available');
@@ -132,17 +125,15 @@ const GET_FEEDBACK_FAILURE_XML = `<?xml version="1.0" encoding="UTF-8"?>
 
 describe('getFeedbackPage', () => {
   it('parses detail entries with item linkage; missing text becomes null', async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response(GET_FEEDBACK_XML, { status: 200 }));
+    const fetchSpy = respondWith(GET_FEEDBACK_XML);
 
     const page = await getFeedbackPage('tok');
 
-    const requestInit = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect((requestInit?.headers as Record<string, string>)['X-EBAY-API-CALL-NAME']).toBe('GetFeedback');
+    const sent = sentRequest(fetchSpy);
+    expect(sent.callName).toBe('GetFeedback');
     // No userId → no UserID element (token owner's own feedback).
-    expect(String(requestInit?.body)).not.toContain('<UserID>');
-    expect(String(requestInit?.body)).toContain('<FeedbackType>FeedbackReceivedAsSeller</FeedbackType>');
+    expect(sent.body).not.toContain('<UserID>');
+    expect(sent.body).toContain('<FeedbackType>FeedbackReceivedAsSeller</FeedbackType>');
 
     expect(page.totalPages).toBe(1);
     expect(page.entries).toEqual([
@@ -166,19 +157,15 @@ describe('getFeedbackPage', () => {
   });
 
   it('includes UserID in the request when querying another seller', async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response(GET_FEEDBACK_XML, { status: 200 }));
+    const fetchSpy = respondWith(GET_FEEDBACK_XML);
     await getFeedbackPage('tok', { userId: 'ryan_5050', page: 2 });
-    const body = String((fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined)?.body);
+    const { body } = sentRequest(fetchSpy);
     expect(body).toContain('<UserID>ryan_5050</UserID>');
     expect(body).toContain('<PageNumber>2</PageNumber>');
   });
 
   it('surfaces Ack=Failure with the error message and no entries', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(GET_FEEDBACK_FAILURE_XML, { status: 200 }),
-    );
+    respondWith(GET_FEEDBACK_FAILURE_XML);
     const page = await getFeedbackPage('tok', { userId: 'nobody' });
     expect(page.ack).toBe('Failure');
     expect(page.errorMessage).toContain('Invalid user');

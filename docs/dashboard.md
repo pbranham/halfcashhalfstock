@@ -112,11 +112,11 @@ old behavior). The label is "By seller"; the wire/`localStorage` value is
 Frontend carousel:
 
 - **`public/carousel.js`** — `attachCyclingCarousel(track, opts)` is the
-  shared cycling-carousel helper, used by the inline tile galleries
-  (`app.js`), the item-page header gallery (`item.js`), and the modal
-  (`lightbox.js`). The clone-pad pattern (prepend last-image clone, append
-  first-image clone) + a `scrollend`-driven warp handles infinite wrap-
-  around for both swipe and button clicks. Both tracks use
+  shared cycling-carousel helper, used by `public/gallery.js`
+  (`imageGallery` — the one gallery for the inline tiles in `app.js` and the
+  item-page header in `item.js`) and by the modal (`lightbox.js`). The
+  clone-pad pattern (prepend last-image clone, append first-image clone)
+  + a `scrollend`-driven warp handles infinite wrap-around for both swipe and button clicks. Both tracks use
   `scroll-behavior: smooth` in CSS, so the warp specifically toggles to
   `auto` to avoid the smooth scroll animating *through* every in-between
   slide. Image count is a fixed-width `i / N` counter
@@ -158,9 +158,17 @@ Stale ⚠ is on `.ticker-meta::before` so it surfaces in both market-open
 - Global `:focus-visible` outline (accent, 2px) covers buttons, links,
   inputs, selects, summaries, and tabindexed elements — new interactive
   elements get it for free; don't suppress it.
-- Coarse-pointer (touch) devices get >=40px hit areas on the pill
-  controls via the `@media (pointer: coarse)` block in style.css — add
-  new pill classes to that list.
+- Pill groups share ONE look: the grouped `.stock-btn, .sort-btn, …`
+  base / `:hover` / `.is-active` rules (and one `.stock-bar, …` row rule)
+  in style.css — a new pill class joins those selector lists. Coarse-pointer
+  (touch) devices get >=40px hit areas via the `@media (pointer: coarse)`
+  block — add new pill classes to that list too.
+- Theme tokens: each themed token in `style.css :root` states its light and dark
+  value ONCE via `light-dark(light, dark)`; `color-scheme` picks the side (OS
+  preference by default, `:root[data-theme='light'|'dark']` overrides it). Add a
+  new themed token there, never a second palette block. The item + admin page
+  shell (`.item-page/.admin-body`, `.item-main/.admin-main`) and their
+  monospace result boxes are shared rules in style.css.
 - Sort control is pills on desktop, a native `<select>` under 600px —
   both drive the same state through `applySort`; keep them in sync if
   sort modes change (three places: buttons, select options, SORT_MODES).

@@ -1,4 +1,10 @@
-import { PriceProviderError, type PriceProvider, type PriceQuote } from './types.js';
+import {
+  epochSecondsIso,
+  fetchProviderJson,
+  PriceProviderError,
+  type PriceProvider,
+  type PriceQuote,
+} from './types.js';
 
 interface YahooQuoteEntry {
   symbol?: string;
@@ -59,6 +65,10 @@ export class YahooProvider implements PriceProvider {
     this.#userAgent = options.userAgent ?? DEFAULT_USER_AGENT;
   }
 
+  #headers(): Record<string, string> {
+    return { Accept: 'application/json', 'User-Agent': this.#userAgent };
+  }
+
   async getQuote(symbol: string): Promise<PriceQuote> {
     const quotes = await this.getQuotes([symbol]);
     const quote = quotes.get(symbol);
@@ -74,24 +84,9 @@ export class YahooProvider implements PriceProvider {
     const url = new URL(this.#baseUrl);
     url.searchParams.set('symbols', symbols.join(','));
 
-    let res: Response;
-    try {
-      res = await this.#fetch(url, {
-        headers: { Accept: 'application/json', 'User-Agent': this.#userAgent },
-      });
-    } catch (err) {
-      throw new PriceProviderError(this.name, `network error: ${(err as Error).message}`, err);
-    }
-
-    if (!res.ok) {
-      const bodyText = await res.text().catch(() => '');
-      throw new PriceProviderError(
-        this.name,
-        `http ${res.status}: ${bodyText.slice(0, 200)}`,
-      );
-    }
-
-    const body = (await res.json()) as YahooQuoteResponse;
+    const body = (await fetchProviderJson(this.name, this.#fetch, url, this.#headers(), {
+      includeBody: true,
+    })) as YahooQuoteResponse;
     const entries = body.quoteResponse?.result ?? [];
     const result = new Map<string, PriceQuote>();
 
@@ -102,10 +97,7 @@ export class YahooProvider implements PriceProvider {
       const sym = entry.symbol ?? '';
       if (!sym) continue;
 
-      const asOf =
-        typeof entry.regularMarketTime === 'number'
-          ? new Date(entry.regularMarketTime * 1000).toISOString()
-          : new Date().toISOString();
+      const asOf = epochSecondsIso(entry.regularMarketTime);
 
       result.set(sym, {
         symbol: sym,
@@ -129,24 +121,10 @@ export class YahooProvider implements PriceProvider {
     url.searchParams.set('interval', interval);
     url.searchParams.set('range', range);
 
-    let res: Response;
-    try {
-      res = await this.#fetch(url, {
-        headers: { Accept: 'application/json', 'User-Agent': this.#userAgent },
-      });
-    } catch (err) {
-      throw new PriceProviderError(this.name, `network error: ${(err as Error).message}`, err);
-    }
-
-    if (!res.ok) {
-      const bodyText = await res.text().catch(() => '');
-      throw new PriceProviderError(
-        this.name,
-        `http ${res.status} for ${symbol} (${interval}/${range}): ${bodyText.slice(0, 200)}`,
-      );
-    }
-
-    const body = (await res.json()) as YahooChartResponse;
+    const body = (await fetchProviderJson(this.name, this.#fetch, url, this.#headers(), {
+      detail: ` for ${symbol} (${interval}/${range})`,
+      includeBody: true,
+    })) as YahooChartResponse;
     const result = body.chart?.result?.[0];
     if (!result || !result.timestamp || !result.indicators?.quote?.[0]) {
       throw new PriceProviderError(this.name, `invalid chart payload for ${symbol}`);

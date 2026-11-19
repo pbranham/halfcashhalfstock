@@ -1,4 +1,10 @@
-import { PriceProviderError, type PriceProvider, type PriceQuote } from './types.js';
+import {
+  epochSecondsIso,
+  fetchProviderJson,
+  PriceProviderError,
+  type PriceProvider,
+  type PriceQuote,
+} from './types.js';
 
 interface FinnhubQuoteResponse {
   c?: number;
@@ -28,23 +34,14 @@ export class FinnhubProvider implements PriceProvider {
     url.searchParams.set('symbol', symbol);
     url.searchParams.set('token', this.#apiKey);
 
-    let res: Response;
-    try {
-      res = await this.#fetch(url, { headers: { Accept: 'application/json' } });
-    } catch (err) {
-      throw new PriceProviderError(this.name, `network error: ${(err as Error).message}`, err);
-    }
-
-    if (!res.ok) {
-      throw new PriceProviderError(this.name, `http ${res.status}`);
-    }
-
-    const body = (await res.json()) as FinnhubQuoteResponse;
+    const body = (await fetchProviderJson(this.name, this.#fetch, url, {
+      Accept: 'application/json',
+    })) as FinnhubQuoteResponse;
     if (typeof body.c !== 'number' || body.c <= 0) {
       throw new PriceProviderError(this.name, `invalid quote payload for ${symbol}`);
     }
 
-    const asOf = typeof body.t === 'number' ? new Date(body.t * 1000).toISOString() : new Date().toISOString();
+    const asOf = epochSecondsIso(body.t);
     return { symbol, price: body.c, currency: 'USD', asOf, source: this.name };
   }
 }

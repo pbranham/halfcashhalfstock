@@ -10,6 +10,25 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// The bidders parseViewbids finds active in `html`.
+function biddersIn(html: string): string[] {
+  return parseViewbids(html).bids.map((b) => b.bidder);
+}
+
+// The active bid amounts of a parse result, in result order.
+function amountsOf(result: ReturnType<typeof parseViewbids>): number[] {
+  return result.bids.map((b) => b.bidAmount);
+}
+
+// `html` parses to exactly one retracted bid, equal to `expected`; returns
+// the parse result for further checks.
+function expectOneRetraction(html: string, expected: unknown): ReturnType<typeof parseViewbids> {
+  const result = parseViewbids(html);
+  expect(result.retractedBids).toHaveLength(1);
+  expect(result.retractedBids[0]).toEqual(expected);
+  return result;
+}
+
 describe('parseEbayDate', () => {
   it('parses the 24-hour "May-09-26 14:23:01 PDT" format', () => {
     expect(parseEbayDate('May-09-26 14:23:01 PDT')).toBe('2026-05-09T21:23:01.000Z');
@@ -65,7 +84,7 @@ describe('parseViewbids', () => {
   it('extracts every bid with thousands separators stripped', () => {
     const result = parseViewbids(FIXTURE);
     expect(result.bidCount).toBe(3);
-    expect(result.bids.map((b) => b.bidAmount)).toEqual([4800, 5100, 5200]);
+    expect(amountsOf(result)).toEqual([4800, 5100, 5200]);
   });
 
   it('reports the final price as the maximum bid', () => {
@@ -122,11 +141,11 @@ describe('parseViewbids', () => {
     // 3 real bidder rows (3***2, w***1, 3***2) — proxy w***1 and Starting price are excluded.
     const result = parseViewbids(EBAY_FIXTURE);
     expect(result.bidCount).toBe(3);
-    expect(result.bids.map((b) => b.bidAmount).sort((a, b) => a - b)).toEqual([2500, 2850, 2900]);
+    expect(amountsOf(result).sort((a, b) => a - b)).toEqual([2500, 2850, 2900]);
   });
 
   it('truncates the retraction section so x***n does not appear as a bid', () => {
-    const bidders = parseViewbids(EBAY_FIXTURE).bids.map((b) => b.bidder);
+    const bidders = biddersIn(EBAY_FIXTURE);
     expect(bidders).not.toContain('x***n');
   });
 
@@ -169,9 +188,7 @@ describe('parseViewbids', () => {
     </body></html>`;
 
   it('parses a retracted-bid row into retractedBids with both timestamps', () => {
-    const result = parseViewbids(RETRACTION_FIXTURE);
-    expect(result.retractedBids).toHaveLength(1);
-    expect(result.retractedBids[0]).toEqual({
+    expectOneRetraction(RETRACTION_FIXTURE, {
       bidder: 'x***n',
       bidAmount: 1234,
       bidTime: '2026-05-07T17:17:00.000Z',
@@ -180,7 +197,7 @@ describe('parseViewbids', () => {
   });
 
   it('keeps retracted bidders out of the active bid list', () => {
-    const bidders = parseViewbids(RETRACTION_FIXTURE).bids.map((b) => b.bidder);
+    const bidders = biddersIn(RETRACTION_FIXTURE);
     expect(bidders).not.toContain('x***n');
   });
 
@@ -246,9 +263,7 @@ describe('parseViewbids', () => {
     </body></html>`;
 
   it('parses retractions whose masked bidder ends in an underscore', () => {
-    const result = parseViewbids(SELLER_VIEW_RETRACTION_FIXTURE);
-    expect(result.retractedBids).toHaveLength(1);
-    expect(result.retractedBids[0]).toEqual({
+    const result = expectOneRetraction(SELLER_VIEW_RETRACTION_FIXTURE, {
       bidder: '7***_',
       bidAmount: 21000,
       bidTime: '2026-05-06T20:47:52.000Z',

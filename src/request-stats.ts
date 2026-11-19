@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
+import { errorMessage } from './log.js';
+import { sumBy } from './math.js';
+import { DAY_MS, HOUR_MS, MINUTE_MS, msAgo } from './time.js';
 
 type UaClass = 'bot' | 'mobile' | 'desktop' | 'other';
 
@@ -33,12 +36,21 @@ interface SessionAggregate {
   totalRequests: number;
 }
 
-const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
-const FIVE_MIN_RETENTION_MS = 48 * 60 * 60 * 1000;
-const HOURLY_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
-const DAILY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
-const LIVE_WINDOW_MS = 5 * 60 * 1000;
-const FIVE_MIN_BUCKET_MS = 5 * 60 * 1000;
+const SESSION_TIMEOUT_MS = 30 * MINUTE_MS;
+const FIVE_MIN_RETENTION_MS = 48 * HOUR_MS;
+const HOURLY_RETENTION_MS = 14 * DAY_MS;
+const DAILY_RETENTION_MS = 90 * DAY_MS;
+
+// Rows of each granularity older than these are rolled up / purged.
+function retentionCutoffs(): { fiveMinCutoff: Date; hourlyCutoff: Date; dailyCutoff: Date } {
+  return {
+    fiveMinCutoff: msAgo(FIVE_MIN_RETENTION_MS),
+    hourlyCutoff: msAgo(HOURLY_RETENTION_MS),
+    dailyCutoff: msAgo(DAILY_RETENTION_MS),
+  };
+}
+const LIVE_WINDOW_MS = 5 * MINUTE_MS;
+const FIVE_MIN_BUCKET_MS = 5 * MINUTE_MS;
 
 const BOT_REGEX = /bot|crawler|spider|scrap|wget|curl|python-requests|fetch|httpie|axios|node-fetch|googlebot|bingbot|yandex|slurp|duckduckbot|baiduspider|facebookexternalhit|preview|monitor|uptime/i;
 const MOBILE_REGEX = /mobile|android|iphone|ipad|ipod|blackberry|webos|opera mini/i;
@@ -131,7 +143,7 @@ export class RequestStatsCollector {
   }
 
   private endSession(session: ActiveSession): void {
-    const hour = new Date(Math.floor(session.lastSeen / 3_600_000) * 3_600_000);
+    const hour = new Date(Math.floor(session.lastSeen / HOUR_MS) * HOUR_MS);
     const key = hour.toISOString();
     const durationSeconds = Math.max(0, (session.lastSeen - session.firstSeen) / 1000);
     const isBounce = session.requestCount === 1;
@@ -163,23 +175,23 @@ export class RequestStatsCollector {
     if (!this.db) return;
     this.flushInterval = setInterval(() => {
       this.flush().catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         console.error('request stats flush failed', { error: message });
       });
-    }, 60_000);
+    }, MINUTE_MS);
     this.flushInterval.unref();
 
     this.sessionCleanupInterval = setInterval(() => {
       this.cleanupSessions();
-    }, 60_000);
+    }, MINUTE_MS);
     this.sessionCleanupInterval.unref();
 
     this.dailyRollupInterval = setInterval(() => {
       this.rollupAndPurge().catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         console.error('rollup failed', { error: message });
       });
-    }, 60 * 60 * 1000);
+    }, HOUR_MS);
     this.dailyRollupInterval.unref();
   }
 
@@ -212,7 +224,7 @@ export class RequestStatsCollector {
     const rows: { hash: string; hour: Date }[] = [];
     for (const record of records) {
       if (!record.ip) continue;
-      const hour = new Date(Math.floor(record.startTime / 3_600_000) * 3_600_000);
+      const hour = new Date(Math.floor(record.startTime / HOUR_MS) * HOUR_MS);
       const hash = hashIp(record.ip);
       const key = `${hash}|${hour.toISOString()}`;
       if (seen.has(key)) continue;
@@ -353,7 +365,7 @@ export class RequestStatsCollector {
 
     const maxSample = Math.max(...samples);
     const minSample = Math.min(...samples);
-    const avgSample = samples.reduce((a, b) => a + b, 0) / samples.length;
+    const avgSample = sumBy(samples, (n) => n) / samples.length;
 
     for (const record of records) {
       const key = `${record.endpoint}:${record.statusCode}`;
@@ -367,8 +379,7 @@ export class RequestStatsCollector {
 
   async rollupAndPurge(): Promise<void> {
     if (!this.db) return;
-    const fiveMinCutoff = new Date(Date.now() - FIVE_MIN_RETENTION_MS);
-    const hourlyCutoff = new Date(Date.now() - HOURLY_RETENTION_MS);
+    const { fiveMinCutoff, hourlyCutoff } = retentionCutoffs();
 
     await this.db.query(
       `
@@ -468,9 +479,7 @@ export class RequestStatsCollector {
 
   async purgeOldStats(): Promise<void> {
     if (!this.db) return;
-    const fiveMinCutoff = new Date(Date.now() - FIVE_MIN_RETENTION_MS);
-    const hourlyCutoff = new Date(Date.now() - HOURLY_RETENTION_MS);
-    const dailyCutoff = new Date(Date.now() - DAILY_RETENTION_MS);
+    const { fiveMinCutoff, hourlyCutoff, dailyCutoff } = retentionCutoffs();
 
     await this.db.query(
       `DELETE FROM request_stats WHERE interval = '5min' AND hour < $1`,
@@ -510,7 +519,7 @@ export class RequestStatsCollector {
   } {
     this.trimLiveBuffer();
     const now = Date.now();
-    const last1MinCutoff = now - 60_000;
+    const last1MinCutoff = now - MINUTE_MS;
     const last1Min = this.liveBuffer.filter((r) => r.endTime >= last1MinCutoff);
     const uniqueIps = new Set(this.liveBuffer.map((r) => r.ip));
     const uaCounts = countUaClasses(this.liveBuffer);

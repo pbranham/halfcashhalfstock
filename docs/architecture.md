@@ -10,7 +10,9 @@ src/
   server.ts                  HTTP, routes, request-stats wiring, graceful shutdown
   config.ts                  zod env schema; resolveEbayTradingUserToken / has*Credentials helpers
   cache.ts                   TtlCache + DbBackedCache (single-flight, stale-fallback, U+0000 strip)
-  log.ts                     Logger
+  log.ts                     Logger + errorMessage(err)
+  time.ts                    re-exports MINUTE_MS / HOUR_MS / DAY_MS; msAgo, daysAgo, isoOrNull
+  shared-module.ts           loads public/constants.js (TICKER_RE, ITEM_ID_RE, durations) for the server
   snapshot.ts                composeSnapshot — listings + price + math + totals + galleries
   ticker-queue.ts            stock OHLC scheduler with request-windowed scoping
   request-stats.ts           privacy-respecting metrics + UA classifier + sessions
@@ -19,6 +21,7 @@ src/
   seller-poll.ts             createAdaptiveSellerFetch: sleep sellers with 0 listings
   item-details-enricher.ts   fire-and-forget gallery + description backfill
   reconcile-finals.ts        reconcileFinalsForItems: GetItem → updateEndedListingFinals
+  background-loop.ts         startBackgroundLoop: the one immediate-tick/single-flight/stop scaffold + heartbeat
   listing-poll.ts            startBackgroundListingPoll: always-on 30s loop (prod only)
   feedback-sweep.ts          hourly GetFeedback sweep → feedback table (prod only)
   ohlc-refresh.ts            startDailyOhlcRefresh: daily 1d-OHLC pull from Yahoo (any env w/ DB)
@@ -41,8 +44,17 @@ public/
   index.html  app.js         dashboard (active + recently ended)
   item.html   item.js        per-item audit page (gallery + description iframe)
   admin.html  admin.js       admin dashboard + maintenance actions
+  head-common.html           the one shared <head> (meta/theme-init/style.css/icon) for admin.html + item.html;
+                             src/server.ts expands the <!--#head-common--> marker when serving those two pages
+  constants.js               TICKER_RE, ITEM_ID_RE, MINUTE_MS/HOUR_MS/DAY_MS — read by browser AND server
+                             (src/shared-module.ts); the one home for them, no build step
   carousel.js                attachCyclingCarousel: shared clone-pad cycling track
   lightbox.js                openImageLightbox: shared fullscreen modal
+  gallery.js                 imageGallery: the one tile/item-page gallery (keyboard option)
+  shared.js                  helpers every page imports: el, escapeHtml, loadChoice/saveChoice,
+                             hiResImg, ebayItemUrl/endedEbayUrl, plural, postAdminAction, ADMIN_TOKEN_KEY,
+                             shortDate, formatUsd/formatUsdOrDash (the one money formatter, visitor's locale),
+                             MINUTE_MS/HOUR_MS/DAY_MS (re-exported from constants.js)
   *.css       theme-init.js
 test/
   roughly one *.test.ts per src/ module (not client.ts, bid-history.ts, db/migrate.ts,
@@ -110,8 +122,8 @@ hits when the snapshot cache misses.
   "—".
 - **Hi-res images everywhere** (`upgradeEbayImageUrl`): every eBay CDN
   URL goes through a `s-l<N>` token bump to `s-l1600` server-side (in
-  `normalizeListing` + `fetchItemDetails`) and also at render time in
-  `app.js` / `item.js` (covers ended rows persisted with a small URL
+  `normalizeListing` + `fetchItemDetails`) and also at render time via
+  `hiResImg` in `public/shared.js` (covers ended rows persisted with a small URL
   before the upgrade landed).
 - **Stuck-listing recovery**: `markEndedListings` stamps any listing not
   seen in the active poll for >1 hour as ended. The "Find stuck" admin
@@ -121,6 +133,15 @@ hits when the snapshot cache misses.
   broken for us.
 - **Snapshot dedup**: `insertListingSnapshotIfChanged` skips identical
   consecutive rows so the history table stays compact.
+- **Input validation**: `ITEM_ID_RE` / `TICKER_RE` live in
+  `public/constants.js` (re-exported by `config.ts`, which also exports
+  `ENVIRONMENT_RE`); any admin action or route that takes an itemId uses
+  `validItemId(res, raw, field)` in `server.ts` (400 on a bad one).
+- **Frontend modules**: `app.js` / `item.js` / `admin.js` are browser-native
+  ESM. `app.js` and `item.js` import `gallery.js` (→ `carousel.js` +
+  `lightbox.js`) and `shared.js`; `admin.js` imports `shared.js` too. A
+  helper two pages need goes in `shared.js`, never a copy. `public/` is not
+  covered by ESLint — load the pages in a browser to check a change.
 - **DB-first reads**: `bid-history.ts` and `DbBackedCache` always check
   Postgres before any upstream call — minimizes API quota and works across
   multiple Render instances.

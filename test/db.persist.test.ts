@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { sqlOf } from './helpers.js';
 import type { Pool } from 'pg';
 import {
   backfillBidsImportedStamps,
@@ -139,7 +140,7 @@ describe('reconcileItemBids', () => {
     const { pool, client } = makeTxPool();
     await reconcileItemBids(pool as unknown as Pool, 'v1|336|0', BIDS);
 
-    const sqls = client.query.mock.calls.map(([sql]) => sql as string);
+    const sqls = sqlOf(client.query);
     expect(sqls[0]).toBe('BEGIN');
     expect(sqls.some((s) => /^DELETE FROM bids/.test(s))).toBe(true);
     expect(sqls.some((s) => /^INSERT INTO bids/.test(s))).toBe(true);
@@ -204,7 +205,7 @@ describe('reconcileItemBids', () => {
     expect(result.finalPriceUsd).toBe(109.42);
     expect(result.inserted).toBe(0);
     // Should only run BEGIN, DELETE, UPDATE listings, COMMIT — no INSERT INTO bids.
-    const sqls = client.query.mock.calls.map(([sql]) => sql as string);
+    const sqls = sqlOf(client.query);
     expect(sqls.some((s) => /^INSERT INTO bids/.test(s))).toBe(false);
     expect(sqls.some((s) => /UPDATE listings/.test(s))).toBe(true);
     expect(sqls[sqls.length - 1]).toBe('COMMIT');
@@ -220,26 +221,32 @@ describe('reconcileItemBids', () => {
     await expect(
       reconcileItemBids(pool as unknown as Pool, 'v1|336|0', BIDS),
     ).rejects.toThrow('db down');
-    const sqls = client.query.mock.calls.map(([sql]) => sql as string);
+    const sqls = sqlOf(client.query);
     expect(sqls).toContain('ROLLBACK');
     expect(client.release).toHaveBeenCalledOnce();
   });
 });
 
 describe('persistSnapshot', () => {
-  it('upserts every listing, snapshots changes, and reconciles bids', async () => {
+  // Persist LISTING with one bid (plus any `more` rows) into a pool whose
+  // every query succeeds.
+  async function persistWithOneBid(more: Parameters<typeof persistSnapshot>[1] = []) {
     const pool = makePool();
     pool.query.mockResolvedValue({ rows: [], rowCount: 1 });
-
     const result = await persistSnapshot(pool as unknown as Pool, [
       { listing: LISTING, bids: [{ bidder: 'a', bidTime: '2026-05-07T12:00:00Z', bidAmount: 10 }] },
-      { listing: { ...LISTING, itemId: 'v1|222|0' }, bids: null },
+      ...more,
     ]);
+    return { pool, result };
+  }
+
+  it('upserts every listing, snapshots changes, and reconciles bids', async () => {
+    const { pool, result } = await persistWithOneBid([{ listing: { ...LISTING, itemId: 'v1|222|0' }, bids: null }]);
 
     expect(result.listings).toBe(2);
     expect(result.bids).toBe(1);
     expect(result.removedBids).toBe(0);
-    const sqls = pool.query.mock.calls.map(([sql]) => sql);
+    const sqls = sqlOf(pool.query);
     expect(sqls.some((s) => /INSERT INTO listings/.test(s))).toBe(true);
     expect(sqls.some((s) => /INSERT INTO listing_snapshots/.test(s))).toBe(true);
     expect(sqls.some((s) => /INSERT INTO bids/.test(s))).toBe(true);
@@ -249,18 +256,10 @@ describe('persistSnapshot', () => {
     // GetAllBidders only returns each bidder's highest bid, not every bid,
     // so reconciliation produced false-positive removals. Until we have
     // reliable retraction detection, persistSnapshot only appends.
-    const pool = makePool();
-    pool.query.mockResolvedValue({ rows: [], rowCount: 1 });
-
-    const result = await persistSnapshot(pool as unknown as Pool, [
-      {
-        listing: LISTING,
-        bids: [{ bidder: 'a', bidTime: '2026-05-07T12:00:00Z', bidAmount: 10 }],
-      },
-    ]);
+    const { pool, result } = await persistWithOneBid();
 
     expect(result.removedBids).toBe(0);
-    const sqls = pool.query.mock.calls.map(([sql]) => sql);
+    const sqls = sqlOf(pool.query);
     expect(sqls.some((s) => /UPDATE bids SET removed_at/.test(s))).toBe(false);
   });
 });

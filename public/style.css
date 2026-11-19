@@ -1,60 +1,62 @@
 :root {
+  /* Each themed token states its light and dark value ONCE via light-dark();
+     color-scheme picks the side: the OS preference by default, or the manual
+     override below. */
   color-scheme: dark light;
-  --bg: #0c0e14;
-  --bg-elev: #161922;
-  --bg-card: #1d2130;
-  --fg: #e9ecf1;
-  --fg-muted: #8b93a7;
+  --bg: light-dark(#f7f8fb, #0c0e14);
+  --bg-elev: light-dark(#ffffff, #161922);
+  --bg-card: light-dark(#ffffff, #1d2130);
+  --fg: light-dark(#111827, #e9ecf1);
+  --fg-muted: light-dark(#5b6478, #8b93a7);
   --accent: #5cdb95;
-  --accent-soft: #5cdb9533;
+  --accent-soft: light-dark(#5cdb951a, #5cdb9533);
   --warn: #f5b14a;
-  --border: #262b3a;
-  --shadow: 0 1px 0 rgba(255, 255, 255, 0.04), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --border: light-dark(#e5e7ef, #262b3a);
+  --shadow:
+    0 1px 0 light-dark(rgba(0, 0, 0, 0.02), rgba(255, 255, 255, 0.04)),
+    0 8px 24px light-dark(rgba(15, 23, 42, 0.06), rgba(0, 0, 0, 0.35));
   --radius: 12px;
-}
-
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f7f8fb;
-    --bg-elev: #ffffff;
-    --bg-card: #ffffff;
-    --fg: #111827;
-    --fg-muted: #5b6478;
-    --border: #e5e7ef;
-    --accent-soft: #5cdb951a;
-    --shadow: 0 1px 0 rgba(0, 0, 0, 0.02), 0 8px 24px rgba(15, 23, 42, 0.06);
-  }
 }
 
 /* Manual theme override via brand-icon click (highest precedence) */
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --bg: #0c0e14;
-  --bg-elev: #161922;
-  --bg-card: #1d2130;
-  --fg: #e9ecf1;
-  --fg-muted: #8b93a7;
-  --accent: #5cdb95;
-  --accent-soft: #5cdb9533;
-  --warn: #f5b14a;
-  --border: #262b3a;
-  --shadow: 0 1px 0 rgba(255, 255, 255, 0.04), 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 :root[data-theme='light'] {
   color-scheme: light;
-  --bg: #f7f8fb;
-  --bg-elev: #ffffff;
-  --bg-card: #ffffff;
-  --fg: #111827;
-  --fg-muted: #5b6478;
-  --border: #e5e7ef;
-  --accent-soft: #5cdb951a;
-  --shadow: 0 1px 0 rgba(0, 0, 0, 0.02), 0 8px 24px rgba(15, 23, 42, 0.06);
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Monospace result boxes for admin tools (admin page + item page). */
+.inspect-output,
+.admin-output {
+  margin-top: 0.75rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-y: auto;
+}
+
+/* The item-audit and admin pages share one page shell. */
+.item-page,
+.admin-body {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.item-main,
+.admin-main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
 }
 
 html,
@@ -360,7 +362,9 @@ main {
   margin-bottom: 24px;
 }
 
-.totals .stat {
+/* Stat tiles and the most-recent-bid panel share one card surface. */
+.totals .stat,
+.most-recent-bid {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -795,11 +799,6 @@ main {
 }
 
 .most-recent-bid {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px 16px;
-  box-shadow: var(--shadow);
   margin-bottom: 24px;
   font-size: 13px;
 }
@@ -892,16 +891,16 @@ main {
 .items {
   display: grid;
   gap: 16px;
-  /* Fallback for first paint before the view-mode class is applied. */
+}
+
+/* Medium is also the first-paint fallback before the view-mode class is applied. */
+.items,
+.items.view-grid-md {
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
 }
 
 .items.view-grid-sm {
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-}
-
-.items.view-grid-md {
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
 }
 
 .items.view-grid-lg {
@@ -1093,6 +1092,29 @@ main {
      spills past the gallery frame. */
   overflow: hidden;
 }
+/* The cycling-carousel track shared by the tile gallery and the lightbox. */
+.gallery-track,
+.lightbox-track {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+}
+.gallery-track::-webkit-scrollbar,
+.lightbox-track::-webkit-scrollbar {
+  display: none;
+}
+.gallery-track img,
+.lightbox-track img {
+  flex: 0 0 100%;
+  width: 100%;
+  height: 100%;
+  scroll-snap-align: start;
+  /* Force the scroll to stop at each slide so a fast swipe can't fly past
+     several photos at once — one swipe advances exactly one image. */
+  scroll-snap-stop: always;
+}
 .gallery-track {
   /* Fill the aspect-ratio box exactly. Using absolute inset:0 (rather than
      height:100%) so the track's height is always definite — height:100%
@@ -1101,24 +1123,9 @@ main {
      made some tiles' pictures taller than others. */
   position: absolute;
   inset: 0;
-  display: flex;
-  overflow-x: auto;
-  scroll-snap-type: x mandatory;
-  scroll-behavior: smooth;
-  scrollbar-width: none;
-}
-.gallery-track::-webkit-scrollbar {
-  display: none;
 }
 .gallery-track img {
-  flex: 0 0 100%;
-  width: 100%;
-  height: 100%;
   object-fit: cover;
-  scroll-snap-align: start;
-  /* Force the scroll to stop at each slide so a fast swipe can't fly past
-     several photos at once — one swipe advances exactly one image. */
-  scroll-snap-stop: always;
 }
 /* Prev/next buttons sit over the image edges. On touch devices they're
    always visible (you can't hover); on pointer devices they fade in on
@@ -1198,20 +1205,9 @@ main {
 .lightbox-track {
   width: 100vw;
   height: 100vh;
-  display: flex;
-  overflow-x: auto;
-  scroll-snap-type: x mandatory;
-  scroll-behavior: smooth;
-  scrollbar-width: none;
 }
-.lightbox-track::-webkit-scrollbar { display: none; }
 .lightbox-track img {
-  flex: 0 0 100%;
-  width: 100%;
-  height: 100%;
   object-fit: contain;
-  scroll-snap-align: start;
-  scroll-snap-stop: always;
   user-select: none;
   -webkit-user-drag: none;
 }
@@ -1599,14 +1595,27 @@ footer .disclaimer {
   margin-top: 10px;
 }
 
-.stock-bar {
+/* Pill rows: every pill group lays out as one wrapping row. */
+.stock-bar,
+.sort-bar,
+.view-bar,
+.seller-bar,
+.ended-price-mode,
+.ended-window {
   display: flex;
-  align-items: center;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
-.stock-btn {
+/* Pill buttons: the one look every pill group shares — stock, sort, view,
+   seller, ended mode and ended window. */
+.stock-btn,
+.sort-btn,
+.view-btn,
+.seller-btn,
+.ended-mode-btn,
+.ended-window-btn {
   background: none;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -1618,12 +1627,22 @@ footer .disclaimer {
   transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
 
-.stock-btn:hover {
+.stock-btn:hover,
+.sort-btn:hover,
+.view-btn:hover,
+.seller-btn:hover,
+.ended-mode-btn:hover,
+.ended-window-btn:hover {
   border-color: var(--fg-muted);
   color: var(--fg);
 }
 
-.stock-btn.is-active {
+.stock-btn.is-active,
+.sort-btn.is-active,
+.view-btn.is-active,
+.seller-btn.is-active,
+.ended-mode-btn.is-active,
+.ended-window-btn.is-active {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-soft);
@@ -1681,13 +1700,6 @@ footer .disclaimer {
   75% { transform: translateX(4px); }
 }
 
-.sort-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
 .sort-label {
   color: var(--fg-muted);
   font-size: 12px;
@@ -1696,84 +1708,17 @@ footer .disclaimer {
   margin-right: 2px;
 }
 
-.sort-btn {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--fg-muted);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 13px;
-  padding: 4px 12px;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
-}
-
-.sort-btn:hover,
-.view-btn:hover {
-  border-color: var(--fg-muted);
-  color: var(--fg);
-}
-
-.sort-btn.is-active,
-.view-btn.is-active {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.view-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
+/* Icon pills: centred SVG, tighter padding, the browser's button font size. */
 .view-btn {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--fg-muted);
-  cursor: pointer;
-  font-family: inherit;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 5px 9px;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  font-size: revert;
 }
 
 .view-btn svg {
   display: block;
-}
-
-.seller-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.seller-btn {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--fg-muted);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 13px;
-  padding: 4px 12px;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
-}
-
-.seller-btn:hover {
-  border-color: var(--fg-muted);
-  color: var(--fg);
-}
-
-.seller-btn.is-active {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-soft);
 }
 
 .seller-badge {
@@ -1794,44 +1739,9 @@ footer .disclaimer {
   color: #c4956b;
 }
 
-.ended-price-mode,
-.ended-window {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.ended-mode-btn,
-.ended-window-btn {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--fg-muted);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 13px;
-  padding: 4px 12px;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
-}
-
-.ended-mode-btn:hover,
-.ended-window-btn:hover {
-  border-color: var(--fg-muted);
-  color: var(--fg);
-}
-
-.ended-mode-btn.is-active,
-.ended-window-btn.is-active {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
 /* Bid-update flash */
 @keyframes bid-flash {
-  0%   { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(92, 219, 149, 0.3), var(--shadow); }
-  70%  { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(92, 219, 149, 0.3), var(--shadow); }
+  0%, 70% { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(92, 219, 149, 0.3), var(--shadow); }
   100% { border-color: var(--border); box-shadow: var(--shadow); }
 }
 
@@ -1905,4 +1815,27 @@ summary:focus-visible,
   .sort-select {
     display: inline-block;
   }
+}
+
+/* Shared by the item + admin pages (each adds its own text colour). */
+.error-banner {
+  background: #5a1f1f;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+}
+
+.loading {
+  text-align: center;
+  padding: 2rem;
+}
+
+/* Bordered card surface used by the item page's header + sections. */
+.item-header,
+.item-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1rem;
 }

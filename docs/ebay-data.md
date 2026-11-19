@@ -68,6 +68,8 @@ server-side, no paste required.
   nothing. Re-run with `apply:true` to persist. Only acts when the item is
   Completed/Ended, USD, price finite/>0, Ack≠Failure, and the value differs.
   Capped at 60 items/run. Admin UI has "Dry run" + "Apply" buttons.
+  Its output prints money through the shared `formatUsd` (visitor's locale,
+  e.g. `$120.00`, null → `$—`), not raw numbers.
 - GetItem works for both own and others' listings. Bid counts from a
   viewbids parse can be well short of eBay's badge count on heavy-bid
   items; bid count is cosmetic vs the price math, so applying GetItem's
@@ -247,4 +249,4 @@ eBay redirects ended `/itm/<id>` URLs to "similar items" only when the
 listing is linked to an eBay catalog/product page (mass-market goods like
 video games). Unique items never redirect. The fix is the documented
 no-redirect parameter **`nordt=true`** — `orig_cvip=true` does NOT work.
-Applied in `endedEbayUrl()` in both `public/app.js` and `public/item.js`.
+Applied in the one `endedEbayUrl()` in `public/shared.js` (dashboard, item page, admin).
