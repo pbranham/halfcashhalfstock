@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import type http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import 'dotenv/config';
@@ -1370,6 +1371,26 @@ export function createApp(deps: Deps): express.Express {
   return app;
 }
 
+// Express 5 hands listen errors (EADDRINUSE, EACCES) to the callback instead
+// of throwing. Log and exit non-zero, as an Express 4 crash did, so the
+// process never sits alive without a socket.
+export function listenOrExit(
+  app: express.Express,
+  port: number,
+  log: Logger,
+  fields: Record<string, unknown> = {},
+  exit: (code: number) => void = (code) => process.exit(code),
+): http.Server {
+  return app.listen(port, (err?: Error) => {
+    if (err) {
+      log.error('listen failed', { port, error: err.message, ...fields });
+      exit(1);
+      return;
+    }
+    log.info('listening', { port, ...fields });
+  });
+}
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const log = createLogger({
@@ -1423,9 +1444,7 @@ async function main(): Promise<void> {
 
   const deps = buildDeps(config, log, db, tickerQueue, requestStats);
   const app = createApp(deps);
-  const server = app.listen(config.PORT, () => {
-    log.info('listening', { port: config.PORT, sellerIds: config.sellerIds });
-  });
+  const server = listenOrExit(app, config.PORT, log, { sellerIds: config.sellerIds });
 
   // Always-on background poll: refresh listings every 30s independent of any
   // HTTP request, so bid changes and auction-end transitions (with the
